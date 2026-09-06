@@ -1,46 +1,1479 @@
-<script setup lang="ts" generic="T extends any, O extends any">
-defineOptions({
-  name: 'IndexPage',
-})
+<script setup lang="ts">
+import { computed, nextTick, onMounted, ref } from 'vue'
 
-const name = ref('')
+defineOptions({ name: 'IndexPage' })
 
-const router = useRouter()
-function go() {
-  if (name.value)
-    router.push(`/hi/${encodeURIComponent(name.value)}`)
+interface Message {
+  id: number
+  role: 'user' | 'agent'
+  content: string
+  reasoning?: string
+  isReasoningOpen?: boolean
+  isStreaming?: boolean
 }
+
+interface HistoryMessage {
+  role: string
+  content?: unknown
+  reasoning_content?: unknown
+}
+
+interface Conversation {
+  id: string
+  name: string
+  createAt: string
+  history: HistoryMessage[]
+  displayHistory?: HistoryMessage[]
+}
+
+type ChatStreamEvent
+  = | { type: 'conversation', conversationId: string }
+    | {
+      type: 'message.delta'
+      channel: 'reasoning' | 'content'
+      delta: string
+    }
+    | {
+      type: 'message.completed'
+      conversationId: string
+      content: string
+      reasoning?: string
+    }
+    | { type: 'error', message: string }
+
+interface ConversationListResponse {
+  data: Conversation[]
+}
+
+const messages = ref<Message[]>([])
+const conversations = ref<Conversation[]>([])
+const input = ref('')
+const conversationId = ref('')
+const isSending = ref(false)
+const isAwaitingFirstToken = ref(false)
+const isLoadingConversations = ref(false)
+const isSidebarOpen = ref(false)
+const errorMessage = ref('')
+const conversationError = ref('')
+const failedPrompt = ref('')
+const messageList = ref<HTMLElement>()
+let nextMessageId = 1
+
+const displayedConversations = computed(() => [...conversations.value].reverse())
+const activeConversation = computed(() => (
+  conversations.value.find(conversation => conversation.id === conversationId.value)
+))
+const pageTitle = computed(() => activeConversation.value?.name?.trim() || '新对话')
+
+/** 兼容字符串和 OpenAI 内容分片数组，只提取可展示的文本部分。 */
+function getContentText(content: unknown): string {
+  if (typeof content === 'string')
+    return content
+
+  if (!Array.isArray(content))
+    return ''
+
+  return content
+    .map((part) => {
+      if (typeof part !== 'object' || part === null || !('text' in part))
+        return ''
+      const text = (part as { text?: unknown }).text
+      return typeof text === 'string' ? text : ''
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+/** 将服务端历史记录转换为页面消息，并过滤 system/tool 等内部上下文。 */
+function historyToMessages(history: HistoryMessage[]): Message[] {
+  return history.flatMap((item) => {
+    if (item.role !== 'user' && item.role !== 'assistant')
+      return []
+
+    const content = getContentText(item.content).trim()
+    const reasoning = typeof item.reasoning_content === 'string'
+      ? item.reasoning_content.trim()
+      : ''
+    if (!content)
+      return []
+
+    return [{
+      id: nextMessageId++,
+      role: item.role === 'user' ? 'user' : 'agent',
+      content,
+      ...(item.role === 'assistant' && reasoning
+        ? { reasoning, isReasoningOpen: false }
+        : {}),
+    } satisfies Message]
+  })
+}
+
+/** 对接口数据做运行时校验，避免异常会话记录破坏页面状态。 */
+function isConversation(value: unknown): value is Conversation {
+  if (typeof value !== 'object' || value === null)
+    return false
+
+  const item = value as Partial<Conversation>
+  return typeof item.id === 'string'
+    && typeof item.name === 'string'
+    && typeof item.createAt === 'string'
+    && Array.isArray(item.history)
+}
+
+/** 兼容 ISO 时间和旧版逗号分隔时间戳，并格式化为列表中的简短时间。 */
+function formatConversationDate(value: string): string {
+  const numericTimestamp = Number(value.replaceAll(',', ''))
+  const date = Number.isFinite(numericTimestamp) && numericTimestamp > 1_000_000_000_000
+    ? new Date(numericTimestamp)
+    : new Date(value)
+
+  if (Number.isNaN(date.getTime()))
+    return value
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+/** 等待 DOM 更新后滚动到底部，确保新消息已参与高度计算。 */
+async function scrollToLatest(behavior: ScrollBehavior = 'smooth') {
+  await nextTick()
+  messageList.value?.scrollTo({
+    top: messageList.value.scrollHeight,
+    behavior,
+  })
+}
+
+/** 切换到已存在的会话，并用后端保存的历史消息替换当前视图。 */
+function selectConversation(conversation: Conversation) {
+  if (isSending.value)
+    return
+
+  conversationId.value = conversation.id
+  // 新版接口返回精简展示历史；旧数据仍回退到模型原始 history。
+  messages.value = historyToMessages(conversation.displayHistory ?? conversation.history)
+  input.value = ''
+  errorMessage.value = ''
+  failedPrompt.value = ''
+  isSidebarOpen.value = false
+  void scrollToLatest('auto')
+}
+
+/** 清空当前上下文；下一次发送时不携带 ID，由后端创建新会话。 */
+function startNewConversation() {
+  if (isSending.value)
+    return
+
+  conversationId.value = ''
+  messages.value = []
+  input.value = ''
+  errorMessage.value = ''
+  failedPrompt.value = ''
+  isSidebarOpen.value = false
+}
+
+/** 刷新会话列表；首次进入页面时默认打开最近一条会话。 */
+async function loadConversations(selectInitial = false) {
+  isLoadingConversations.value = true
+  conversationError.value = ''
+
+  try {
+    const response = await fetch('/api/conversation/list')
+    if (!response.ok)
+      throw new Error(`会话列表加载失败（${response.status}）`)
+
+    const result = await response.json() as Partial<ConversationListResponse>
+    if (!Array.isArray(result.data))
+      throw new TypeError('会话列表返回格式不正确')
+
+    conversations.value = result.data.filter(isConversation)
+
+    if (selectInitial && !conversationId.value && displayedConversations.value[0])
+      selectConversation(displayedConversations.value[0])
+  }
+  catch (error) {
+    conversationError.value = error instanceof Error ? error.message : '会话列表加载失败'
+  }
+  finally {
+    isLoadingConversations.value = false
+  }
+}
+
+/** 校验从 SSE 解析出的未知 JSON，收窄为页面支持的事件联合类型。 */
+function isChatStreamEvent(value: unknown): value is ChatStreamEvent {
+  if (typeof value !== 'object' || value === null || !('type' in value))
+    return false
+
+  const event = value as Record<string, unknown>
+  if (event.type === 'conversation')
+    return typeof event.conversationId === 'string'
+  if (event.type === 'message.delta') {
+    return (event.channel === 'reasoning' || event.channel === 'content')
+      && typeof event.delta === 'string'
+  }
+  if (event.type === 'message.completed') {
+    return typeof event.conversationId === 'string'
+      && typeof event.content === 'string'
+      && (event.reasoning === undefined || typeof event.reasoning === 'string')
+  }
+  if (event.type === 'error')
+    return typeof event.message === 'string'
+  return false
+}
+
+/**
+ * 持续读取 POST 请求返回的 SSE。网络 chunk 与 SSE 事件边界并不一致，
+ * 因此必须保留最后一个不完整帧，与下一次读取的数据拼接后再解析。
+ */
+async function readEventStream(
+  response: Response,
+  onEvent: (event: ChatStreamEvent) => void,
+) {
+  if (!response.body)
+    throw new Error('当前浏览器不支持流式响应')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  /** 合并一个 SSE 帧内可能存在的多行 data 字段，并解析为业务事件。 */
+  function processFrame(frame: string) {
+    const data = frame
+      .split(/\r?\n/)
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).trimStart())
+      .join('\n')
+    if (!data)
+      return
+
+    const event: unknown = JSON.parse(data)
+    if (!isChatStreamEvent(event))
+      throw new Error('服务端返回了无法识别的流事件')
+    onEvent(event)
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      // stream 模式会保留被 chunk 截断的多字节 UTF-8 字符，避免中文乱码。
+      buffer += decoder.decode(value, { stream: !done })
+
+      const frames = buffer.split(/\r?\n\r?\n/)
+      buffer = frames.pop() ?? ''
+      for (const frame of frames)
+        processFrame(frame)
+
+      if (done)
+        break
+    }
+
+    if (buffer.trim())
+      processFrame(buffer)
+  }
+  catch (error) {
+    await reader.cancel()
+    throw error
+  }
+  finally {
+    reader.releaseLock()
+  }
+}
+
+/**
+ * 发送消息并把不同频道的增量追加到同一条助手消息；重试时可选择不重复插入用户消息。
+ * 新会话请求刻意省略 conversationId，收到 conversation 事件后再保存后端生成的 ID。
+ */
+async function send(prompt = input.value, appendUserMessage = true) {
+  const message = prompt.trim()
+  if (!message || isSending.value)
+    return
+
+  errorMessage.value = ''
+  failedPrompt.value = ''
+
+  if (appendUserMessage) {
+    messages.value.push({ id: nextMessageId++, role: 'user', content: message })
+    input.value = ''
+    await scrollToLatest()
+  }
+
+  isSending.value = true
+  isAwaitingFirstToken.value = true
+  let assistantMessageId: number | undefined
+  let receivedDone = false
+
+  /** 思考或回答任一增量首次到达时创建同一条助手消息。 */
+  function ensureAssistantMessage(): Message {
+    let assistantMessage = messages.value.find(item => item.id === assistantMessageId)
+    if (assistantMessage)
+      return assistantMessage
+
+    assistantMessageId = nextMessageId++
+    assistantMessage = {
+      id: assistantMessageId,
+      role: 'agent',
+      content: '',
+      reasoning: '',
+      isReasoningOpen: true,
+      isStreaming: true,
+    }
+    messages.value.push(assistantMessage)
+    return assistantMessage
+  }
+
+  try {
+    const requestBody: { message: string, conversationId?: string } = { message }
+    if (conversationId.value)
+      requestBody.conversationId = conversationId.value
+
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    })
+
+    if (!response.ok)
+      throw new Error(`请求失败（${response.status}）`)
+
+    await readEventStream(response, (event) => {
+      if (event.type === 'conversation') {
+        conversationId.value = event.conversationId
+        return
+      }
+
+      if (event.type === 'error')
+        throw new Error(event.message)
+
+      if (event.type === 'message.delta') {
+        // 两个频道共用一个助手消息，但分别追加到 reasoning 和 content。
+        const assistantMessage = ensureAssistantMessage()
+        if (event.channel === 'reasoning') {
+          assistantMessage.reasoning += event.delta
+          assistantMessage.isReasoningOpen = true
+        }
+        else {
+          assistantMessage.content += event.delta
+        }
+        isAwaitingFirstToken.value = false
+        void scrollToLatest('auto')
+        return
+      }
+
+      conversationId.value = event.conversationId
+      receivedDone = true
+      if (assistantMessageId === undefined && (event.content || event.reasoning)) {
+        const assistantMessage = ensureAssistantMessage()
+        assistantMessage.content = event.content
+        assistantMessage.reasoning = event.reasoning ?? ''
+      }
+
+      const assistantMessage = messages.value.find(item => item.id === assistantMessageId)
+      if (assistantMessage) {
+        // done 携带完整值作为无增量场景的兜底；正常流式路径不重复追加。
+        assistantMessage.content ||= event.content
+        assistantMessage.reasoning ||= event.reasoning ?? ''
+        assistantMessage.isStreaming = false
+        assistantMessage.isReasoningOpen = false
+      }
+    })
+
+    if (!receivedDone)
+      throw new Error('流式响应意外中断')
+
+    await loadConversations()
+  }
+  catch (error) {
+    if (assistantMessageId !== undefined) {
+      const index = messages.value.findIndex(item => item.id === assistantMessageId)
+      if (index >= 0)
+        messages.value.splice(index, 1)
+    }
+    failedPrompt.value = message
+    errorMessage.value = error instanceof Error ? error.message : '发送失败，请稍后重试'
+  }
+  finally {
+    isSending.value = false
+    isAwaitingFirstToken.value = false
+    await scrollToLatest()
+  }
+}
+
+/** 使用上一次失败的原始提示词重试，避免聊天区出现重复的用户气泡。 */
+function retry() {
+  if (failedPrompt.value)
+    void send(failedPrompt.value, false)
+}
+
+onMounted(() => {
+  void loadConversations(true)
+})
 </script>
 
 <template>
-  <div>
-    <div i-carbon-campsite text-4xl inline-block />
-    <p>
-      <a rel="noreferrer" href="https://github.com/antfu-collective/vitesse-lite" target="_blank">
-        Vitesse Lite
-      </a>
-    </p>
-    <p>
-      <em text-sm op75>Opinionated Vite Starter Template</em>
-    </p>
+  <div class="chat-page">
+    <div class="ambient ambient-left" />
+    <div class="ambient ambient-right" />
 
-    <div py-4 />
-
-    <TheInput
-      v-model="name"
-      placeholder="What's your name?"
-      autocomplete="false"
-      @keydown.enter="go"
-    />
-
-    <div>
+    <section class="workspace-shell">
       <button
-        class="text-sm m-3 btn"
-        :disabled="!name"
-        @click="go"
-      >
-        Go
-      </button>
-    </div>
+        v-if="isSidebarOpen"
+        class="sidebar-backdrop"
+        type="button"
+        aria-label="关闭会话列表"
+        @click="isSidebarOpen = false"
+      />
+
+      <aside class="conversation-sidebar" :class="{ open: isSidebarOpen }">
+        <div class="sidebar-header">
+          <div class="flex gap-3 min-w-0 items-center">
+            <div class="brand-mark" aria-hidden="true">
+              <div i-carbon-bot />
+            </div>
+            <div class="min-w-0">
+              <div class="text-3.75 text-slate-900 font-700 truncate dark:text-white">
+                Hand-crafted
+              </div>
+              <div class="text-2.75 text-slate-500 mt-0.5 dark:text-slate-400">
+                Agent Workspace
+              </div>
+            </div>
+          </div>
+          <button
+            class="sidebar-close"
+            type="button"
+            aria-label="关闭会话列表"
+            @click="isSidebarOpen = false"
+          >
+            <div i-carbon-close />
+          </button>
+        </div>
+
+        <button
+          class="new-chat-button"
+          type="button"
+          :disabled="isSending"
+          @click="startNewConversation"
+        >
+          <div i-carbon-add />
+          <span>新对话</span>
+        </button>
+
+        <div class="conversation-heading">
+          <span>最近对话</span>
+          <button
+            class="refresh-button"
+            type="button"
+            :disabled="isLoadingConversations"
+            aria-label="刷新会话列表"
+            @click="loadConversations()"
+          >
+            <div i-carbon-renew :class="{ 'animate-spin': isLoadingConversations }" />
+          </button>
+        </div>
+
+        <nav class="conversation-list" aria-label="会话列表">
+          <template v-if="isLoadingConversations && conversations.length === 0">
+            <div v-for="index in 3" :key="index" class="conversation-skeleton">
+              <span />
+              <span />
+            </div>
+          </template>
+
+          <div v-else-if="conversationError && conversations.length === 0" class="sidebar-state error">
+            <div i-carbon-warning-alt />
+            <span>{{ conversationError }}</span>
+            <button type="button" @click="loadConversations(true)">
+              重新加载
+            </button>
+          </div>
+
+          <div v-else-if="displayedConversations.length === 0" class="sidebar-state">
+            <div i-carbon-chat text-6 />
+            <span>还没有历史对话</span>
+          </div>
+
+          <button
+            v-for="conversation in displayedConversations"
+            v-else
+            :key="conversation.id"
+            class="conversation-item"
+            :class="{ active: conversation.id === conversationId }"
+            type="button"
+            :disabled="isSending"
+            :aria-current="conversation.id === conversationId ? 'page' : undefined"
+            @click="selectConversation(conversation)"
+          >
+            <div class="conversation-icon" aria-hidden="true">
+              <div i-carbon-chat />
+            </div>
+            <div class="text-left flex-1 min-w-0">
+              <div class="conversation-name">
+                {{ conversation.name || '未命名对话' }}
+              </div>
+              <div class="conversation-date">
+                {{ formatConversationDate(conversation.createAt) }}
+              </div>
+            </div>
+          </button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <span class="status-dot" />
+          <span>服务已连接</span>
+        </div>
+      </aside>
+
+      <section class="chat-panel">
+        <header class="chat-header">
+          <button
+            class="menu-button"
+            type="button"
+            aria-label="打开会话列表"
+            @click="isSidebarOpen = true"
+          >
+            <div i-carbon-menu />
+          </button>
+          <div class="text-left flex-1 min-w-0">
+            <h1 class="text-4.5 text-slate-900 font-700 m-0 truncate dark:text-white">
+              {{ pageTitle }}
+            </h1>
+            <div class="text-3 text-slate-500 mt-1 flex gap-1.5 items-center dark:text-slate-400">
+              <span class="status-dot" />
+              <span>{{ conversationId ? '对话上下文已连接' : '发送第一条消息以创建对话' }}</span>
+            </div>
+          </div>
+          <div v-if="messages.length" class="message-count">
+            {{ messages.length }} 条消息
+          </div>
+        </header>
+
+        <main ref="messageList" class="message-list h-614px" aria-live="polite">
+          <div v-if="messages.length === 0" class="empty-state">
+            <div class="empty-icon" aria-hidden="true">
+              <div i-carbon-chat-bot text-8 />
+            </div>
+            <h2 class="text-6 text-slate-900 tracking-tight font-700 mb-0 mt-5 dark:text-white">
+              开始一段新对话
+            </h2>
+            <p class="text-3.5 text-slate-500 leading-6 mb-0 mt-2 max-w-110 dark:text-slate-400">
+              第一条消息不会携带 conversationId，服务端返回后会自动关联后续上下文。
+            </p>
+          </div>
+
+          <div v-else class="mx-auto flex flex-col gap-5 max-w-210 w-full">
+            <article
+              v-for="message in messages"
+              :key="message.id"
+              class="message-row"
+              :class="message.role === 'user' ? 'justify-end' : 'justify-start'"
+            >
+              <div v-if="message.role === 'agent'" class="avatar" aria-hidden="true">
+                <div i-carbon-bot />
+              </div>
+              <div
+                class="message-bubble"
+                :class="[
+                  message.role,
+                  { 'has-reasoning': message.role === 'agent' && message.reasoning },
+                ]"
+              >
+                <template v-if="message.role === 'agent'">
+                  <section v-if="message.reasoning" class="reasoning-panel">
+                    <button
+                      type="button"
+                      class="reasoning-toggle"
+                      :aria-expanded="Boolean(message.isReasoningOpen)"
+                      @click="message.isReasoningOpen = !message.isReasoningOpen"
+                    >
+                      <span class="reasoning-title">
+                        <span class="reasoning-status" :class="{ streaming: message.isStreaming }">
+                          <span v-if="message.isStreaming" class="reasoning-pulse" />
+                          <span v-else i-carbon-checkmark-filled aria-hidden="true" />
+                        </span>
+                        {{ message.isStreaming ? '正在思考' : '已思考' }}
+                      </span>
+                      <span
+                        i-carbon-chevron-down
+                        class="reasoning-chevron"
+                        :class="{ open: message.isReasoningOpen }"
+                        aria-hidden="true"
+                      />
+                    </button>
+                    <div v-if="message.isReasoningOpen" class="reasoning-content">
+                      {{ message.reasoning }}
+                    </div>
+                  </section>
+
+                  <div v-if="message.content" class="answer-content">
+                    {{ message.content }}
+                  </div>
+                  <div v-else-if="message.isStreaming" class="answer-pending">
+                    正在组织回答…
+                  </div>
+                </template>
+                <template v-else>
+                  {{ message.content }}
+                </template>
+              </div>
+            </article>
+
+            <div v-if="isSending && isAwaitingFirstToken" class="message-row justify-start">
+              <div class="avatar" aria-hidden="true">
+                <div i-carbon-bot />
+              </div>
+              <div class="typing-indicator" aria-label="Agent 正在思考">
+                <span />
+                <span />
+                <span />
+              </div>
+            </div>
+          </div>
+        </main>
+
+        <footer class="composer-area">
+          <div v-if="errorMessage" class="error-banner" role="alert">
+            <div class="flex gap-2 items-center">
+              <div i-carbon-warning-alt-filled shrink-0 />
+              <span>{{ errorMessage }}</span>
+            </div>
+            <button type="button" class="retry-button" :disabled="isSending" @click="retry">
+              重试
+            </button>
+          </div>
+
+          <form class="composer" @submit.prevent="send()">
+            <textarea
+              v-model="input"
+              rows="1"
+              maxlength="2000"
+              aria-label="消息内容"
+              placeholder="输入消息，按 Enter 发送…"
+              :disabled="isSending"
+              @keydown.enter.exact.prevent="send()"
+            />
+            <button
+              class="send-button"
+              type="submit"
+              :disabled="!input.trim() || isSending"
+              aria-label="发送消息"
+            >
+              <div v-if="isSending" i-carbon-circle-dash class="animate-spin" />
+              <div v-else i-carbon-send-filled />
+            </button>
+          </form>
+          <p class="text-2.75 text-slate-400 m-0 mt-2 text-center dark:text-slate-500">
+            Shift + Enter 换行 · AI 生成内容可能存在错误，请注意核实
+          </p>
+        </footer>
+      </section>
+    </section>
   </div>
 </template>
+
+<style scoped>
+.chat-page {
+  --panel-border: rgb(226 232 240 / 80%);
+  position: relative;
+  min-height: 100%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background:
+    radial-gradient(circle at 50% -10%, rgb(219 234 254 / 75%), transparent 36%),
+    linear-gradient(145deg, #f8fafc 0%, #f1f5f9 100%);
+}
+
+.ambient {
+  position: absolute;
+  width: 320px;
+  height: 320px;
+  border-radius: 9999px;
+  filter: blur(90px);
+  opacity: 0.28;
+  pointer-events: none;
+}
+
+.ambient-left {
+  top: 8%;
+  left: -100px;
+  background: #38bdf8;
+}
+
+.ambient-right {
+  right: -80px;
+  bottom: 4%;
+  background: #818cf8;
+}
+
+.workspace-shell {
+  position: relative;
+  width: min(100%, 1180px);
+  height: min(840px, calc(100vh - 56px));
+  min-height: 580px;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 278px minmax(0, 1fr);
+  border: 1px solid var(--panel-border);
+  border-radius: 24px;
+  background: rgb(255 255 255 / 82%);
+  box-shadow: 0 24px 70px rgb(15 23 42 / 12%);
+  backdrop-filter: blur(22px);
+}
+
+.conversation-sidebar {
+  z-index: 3;
+  min-width: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  padding: 18px 14px 14px;
+  border-right: 1px solid var(--panel-border);
+  background: rgb(248 250 252 / 76%);
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 18px;
+}
+
+.brand-mark,
+.empty-icon {
+  display: grid;
+  place-items: center;
+  color: white;
+  background: linear-gradient(145deg, #2563eb, #4f46e5);
+  box-shadow: 0 8px 20px rgb(37 99 235 / 25%);
+}
+
+.brand-mark {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: 13px;
+  font-size: 20px;
+}
+
+.new-chat-button {
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 13px;
+  color: white;
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  box-shadow: 0 7px 18px rgb(37 99 235 / 18%);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  transition:
+    transform 150ms ease,
+    box-shadow 150ms ease,
+    opacity 150ms ease;
+}
+
+.new-chat-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 9px 22px rgb(37 99 235 / 24%);
+}
+
+.new-chat-button:disabled,
+.conversation-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.conversation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 7px 8px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.refresh-button,
+.sidebar-close,
+.menu-button {
+  display: grid;
+  place-items: center;
+  border: 0;
+  color: #64748b;
+  background: transparent;
+  cursor: pointer;
+}
+
+.refresh-button {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+}
+
+.refresh-button:hover,
+.sidebar-close:hover,
+.menu-button:hover {
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.conversation-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 2px;
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+
+.conversation-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 10px;
+  color: #475569;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease,
+    background 140ms ease;
+}
+
+.conversation-item:hover:not(:disabled) {
+  color: #1e293b;
+  background: rgb(255 255 255 / 75%);
+}
+
+.conversation-item.active {
+  border-color: #bfdbfe;
+  color: #1e3a8a;
+  background: #eff6ff;
+}
+
+.conversation-icon {
+  width: 31px;
+  height: 31px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: #64748b;
+  background: #e2e8f0;
+}
+
+.conversation-item.active .conversation-icon {
+  color: #2563eb;
+  background: #dbeafe;
+}
+
+.conversation-name {
+  overflow: hidden;
+  color: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-date {
+  overflow: hidden;
+  margin-top: 3px;
+  color: #94a3b8;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-state {
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  color: #94a3b8;
+  text-align: center;
+  font-size: 12px;
+}
+
+.sidebar-state.error {
+  color: #b91c1c;
+}
+
+.sidebar-state button {
+  border: 0;
+  padding: 4px 8px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.conversation-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 10px;
+}
+
+.conversation-skeleton span {
+  height: 9px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.conversation-skeleton span:last-child {
+  width: 58%;
+}
+
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 11px 8px 2px;
+  border-top: 1px solid var(--panel-border);
+  color: #64748b;
+  font-size: 11px;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgb(34 197 94 / 14%);
+}
+
+.chat-panel {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.chat-header {
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--panel-border);
+  background: rgb(255 255 255 / 72%);
+}
+
+.menu-button,
+.sidebar-close {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  border-radius: 11px;
+  font-size: 20px;
+}
+
+.menu-button,
+.sidebar-close,
+.sidebar-backdrop {
+  display: none;
+}
+
+.message-count {
+  flex: 0 0 auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 5px 10px;
+  color: #64748b;
+  background: #f8fafc;
+  font-size: 11px;
+}
+
+.message-list {
+  overflow-y: auto;
+  padding: 28px 32px;
+  scroll-behavior: smooth;
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+
+.empty-state {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.empty-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 22px;
+}
+
+.message-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid #dbeafe;
+  border-radius: 11px;
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.message-bubble {
+  max-width: min(76%, 620px);
+  padding: 11px 15px;
+  border-radius: 18px;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.message-bubble.user {
+  border-bottom-right-radius: 5px;
+  color: white;
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  box-shadow: 0 7px 18px rgb(37 99 235 / 18%);
+}
+
+.message-bubble.agent {
+  border: 1px solid #e2e8f0;
+  border-bottom-left-radius: 5px;
+  color: #334155;
+  background: white;
+  box-shadow: 0 5px 15px rgb(15 23 42 / 5%);
+}
+
+.message-bubble.agent.has-reasoning {
+  min-width: min(100%, 300px);
+  overflow: hidden;
+  padding: 0;
+}
+
+.reasoning-panel {
+  border-bottom: 1px solid #e2e8f0;
+  color: #64748b;
+  background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+}
+
+.reasoning-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  padding: 10px 13px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  text-align: left;
+}
+
+.reasoning-toggle:hover {
+  color: #2563eb;
+  background: rgb(219 234 254 / 45%);
+}
+
+.reasoning-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.reasoning-status {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #2563eb;
+  background: #dbeafe;
+  font-size: 11px;
+}
+
+.reasoning-status.streaming {
+  background: #e0e7ff;
+}
+
+.reasoning-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #6366f1;
+  box-shadow: 0 0 0 0 rgb(99 102 241 / 35%);
+  animation: reasoning-pulse 1.4s ease-out infinite;
+}
+
+.reasoning-chevron {
+  flex: 0 0 auto;
+  transition: transform 160ms ease;
+}
+
+.reasoning-chevron.open {
+  transform: rotate(180deg);
+}
+
+.reasoning-content {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 0 14px 12px 36px;
+  color: #64748b;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.65;
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+
+.answer-content,
+.answer-pending {
+  padding: 11px 15px;
+}
+
+.answer-pending {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.typing-indicator {
+  display: flex;
+  gap: 5px;
+  padding: 14px 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px 18px 18px 5px;
+  background: white;
+}
+
+.typing-indicator span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #94a3b8;
+  animation: typing 1.2s infinite ease-in-out;
+}
+
+.typing-indicator span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-indicator span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.composer-area {
+  z-index: 1;
+  padding: 16px 24px 18px;
+  border-top: 1px solid var(--panel-border);
+  background: rgb(248 250 252 / 82%);
+}
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 7px 7px 7px 16px;
+  border: 1px solid #cbd5e1;
+  border-radius: 17px;
+  background: white;
+  box-shadow: 0 4px 14px rgb(15 23 42 / 5%);
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.composer:focus-within {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 4px rgb(59 130 246 / 10%);
+}
+
+.composer textarea {
+  width: 100%;
+  max-height: 150px;
+  resize: vertical;
+  border: 0;
+  outline: 0;
+  padding: 8px 0;
+  color: #1e293b;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.composer textarea::placeholder {
+  color: #94a3b8;
+}
+
+.send-button {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 13px;
+  color: white;
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  cursor: pointer;
+  font-size: 18px;
+  transition:
+    transform 150ms ease,
+    box-shadow 150ms ease,
+    opacity 150ms ease;
+}
+
+.send-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 7px 16px rgb(37 99 235 / 24%);
+}
+
+.send-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 9px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  color: #b91c1c;
+  background: #fef2f2;
+  font-size: 12px;
+}
+
+.retry-button {
+  flex: 0 0 auto;
+  border: 0;
+  padding: 3px 8px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+@keyframes typing {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes reasoning-pulse {
+  70% {
+    box-shadow: 0 0 0 6px rgb(99 102 241 / 0%);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgb(99 102 241 / 0%);
+  }
+}
+
+@media (max-width: 760px) {
+  .chat-page {
+    padding: 0;
+  }
+
+  .workspace-shell {
+    width: 100%;
+    height: 100dvh;
+    min-height: 0;
+    display: block;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .conversation-sidebar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: min(84vw, 310px);
+    border-right: 1px solid var(--panel-border);
+    transform: translateX(-102%);
+    transition: transform 200ms ease;
+  }
+
+  .conversation-sidebar.open {
+    transform: translateX(0);
+  }
+
+  .sidebar-close,
+  .menu-button {
+    display: grid;
+  }
+
+  .sidebar-backdrop {
+    z-index: 2;
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    border: 0;
+    background: rgb(15 23 42 / 42%);
+    backdrop-filter: blur(2px);
+  }
+
+  .chat-panel {
+    height: 100%;
+  }
+
+  .chat-header {
+    padding: 14px 16px;
+  }
+
+  .message-count {
+    display: none;
+  }
+
+  .message-list {
+    padding: 20px 16px;
+  }
+
+  .message-bubble {
+    max-width: 84%;
+  }
+
+  .composer-area {
+    padding: 12px 12px max(12px, env(safe-area-inset-bottom));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-indicator span,
+  .conversation-skeleton span,
+  .reasoning-pulse {
+    animation: none;
+  }
+
+  .message-list {
+    scroll-behavior: auto;
+  }
+}
+
+:global(html.dark) .chat-page {
+  --panel-border: rgb(51 65 85 / 70%);
+  background:
+    radial-gradient(circle at 50% -10%, rgb(30 64 175 / 22%), transparent 36%),
+    linear-gradient(145deg, #020617 0%, #0f172a 100%);
+}
+
+:global(html.dark) .workspace-shell,
+:global(html.dark) .chat-header {
+  background: rgb(15 23 42 / 82%);
+}
+
+:global(html.dark) .conversation-sidebar,
+:global(html.dark) .composer-area {
+  background: rgb(15 23 42 / 92%);
+}
+
+:global(html.dark) .conversation-item:hover:not(:disabled) {
+  color: #e2e8f0;
+  background: #1e293b;
+}
+
+:global(html.dark) .conversation-item.active {
+  border-color: #1d4ed8;
+  color: #bfdbfe;
+  background: #172554;
+}
+
+:global(html.dark) .conversation-icon,
+:global(html.dark) .conversation-skeleton span {
+  background: #334155;
+}
+
+:global(html.dark) .message-count {
+  border-color: #334155;
+  color: #94a3b8;
+  background: #1e293b;
+}
+
+:global(html.dark) .message-bubble.agent,
+:global(html.dark) .typing-indicator,
+:global(html.dark) .composer {
+  border-color: #334155;
+  color: #e2e8f0;
+  background: #1e293b;
+}
+
+:global(html.dark) .reasoning-panel {
+  border-color: #334155;
+  color: #94a3b8;
+  background: linear-gradient(135deg, #172033, #172554);
+}
+
+:global(html.dark) .reasoning-toggle:hover {
+  color: #bfdbfe;
+  background: rgb(30 64 175 / 22%);
+}
+
+:global(html.dark) .reasoning-content {
+  color: #94a3b8;
+}
+
+:global(html.dark) .composer textarea {
+  color: #e2e8f0;
+}
+
+:global(html.dark) .avatar {
+  border-color: #1e40af;
+  color: #93c5fd;
+  background: #172554;
+}
+</style>

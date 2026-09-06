@@ -6,6 +6,20 @@ body,
   padding: 0;
 }
 
+body {
+  min-width: 320px;
+  color: #334155;
+  background: #f8fafc;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 html.dark {
   color-scheme: dark;
 }
