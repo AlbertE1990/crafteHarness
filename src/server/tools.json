@@ -1,0 +1,81 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "get_time",
+      "description": "查询日期与时间。模型自身不知道真实当前时间，凡用户询问「现在几点、今天几号、星期几、明天、后天、昨天、5天以后、3天前、两个月后、本周、上周、本月、明年」等任何与日期时间相关的问题时，都必须调用此工具获取权威时间，不要凭记忆推测日期。两种用法：①具体某一天/某一时刻用 amount+unit 表示相对今天的偏移，如 明天=amount 1 unit day，3天前=amount -3 unit day，5天以后=amount 5 unit day，两个月后=amount 2 unit month，去年=amount -1 unit year；②「本周/本月/今年」这类需要起止日期的范围用 preset。返回 JSON 对象，字段：timezone（时区）、current_datetime（当前日期时间 ISO 8601）、date（目标日期 YYYY-MM-DD，范围查询时为 null）、time（当前时间 HH:mm:ss）、weekday（目标日星期几，中文如「星期五」，范围查询时为 null）、range_start（范围起始日期 YYYY-MM-DD，点时间查询为 null）、range_end（范围结束日期 YYYY-MM-DD，点时间查询为 null）、label（人类可读的完整描述，如「5天后 2026-09-10（星期四）」或「本周 2026-09-01 至 2026-09-07」，回答用户时优先直接使用此字段）。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "description": "相对今天的时间偏移量：正数表示未来，负数表示过去，0 表示今天。必须由模型把用户的自然语言换算成数字，例如「明天」=1、「后天」=2、「昨天」=-1、「3天前」=-3、「5天以后」=5、「两周后」=2（配 unit=week）。与 preset 二选一；不传 amount 且不传 preset 时返回当前时刻。",
+            "default": 0
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "day",
+              "week",
+              "month",
+              "year"
+            ],
+            "description": "amount 的单位：day=天（默认），week=周，month=月，year=年。例如「两个月后」=amount 2 且 unit month。",
+            "default": "day"
+          },
+          "preset": {
+            "type": "string",
+            "enum": [
+              "now",
+              "this_week",
+              "last_week",
+              "next_week",
+              "this_month",
+              "last_month",
+              "next_month",
+              "this_year",
+              "last_year",
+              "next_year"
+            ],
+            "description": "命名时间范围，仅当用户问的是一个时间段（需要起止日期）时使用：now=当前时刻（默认）；this_week/last_week/next_week=本周/上周/下周（周一至周日）；this_month/last_month/next_month=本月/上月/下月（1 日至月末）；this_year/last_year/next_year=今年/去年/明年。用户问具体某一天（明天、5天后、3天前）时不要用此字段，改用 amount+unit。"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA 时区名称，例如 Asia/Shanghai、Asia/Tokyo、America/New_York。不传时默认使用 Asia/Shanghai。",
+            "default": "Asia/Shanghai"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_user_location",
+      "description": "查询用户当前所在位置。当用户询问「我在哪、我在哪个城市、本地」，或天气等工具需要用户所在城市而用户未明确说明时调用。返回 JSON 对象，字段：ip（用户 IP）、country（国家）、province（省份）、city（城市名称，如「杭州市」，调用天气工具时直接使用此值）、district（区县）、latitude（纬度，数字）、longitude（经度，数字）。",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_weather",
+      "description": "查询指定位置的当前天气，包括天气状况、温度、体感温度、湿度、风向风力等。用户未指定城市时（如只说「今天天气怎么样」），不要追问，先调用 get_user_location 获取用户当前城市，再调用本工具；用户明确给出城市时直接传入 city。返回 JSON 对象，字段：city（查询的城市）、weather（天气状况中文描述，如「晴」「多云」「小雨」）、temperature_c（当前温度，摄氏度数字）、feels_like_c（体感温度，摄氏度数字）、humidity_percent（相对湿度百分比数字）、wind_direction（风向中文，如「东南风」）、wind_scale（风力等级数字）、observed_at（观测时间 ISO 8601）。回答用户时直接使用这些字段组织自然语言。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "要查询天气的城市名称，例如「北京」「上海」「杭州」。不传时默认查询用户当前定位所在城市。"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+]
