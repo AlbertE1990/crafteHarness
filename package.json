@@ -15,16 +15,15 @@
     "postinstall": "npx simple-git-hooks"
   },
   "dependencies": {
-    "@sinclair/typebox": "catalog:",
     "@vueuse/core": "catalog:frontend",
     "fastify": "catalog:",
     "openai": "catalog:",
     "vue": "catalog:frontend",
-    "vue-router": "catalog:frontend"
+    "vue-router": "catalog:frontend",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:dev",
-    "@fastify/type-provider-typebox": "catalog:",
     "@iconify-json/carbon": "catalog:build",
     "@types/node": "catalog:dev",
     "@unocss/eslint-plugin": "catalog:dev",

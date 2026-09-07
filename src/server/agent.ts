@@ -4,6 +4,7 @@ import type {
   ChatCompletionTool,
 } from 'openai/resources/chat/completions'
 import { randomUUID } from 'node:crypto'
+import process from 'node:process'
 import OpenAI from 'openai'
 import {
   createDeepSeekToolCallMessage,
@@ -128,9 +129,13 @@ export class Agent {
 
   /** 每个请求使用独立 Agent，历史消息会在 chatStream 中按会话 ID 恢复。 */
   constructor() {
+    const apiKey = process.env.DEEPSEEK_API_KEY
+    if (!apiKey)
+      throw new Error('缺少环境变量 DEEPSEEK_API_KEY')
+
     this.client = new OpenAI({
       baseURL: 'https://api.deepseek.com',
-      apiKey: 'sk-855ff5376188472eae111adf696374ee',
+      apiKey,
     })
     this.messages = [
       { role: 'system', content: '你是一个AI助手' },

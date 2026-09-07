@@ -1,3 +1,6 @@
+> 本仓库正在逐步实现一个与网络框架、数据库和前端无关的通用 Agent 内核。
+> 当前设计与实现状态请从 [项目文档](./docs/README.md) 开始阅读；下方仍保留早期前端模板说明。
+
 <p align='center'>
   <img src='https://user-images.githubusercontent.com/11247099/111864893-a457fd00-899e-11eb-9f05-f4b88987541d.png' alt='Vitesse - Opinionated Vite Starter Template' width='600'/>
 </p>

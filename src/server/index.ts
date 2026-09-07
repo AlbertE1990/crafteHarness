@@ -1,38 +1,51 @@
-import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox'
 import process from 'node:process'
-import { Type } from '@sinclair/typebox'
 import Fastify from 'fastify'
 import { Agent, getConversations } from './agent'
 
 const PORT = Number(process.env.PORT ?? 3000)
 
 const fastify = Fastify({ logger: true })
-  .withTypeProvider<TypeBoxTypeProvider>()
 
-fastify.get('/api/hello', {
+fastify.get<{
+  Querystring: { name?: string }
+  Reply: { hello: string }
+}>('/api/hello', {
   schema: {
-    querystring: Type.Object({
-      name: Type.Optional(Type.String()),
-    }),
+    querystring: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      additionalProperties: false,
+    },
     response: {
-      200: Type.Object({
-        hello: Type.String(),
-      }),
+      200: {
+        type: 'object',
+        properties: { hello: { type: 'string' } },
+        required: ['hello'],
+        additionalProperties: false,
+      },
     },
   },
 }, async (request) => {
   return { hello: request.query.name ?? 'world' }
 })
 
-fastify.post('/api/conversation', {
+fastify.post<{
+  Body: { name?: string }
+  Reply: { data: string }
+}>('/api/conversation', {
   schema: {
-    body: Type.Object({
-      name: Type.Optional(Type.String()),
-    }),
+    body: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      additionalProperties: false,
+    },
     response: {
-      200: Type.Object({
-        data: Type.String(),
-      }),
+      200: {
+        type: 'object',
+        properties: { data: { type: 'string' } },
+        required: ['data'],
+        additionalProperties: false,
+      },
     },
   },
 }, async () => {
@@ -42,9 +55,14 @@ fastify.post('/api/conversation', {
 fastify.get('/api/conversation/list', {
   schema: {
     response: {
-      200: Type.Object({
-        data: Type.Array(Type.Any()),
-      }),
+      200: {
+        type: 'object',
+        properties: {
+          data: { type: 'array' },
+        },
+        required: ['data'],
+        additionalProperties: false,
+      },
     },
   },
 }, async () => {
@@ -53,12 +71,22 @@ fastify.get('/api/conversation/list', {
 })
 
 /** 通过 POST 接收用户消息，并以 SSE 返回会话 ID、分频道消息增量和完成事件。 */
-fastify.post('/api/chat', {
+fastify.post<{
+  Body: {
+    conversationId?: string
+    message: string
+  }
+}>('/api/chat', {
   schema: {
-    body: Type.Object({
-      conversationId: Type.Optional(Type.String()),
-      message: Type.String({ minLength: 1 }),
-    }),
+    body: {
+      type: 'object',
+      properties: {
+        conversationId: { type: 'string' },
+        message: { type: 'string', minLength: 1 },
+      },
+      required: ['message'],
+      additionalProperties: false,
+    },
   },
 }, async (request, reply) => {
   const agent = new Agent()
