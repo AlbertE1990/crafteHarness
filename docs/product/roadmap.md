@@ -1,5 +1,7 @@
 # CommonAgent 分阶段开发路线图
 
+> 文档类型：产品路线图；状态：Active。
+
 ## 1. 当前优先级原则
 
 - **先完成可运行的 Agent 主链，再扩展低收益的防御性体系。**
@@ -13,9 +15,10 @@
 
 ```mermaid
 flowchart LR
-  P1[阶段 1<br/>Tool Harness<br/>已完成] --> P11[阶段 1.1<br/>接入现有 Server<br/>当前阶段]
-  P11 --> P2[阶段 2<br/>ModelAdapter]
-  P2 --> P3[阶段 3<br/>Session Log]
+  P1[阶段 1<br/>Tool Harness<br/>已完成] --> P11[阶段 1.1<br/>接入现有 Server<br/>已完成]
+  P11 --> P2[阶段 2<br/>ModelAdapter<br/>代码已完成]
+  P2 --> P21[阶段 2.1<br/>官方 Adapter 工具包<br/>已完成]
+  P21 --> P3[阶段 3<br/>Session Log<br/>下一阶段]
   P3 --> P4[阶段 4<br/>Agent Loop]
   P4 --> P5[阶段 5<br/>Runtime 与轨迹接口]
   P5 --> P6[阶段 6<br/>异常诊断]
@@ -33,9 +36,9 @@ flowchart LR
 - `ToolError`、`ToolExecutionResult` 和工具轨迹事件。
 - `get_current_time`、`calculator` 安全内置工具。
 
-学习入口见[第一阶段学习指南](./learning-guide.md)。
+学习入口见[Tool Harness 学习指南](../learning/tool-harness.md)。
 
-## 4. 阶段 1.1：接入现有 Server（当前阶段）
+## 4. 阶段 1.1：接入现有 Server（已完成）
 
 目标是先在真实 DeepSeek 对话中使用和验证 CommonAgent 工具协议。
 
@@ -48,18 +51,18 @@ flowchart LR
 - 支持通过静态注册表开发第一方自定义工具。
 - 服务端工具测试覆盖 Schema 投影、输入校验、输出和网络重试。
 
-当前验证任务：
+阶段验证：
 
 1. 使用真实 DeepSeek 测试时间、指定城市天气和自动定位天气。
-2. 按[现有 Server 接入与自定义工具](./server-integration.md)新增一个简单工具。
+2. 按[自定义工具开发实践](../learning/custom-tool-development.md)新增一个简单工具。
 3. 验证错误输入、错误输出和可重试异常是否符合预期。
-4. 收集真实使用中暴露的 CommonAgent API 问题，再进入 ModelAdapter。
+4. 自定义工具通过静态注册表接入，不修改 Agent 分支。
 
-## 5. 阶段 2：ModelAdapter（下一功能阶段）
+## 5. 阶段 2：ModelAdapter（代码已完成，真实联调待执行）
 
 目标是让 Agent Loop 只依赖内部模型协议，不直接依赖 OpenAI SDK。
 
-计划范围：
+已完成范围：
 
 - 定义供应商无关消息、工具调用、用量和结束原因。
 - 同时定义非流式响应与标准流事件。
@@ -67,8 +70,28 @@ flowchart LR
 - 第一份实现采用 DeepSeek；OpenAI 兼容 SDK 只能存在于 adapter 内部。
 - adapter 将 `DefinedTool.model` 转换成供应商格式。
 - 使用契约测试保证供应商类型不泄漏到 CommonAgent 核心。
+- 标准 chunk 最大程度复用 OpenAI Chat Completions，新增字段采用只增不减原则。
+- 增加 `AgentConfig`，统一保存 Agent 基础配置与模型配置。
 
-## 6. 阶段 3：Session Log
+真实环境验收仍需配置 `DEEPSEEK_API_KEY`，覆盖普通对话、工具调用、多轮 reasoning 回放和取消。
+详细交付见[阶段 2 记录](./deliveries/delivery-003-model-adapter.md)。
+
+## 6. 阶段 2.1：官方 Adapter 工具包（已完成）
+
+目标是在不改变 Core 依赖方向的前提下，让常见模型开箱即用，并为新 Adapter 提供可运行范例。
+
+已完成范围：
+
+- 提取 `OpenAICompatibleModelAdapter`，复用消息、工具、响应、流、usage 和错误映射。
+- 将 DeepSeek 收缩为消息、token 参数、thinking 和 reasoning 差异层。
+- 提供 Scripted Adapter 与不绑定测试框架的契约探针。
+- `AgentConfig` 同时支持内置兼容服务和自定义 Adapter。
+- 生产 Adapter 与测试工具使用独立入口，Core 继续禁止导入 SDK。
+
+详细交付见[阶段 2.1 记录](./deliveries/delivery-004-official-adapter-toolkit.md)，设计依据见
+[ADR-0003](./decisions/adr-0003-official-adapter-toolkit.md)。
+
+## 7. 阶段 3：Session Log（下一阶段）
 
 计划范围：
 
@@ -78,7 +101,7 @@ flowchart LR
 - 区分持久事实、实时事件和诊断 Trace。
 - 定义并发追加、版本检查、分页和恢复语义。
 
-## 7. 阶段 4：Agent Loop
+## 8. 阶段 4：Agent Loop
 
 计划范围：
 
@@ -88,7 +111,7 @@ flowchart LR
 - 定义停止原因，防止无限循环。
 - 明确并行工具调用、失败回写和重放语义。
 
-## 8. 阶段 5：Runtime 与轨迹接口
+## 9. 阶段 5：Runtime 与轨迹接口
 
 计划范围：
 
@@ -98,7 +121,7 @@ flowchart LR
 - Runtime 组装 ModelAdapter、工具、策略、审批和 Store。
 - 保持前端展示数据不进入 CommonAgent 核心协议。
 
-## 9. 阶段 6：异常诊断
+## 10. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -111,7 +134,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 10. 阶段 7：长期安全与扩展（最低优先级）
+## 11. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 
@@ -130,4 +153,4 @@ flowchart LR
 - 第三方插件安装和权限管理体系。
 - 为尚不存在的第三方工具场景提前搭建沙箱。
 
-[安全与信任模型](./security-model.md)保留为长期边界说明，不作为前序功能阶段的验收项。
+[安全与信任模型](../standards/security/trust-model.md)保留为长期边界说明，不作为前序功能阶段的验收项。

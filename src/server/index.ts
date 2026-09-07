@@ -1,8 +1,10 @@
 import process from 'node:process'
 import Fastify from 'fastify'
 import { Agent, getConversations } from './agent'
+import { AgentConfig } from './agent-config'
 
 const PORT = Number(process.env.PORT ?? 3000)
+const agentConfig = AgentConfig.fromEnv()
 
 const fastify = Fastify({ logger: true })
 
@@ -89,7 +91,7 @@ fastify.post<{
     },
   },
 }, async (request, reply) => {
-  const agent = new Agent()
+  const agent = new Agent(agentConfig)
   const abortController = new AbortController()
 
   // 浏览器断开连接时同步取消上游模型请求，避免继续消耗 token 和连接资源。

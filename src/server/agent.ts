@@ -1,28 +1,25 @@
 import type {
-  ChatCompletionMessageFunctionToolCall,
-  ChatCompletionMessageParam,
-  ChatCompletionTool,
-} from 'openai/resources/chat/completions'
-import type { ToolErrorInfo, ToolEventListener, ToolExecutionFailure } from '../common-agent'
+  ModelAdapter,
+  ModelFunctionToolCall,
+  ModelMessage,
+  ToolErrorInfo,
+  ToolExecutionFailure,
+} from '../common-agent'
 import { randomUUID } from 'node:crypto'
-import process from 'node:process'
-import OpenAI from 'openai'
+import { ModelError } from '../common-agent'
+import { AgentConfig } from './agent-config'
 import {
   findServerTool,
   serverTools,
   trustedServerToolPolicy,
 } from './agent-tools'
-import {
-  createDeepSeekToolCallMessage,
-  getDeepSeekReasoningDelta,
-} from './deepseek-adapter'
 
 interface Conversation {
   id: string
   name: string
   createAt: string
   /** 发送给模型的完整上下文，包含 tool_calls 和 tool 结果。 */
-  history: ChatCompletionMessageParam[]
+  history: ModelMessage[]
   /** 仅供前端展示的精简历史，保留每轮最终回答及其思考内容。 */
   displayHistory: DisplayMessage[]
 }
@@ -45,12 +42,7 @@ interface AgentTurnResult {
   reasoning: string
 }
 
-/** 创建服务端 Agent 时可以注入的运行时观察能力。 */
-export interface AgentOptions {
-  /** 接收 CommonAgent 工具执行轨迹；监听器异常不会改变工具结果。 */
-  readonly onToolEvent?: ToolEventListener
-}
-
+/** 当前 Fastify Runtime 暴露给前端的流事件。 */
 export type AgentStreamEvent
   = | { type: 'conversation', conversationId: string }
     | {
@@ -78,7 +70,7 @@ function getConversation(conversationId: string) {
 }
 
 /** 使用第一条用户消息生成简短标题，避免额外调用一次模型。 */
-function getConversationName(history: ChatCompletionMessageParam[]): string {
+function getConversationName(history: ModelMessage[]): string {
   const firstUserMessage = history.find(message => message.role === 'user')
   const content = firstUserMessage?.content
   return typeof content === 'string' && content.trim()
@@ -89,7 +81,7 @@ function getConversationName(history: ChatCompletionMessageParam[]): string {
 /** 更新模型上下文和前端展示历史，或在首次完成回答后创建会话记录。 */
 function storeMessages(
   conversationId: string,
-  history: ChatCompletionMessageParam[],
+  history: ModelMessage[],
   userContent: string,
   result: AgentTurnResult,
 ) {
@@ -150,19 +142,6 @@ function parseToolArguments(argumentsText: string):
   }
 }
 
-/** 将 CommonAgent 模型投影转换为当前 DeepSeek/OpenAI 兼容协议。 */
-function createModelTools(): ChatCompletionTool[] {
-  return serverTools.map(tool => ({
-    type: 'function',
-    function: {
-      name: tool.model.name,
-      description: tool.model.description,
-      parameters: tool.model.inputSchema,
-      strict: true,
-    },
-  })) as ChatCompletionTool[]
-}
-
 /** 为工具查找或 JSON 解析等调用前错误构造统一失败结果。 */
 function createToolFailure(error: ToolErrorInfo): ToolExecutionFailure {
   return {
@@ -174,25 +153,21 @@ function createToolFailure(error: ToolErrorInfo): ToolExecutionFailure {
   }
 }
 
+/** 使用标准 ModelAdapter 与 CommonAgent Tool Harness 驱动当前过渡执行循环。 */
 export class Agent {
-  private readonly client: OpenAI
-  private readonly messages: ChatCompletionMessageParam[]
-  private readonly maxTurn = 5
-  private readonly onToolEvent?: ToolEventListener
+  private readonly config: AgentConfig
+  private readonly modelAdapter: ModelAdapter
+  private readonly messages: ModelMessage[]
 
-  /** 每个请求使用独立 Agent，历史消息会在 chatStream 中按会话 ID 恢复。 */
-  constructor(options: AgentOptions = {}) {
-    const apiKey = process.env.DEEPSEEK_API_KEY
-    if (!apiKey)
-      throw new Error('缺少环境变量 DEEPSEEK_API_KEY')
-
-    this.client = new OpenAI({
-      baseURL: 'https://api.deepseek.com',
-      apiKey,
-    })
-    this.onToolEvent = options.onToolEvent
+  /**
+   * 每个请求使用独立 Agent，历史消息会在 chatStream 中按会话 ID 恢复。
+   * 内置或自定义 ModelAdapter 都由统一配置创建，不提供平行构造入口。
+   */
+  constructor(config: AgentConfig = AgentConfig.fromEnv()) {
+    this.config = config
+    this.modelAdapter = config.createModelAdapter()
     this.messages = [
-      { role: 'system', content: '你是一个AI助手' },
+      { role: 'system', content: config.systemPrompt },
     ]
   }
 
@@ -226,13 +201,12 @@ export class Agent {
     }
   }
 
-  /** 创建兼容 OpenAI Chat Completions 的上游流，并透传客户端中断信号。 */
+  /** 通过供应商无关 Adapter 创建标准模型流，并透传客户端中断信号。 */
   private createStream(signal?: AbortSignal) {
-    return this.client.chat.completions.create({
-      model: 'deepseek-v4-flash',
-      messages: this.messages,
-      tools: createModelTools(),
-      stream: true,
+    return this.modelAdapter.stream({
+      // Adapter 获得调用开始时的快照，不能观察后续工具或助手消息对数组的修改。
+      messages: [...this.messages],
+      tools: serverTools.map(tool => tool.model),
     }, { signal })
   }
 
@@ -241,7 +215,7 @@ export class Agent {
    * 完成输入输出校验、权限、重试、内容投影及错误归一化，再以 role=tool 写回模型上下文。
    */
   private async executeToolCall(
-    toolCall: ChatCompletionMessageFunctionToolCall,
+    toolCall: ModelFunctionToolCall,
     sessionId: string,
     signal?: AbortSignal,
   ) {
@@ -266,7 +240,7 @@ export class Agent {
           sessionId,
           ...(signal ? { signal } : {}),
           policy: trustedServerToolPolicy,
-          ...(this.onToolEvent ? { onEvent: this.onToolEvent } : {}),
+          ...(this.config.onToolEvent ? { onEvent: this.config.onToolEvent } : {}),
         })
       }
     }
@@ -289,7 +263,7 @@ export class Agent {
   ): AsyncGenerator<AgentStreamEvent, AgentTurnResult> {
     let accumulatedReasoning = ''
 
-    for (let turn = 1; turn <= this.maxTurn; turn++) {
+    for (let step = 1; step <= this.config.maxModelSteps; step++) {
       const stream = await this.createStream(signal)
       const pendingToolCalls = new Map<number, PendingToolCall>()
       let assistantContent = ''
@@ -300,7 +274,7 @@ export class Agent {
         if (!delta)
           continue
 
-        const reasoningDelta = getDeepSeekReasoningDelta(delta)
+        const reasoningDelta = delta.reasoning_content ?? ''
         if (reasoningDelta) {
           // 多次工具调用会产生多段独立思考，用空行分隔后统一展示给前端。
           const separator = !turnReasoning && accumulatedReasoning ? '\n\n' : ''
@@ -320,6 +294,13 @@ export class Agent {
 
         // 流式响应会把同一次工具调用的名称和 JSON 参数拆到多个 chunk 中。
         for (const fragment of delta.tool_calls ?? []) {
+          if (!('function' in fragment)) {
+            throw new ModelError({
+              code: 'MODEL_PROTOCOL_ERROR',
+              message: '当前 Agent 尚不支持自定义文本工具调用',
+              provider: this.modelAdapter.provider,
+            })
+          }
           if (!fragment.function)
             continue
 
@@ -336,11 +317,16 @@ export class Agent {
         }
       }
 
-      const toolCalls: ChatCompletionMessageFunctionToolCall[] = [...pendingToolCalls.values()]
+      const toolCalls: ModelFunctionToolCall[] = [...pendingToolCalls.values()]
         .sort((left, right) => left.index - right.index)
         .map((tool) => {
-          if (!tool.id || !tool.name)
-            throw new Error('模型返回了不完整的工具调用')
+          if (!tool.id || !tool.name) {
+            throw new ModelError({
+              code: 'MODEL_PROTOCOL_ERROR',
+              message: '模型返回了不完整的工具调用',
+              provider: this.modelAdapter.provider,
+            })
+          }
 
           return {
             id: tool.id,
@@ -354,11 +340,12 @@ export class Agent {
 
       if (toolCalls.length > 0) {
         // OpenAI 协议要求先写入包含 tool_calls 的 assistant 消息，再追加对应 tool 结果。
-        this.messages.push(createDeepSeekToolCallMessage(
-          assistantContent,
-          turnReasoning,
-          toolCalls,
-        ))
+        this.messages.push({
+          role: 'assistant',
+          content: assistantContent || '',
+          reasoning_content: turnReasoning,
+          tool_calls: toolCalls,
+        })
 
         for (const toolCall of toolCalls)
           await this.executeToolCall(toolCall, sessionId, signal)
@@ -367,7 +354,11 @@ export class Agent {
       }
 
       if (assistantContent) {
-        this.messages.push({ role: 'assistant', content: assistantContent })
+        this.messages.push({
+          role: 'assistant',
+          content: assistantContent,
+          reasoning_content: turnReasoning,
+        })
         return { content: assistantContent, reasoning: accumulatedReasoning }
       }
     }

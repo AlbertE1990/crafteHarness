@@ -1,0 +1,11 @@
+# 阶段交付记录
+
+交付记录描述每个阶段实际完成的范围、验证方式和结束时已知限制。文件使用独立流水号，正文继续保留
+产品路线图中的阶段编号。
+
+- [Delivery 001：阶段 1 Tool Harness](./delivery-001-tool-harness.md)
+- [Delivery 002：阶段 1.1 Server 接入](./delivery-002-server-integration.md)
+- [Delivery 003：阶段 2 ModelAdapter](./delivery-003-model-adapter.md)
+- [Delivery 004：阶段 2.1 官方 Adapter 工具包](./delivery-004-official-adapter-toolkit.md)
+
+交付记录不是当前协议的权威来源。后续阶段改变行为时更新规范并新增交付记录，不覆盖旧记录中的历史状态。

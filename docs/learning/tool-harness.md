@@ -1,5 +1,9 @@
 # 第一阶段学习指南：从定义工具到执行结果
 
+> 文档类型：学习指南；适用版本：阶段 1 及以后。
+
+本文为教学目的解释执行流程；稳定字段、错误码和安全规则以[工具协议](../standards/protocols/tool.md)为准。
+
 ## 1. 这份指南要解决什么
 
 本阶段还没有实现完整 Agent。它实现的是未来 Agent Loop 会依赖的 **Tool Harness（工具执行内核）**。
@@ -15,10 +19,10 @@
 
 建议阅读时同时打开：
 
-- [`src/common-agent/tools/types.ts`](../src/common-agent/tools/types.ts)：先看公共数据结构。
-- [`src/common-agent/tools/define-tool.ts`](../src/common-agent/tools/define-tool.ts)：理解注册期。
-- [`src/common-agent/tools/execute-tool.ts`](../src/common-agent/tools/execute-tool.ts)：理解调用期。
-- [`test/common-agent-tools.test.ts`](../test/common-agent-tools.test.ts)：用可运行的例子验证理解。
+- [`src/common-agent/tools/types.ts`](../../src/common-agent/tools/types.ts)：先看公共数据结构。
+- [`src/common-agent/tools/define-tool.ts`](../../src/common-agent/tools/define-tool.ts)：理解注册期。
+- [`src/common-agent/tools/execute-tool.ts`](../../src/common-agent/tools/execute-tool.ts)：理解调用期。
+- [`test/common-agent-tools.test.ts`](../../test/common-agent-tools.test.ts)：用可运行的例子验证理解。
 
 ## 2. 先建立整体认识
 
@@ -452,7 +456,7 @@ risk === 'safe' 且 capabilities 为空
 
 这里存在一个必须掌握的可信前提：当前策略相信第一方工具作者填写的元数据。它能防止误配置，
 不能识别一个谎报 `risk: 'safe'` 的恶意同进程函数。Schema 验证的是字段形状，不是声明真实性；
-详细说明见[安全与信任模型](./security-model.md)。
+详细说明见[安全与信任模型](../standards/security/trust-model.md)。
 
 ### 7.2 权限层不能替代业务鉴权
 
@@ -539,7 +543,7 @@ flowchart LR
 ```
 
 这项能力只进入后续开发计划，本阶段没有实现。详细验收要求见
-[分阶段开发路线图](./roadmap.md)。
+[分阶段开发路线图](../product/roadmap.md)。
 
 ## 10. 轨迹事件怎么理解
 
@@ -705,11 +709,19 @@ TypeScript 类型在编译后消失，模型传入的是运行时 `unknown`。Zo
 
 尚未完成：
 
-- CommonAgent 内部的 `ModelAdapter`；现有 Server 仍直接调用 DeepSeek/OpenAI 兼容 SDK。
 - Agent Loop、步数预算和停止条件。
 - append-only Session Log 和消息推导。
 - 完整 Trace、服务端异常堆栈日志与脱敏管线。
 - 轨迹查询 API、SSE 协议和前端调试视图。
 - 文件、网络、数据库和 Shell 等高风险内置工具。
+
+后续已经完成：
+
+- CommonAgent 内部 `ModelAdapter` 协议、通用 OpenAI Compatible Adapter 与 DeepSeek 差异层；现有 Server
+  不再直接依赖 OpenAI SDK。
+- OpenAI Chat Completions 兼容的标准 chunk、非流式结果、用量和模型错误分类。
+- 统一 `AgentConfig`、Scripted 测试 Adapter 与契约探针。详见
+  [阶段 2 交付记录](../product/deliveries/delivery-003-model-adapter.md)和
+  [阶段 2.1 交付记录](../product/deliveries/delivery-004-official-adapter-toolkit.md)。
 
 掌握这一边界后再进入下一阶段，可以避免误以为“工具能独立运行”等于“通用 Agent 已经完成”。

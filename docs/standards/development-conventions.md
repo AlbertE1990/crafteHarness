@@ -1,5 +1,7 @@
 # CommonAgent 开发与代码规范
 
+> 文档类型：规范；状态：Accepted。
+
 ## 1. 适用范围
 
 本规范适用于 `src/common-agent` 及后续 ModelAdapter、Session、Agent Loop 和 Runtime 协议。
@@ -115,7 +117,7 @@ executeAttempt(tool, input, {
 - `safe` 必须写明威胁模型；“可信代码中的低风险工具”不等于“可安全执行任意第三方代码”。
 - 面向模型和前端的公开错误，与包含堆栈的服务端诊断日志必须分层。
 
-详细威胁模型见[安全与信任模型](./security-model.md)。
+详细威胁模型见[安全与信任模型](./security/trust-model.md)。
 
 ## 6. 变更检查清单
 

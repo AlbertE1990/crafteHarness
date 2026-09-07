@@ -1,39 +1,64 @@
 # CommonAgent 文档
 
-本目录记录 CommonAgent 的架构约束、公共协议、实现状态和重要设计决定。代码与文档必须在同一次变更中保持同步。
+本文档库按用途分为开发规范、学习路径和产品记录。代码与当前规范必须在同一次变更中保持同步；
+学习文档和历史交付记录不能覆盖当前规范。
+
+## 按角色阅读
+
+### 开发或评审当前实现
+
+从[开发规范](./standards/README.md)开始：
+
+- [总体架构](./standards/architecture.md)
+- [工具协议](./standards/protocols/tool.md)
+- [模型 Adapter 协议](./standards/protocols/model-adapter.md)
+- [Server Runtime 接入规范](./standards/integrations/server-runtime.md)
+- [安全与信任模型](./standards/security/trust-model.md)
+
+### 学习和扩展 Agent
+
+从[学习路径](./learning/README.md)开始：
+
+- [Tool Harness：从定义工具到执行结果](./learning/tool-harness.md)
+- [自定义工具开发实践](./learning/custom-tool-development.md)
+- [ModelAdapter：从供应商 chunk 到 Agent](./learning/model-adapter.md)
+- [自定义模型 Adapter 开发实践](./learning/custom-model-adapter.md)
+
+### 查看方向、决策和进度
+
+从[产品与项目记录](./product/README.md)开始：
+
+- [分阶段开发路线图](./product/roadmap.md)
+- [架构决策记录](./product/decisions/README.md)
+- [阶段交付记录](./product/deliveries/README.md)
 
 ## 当前状态
 
-第一阶段仅实现了独立工具子系统：
+当前已完成 Tool Harness、现有 Server 接入、ModelAdapter 和官方 Adapter 工具包：
 
-- 使用 Zod 4 的 `defineTool()`。
-- 输入与成功输出运行时校验。
-- 协作式超时、幂等重试和标准错误。
-- allow/deny/ask 权限决策与 fail-closed 审批。
-- 可供后续轨迹系统消费的工具执行事件。
-- `get_current_time` 和 `calculator` 两个显式注册的安全内置工具。
+- 工具具有 Zod 输入输出边界、权限、审批、超时、幂等重试和执行事件。
+- 模型具有供应商无关消息、OpenAI 兼容标准 chunk、非流式结果、用量和错误协议。
+- OpenAI SDK 仅存在于官方 Adapter；Core 不依赖 SDK，DeepSeek 只维护供应商差异。
+- OpenAI 兼容服务可使用内置 Adapter，自定义实现可通过同一个 `AgentConfig` 注入。
+- Scripted Adapter 与契约探针为应用和 Adapter 开发提供无网络测试入口。
+- 真实 DeepSeek 冒烟仍需在配置 API Key 后执行。
+- append-only Session Log 和完整 Agent Loop 是后续阶段。
 
-现有 `src/server/agent.ts` 已开始使用新工具协议：模型 Schema 来自 `DefinedTool.model`，工具调用由
-`executeTool()` 执行。ModelAdapter、append-only Session Log 和完整 Agent Loop 仍会在后续阶段逐步实现。
+## 权威顺序
 
-## 文档索引
+发生内容冲突时按以下顺序判断：
 
-- [第一阶段学习指南：从定义工具到执行结果](./learning-guide.md)
-- [总体架构](./architecture.md)
-- [开发与代码规范](./development-conventions.md)
-- [工具定义与执行规范](./tool-specification.md)
-- [现有 Server 接入与自定义工具](./server-integration.md)
-- [分阶段开发路线图](./roadmap.md)
-- [ADR-001：采用 Zod 作为工具 Schema 单一来源](./decisions/001-zod-tool-contract.md)
-- [安全与信任模型（长期强化参考）](./security-model.md)
-
-如果你的目标是掌握本次代码修改，建议先阅读“第一阶段学习指南”，再对照测试逐段调试；
-“总体架构”和“开发路线图”分别回答最终要做成什么，以及以后按什么顺序实现。
+1. 当前 `Accepted` 的规范定义现行行为。
+2. 未被取代的 ADR 解释设计原因。
+3. Roadmap 描述计划，不代表已经实现。
+4. Delivery 描述历史交付快照。
+5. Learning 用于理解和实践，不作为协议定义。
 
 ## 文档维护规则
 
-- 所有导出的类型、类、函数和公共方法必须带有 JSDoc。
+- 一个文档只承担一种主要职责，混合内容应拆分并互相链接。
+- 新增或修改公共协议时同步更新规范、代码测试和必要的 ADR。
+- 所有导出类型、类、函数和公共方法必须带有 JSDoc。
 - 关键状态转换、取消语义、安全边界和不变量必须解释“为什么”。
-- 新增公共协议时必须同步更新对应文档。
-- 设计决定发生变化时新增或更新 ADR，不能只修改代码。
-- 文档中的示例必须能够对应当前代码；未实现功能必须明确标记为“规划中”。
+- 未实现功能必须标记为“规划中”，不能写成已经具备的能力。
+- 内部链接使用相对路径；文件名使用小写 `kebab-case`。

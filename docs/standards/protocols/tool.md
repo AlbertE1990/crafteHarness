@@ -1,5 +1,7 @@
 # 工具定义与执行规范
 
+> 文档类型：协议规范；状态：Accepted。
+
 ## 设计目标
 
 工具定义必须把名称、描述、输入 Schema、成功输出 Schema 和实现放在一起。这样可以消除独立 JSON 文件、TypeScript interface 与执行函数之间的协议漂移。
@@ -122,7 +124,7 @@ throw new ToolError({
 
 当前 `ToolErrorInfo` 是可返回给模型、公开轨迹和未来会话事件的安全错误，因此不包含
 `stack` 和原始 `cause`。可注入的服务端诊断日志出口尚未实现，已经列入
-[分阶段开发路线图](./roadmap.md)。在该能力完成前，不能把
+[分阶段开发路线图](../../product/roadmap.md)。在该能力完成前，不能把
 `ToolErrorInfo` 当成完整的服务端故障日志。
 
 ## 重试规范
@@ -157,7 +159,7 @@ JavaScript 无法安全强杀同进程同步代码。如果工具忽略信号，
 
 `safeToolPolicy` 不是 JavaScript 沙箱。恶意同进程工具可以谎报 `risk`，也可以直接使用 Node.js
 文件和进程 API。未审查第三方工具必须通过部署侧可信注册、受控能力及独立进程或容器隔离，不能依赖
-工具自己的 `security` 声明。完整边界见[安全与信任模型](./security-model.md)。
+工具自己的 `security` 声明。完整边界见[安全与信任模型](../security/trust-model.md)。
 
 网络、文件、数据库、进程和 secret 能力必须显式授权。参数级、资源级和租户级授权仍由业务工具或其服务依赖完成。
 
