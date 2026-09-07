@@ -38,7 +38,7 @@ src/
       current-time.ts
       calculator.ts
 
-  server/                 # 现有 Fastify Runtime，尚未完成迁移
+  server/                 # 现有 Fastify Runtime，工具链已接入 CommonAgent
   components/             # 前端，不属于 Agent 核心
 ```
 
@@ -135,11 +135,12 @@ OpenAI SDK 将由后续 DeepSeek ModelAdapter 内部使用，其类型不能穿�
 ## 分阶段路线
 
 1. **工具协议（当前阶段）**：`defineTool`、Harness、权限门、轨迹事件和安全内置工具。
-2. **诊断边界补强（规划中）**：在不向模型或前端泄漏堆栈的前提下，增加可注入的服务端异常日志出口。
-3. **ModelAdapter**：定义供应商无关消息和流事件，先实现 DeepSeek adapter。
+2. **现有 Server 接入（当前验证阶段）**：先让真实 DeepSeek 对话使用 `DefinedTool.model` 和 `executeTool()`，支持开发自定义工具。
+3. **ModelAdapter**：定义供应商无关消息和流事件，把 OpenAI 兼容 SDK 收进 DeepSeek adapter。
 4. **Session Log**：实现内存 append-only store，并从事件推导模型历史。
 5. **Agent Loop**：以 Run/Turn/Step 驱动模型与工具。
-6. **Runtime 迁移**：Fastify 只负责 HTTP、SSE 和轨迹查询。
+6. **Runtime 与轨迹接口**：Fastify 只负责 HTTP、SSE、审批和轨迹查询。
+7. **诊断与长期强化**：补充服务端异常日志；核心功能稳定后再评估第三方信任、幂等审查和沙箱。
 
 每个阶段必须先通过单元测试和契约测试，再迁移下一层。
 完整范围、验收条件和未实现能力见[分阶段开发路线图](./roadmap.md)。

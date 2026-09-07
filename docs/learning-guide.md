@@ -250,8 +250,8 @@ flowchart TD
 ```ts
 assertClosedObjects(
   inputJsonSchema,
-  definition.name,
   'inputSchema',
+  definition.name,
 )
 ```
 
@@ -450,6 +450,10 @@ risk === 'safe' 且 capabilities 为空
 缺少策略、缺少审批通道、审批通道异常或返回无效结果时，都不能静默变成授权。这是
 **fail closed（失败时保持拒绝）**。
 
+这里存在一个必须掌握的可信前提：当前策略相信第一方工具作者填写的元数据。它能防止误配置，
+不能识别一个谎报 `risk: 'safe'` 的恶意同进程函数。Schema 验证的是字段形状，不是声明真实性；
+详细说明见[安全与信任模型](./security-model.md)。
+
 ### 7.2 权限层不能替代业务鉴权
 
 CommonAgent 可以判断某工具是否允许访问网络，但“当前用户是否能读取订单 123”仍应由业务服务判断。
@@ -472,6 +476,9 @@ CommonAgent 能力级授权：允许调用 order_read 工具
 | 调用未取消                     | Runtime / 用户   | 返回 `ABORTED` |
 
 `maxAttempts` 包含第一次执行。例如 `maxAttempts: 3` 表示最多执行三次，不是“首次加三次重试”。
+
+注册期只能确认开发者同时配置了 `retry` 和 `idempotent: true`，无法观察任意网络、数据库或进程
+副作用来证明工具真的幂等。真实幂等性需要 `callId` 去重键、上游幂等协议、存储唯一约束和集成测试。
 
 未知 JavaScript 异常默认不可重试。工具作者必须明确将临时故障包装为：
 
@@ -532,7 +539,7 @@ flowchart LR
 ```
 
 这项能力只进入后续开发计划，本阶段没有实现。详细验收要求见
-[阶段 1.1：服务端异常诊断](./roadmap.md#阶段-11服务端异常诊断规划中)。
+[分阶段开发路线图](./roadmap.md)。
 
 ## 10. 轨迹事件怎么理解
 
@@ -698,7 +705,7 @@ TypeScript 类型在编译后消失，模型传入的是运行时 `unknown`。Zo
 
 尚未完成：
 
-- `ModelAdapter` 和任何模型调用。
+- CommonAgent 内部的 `ModelAdapter`；现有 Server 仍直接调用 DeepSeek/OpenAI 兼容 SDK。
 - Agent Loop、步数预算和停止条件。
 - append-only Session Log 和消息推导。
 - 完整 Trace、服务端异常堆栈日志与脱敏管线。

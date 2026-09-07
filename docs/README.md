@@ -13,15 +13,19 @@
 - 可供后续轨迹系统消费的工具执行事件。
 - `get_current_time` 和 `calculator` 两个显式注册的安全内置工具。
 
-现有 `src/server/agent.ts` 尚未迁移到新工具协议。ModelAdapter、append-only Session Log 和完整 Agent Loop 会在后续阶段逐步实现。
+现有 `src/server/agent.ts` 已开始使用新工具协议：模型 Schema 来自 `DefinedTool.model`，工具调用由
+`executeTool()` 执行。ModelAdapter、append-only Session Log 和完整 Agent Loop 仍会在后续阶段逐步实现。
 
 ## 文档索引
 
 - [第一阶段学习指南：从定义工具到执行结果](./learning-guide.md)
 - [总体架构](./architecture.md)
+- [开发与代码规范](./development-conventions.md)
 - [工具定义与执行规范](./tool-specification.md)
+- [现有 Server 接入与自定义工具](./server-integration.md)
 - [分阶段开发路线图](./roadmap.md)
 - [ADR-001：采用 Zod 作为工具 Schema 单一来源](./decisions/001-zod-tool-contract.md)
+- [安全与信任模型（长期强化参考）](./security-model.md)
 
 如果你的目标是掌握本次代码修改，建议先阅读“第一阶段学习指南”，再对照测试逐段调试；
 “总体架构”和“开发路线图”分别回答最终要做成什么，以及以后按什么顺序实现。

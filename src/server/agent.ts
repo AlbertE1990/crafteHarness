@@ -3,19 +3,19 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionTool,
 } from 'openai/resources/chat/completions'
+import type { ToolErrorInfo, ToolEventListener, ToolExecutionFailure } from '../common-agent'
 import { randomUUID } from 'node:crypto'
 import process from 'node:process'
 import OpenAI from 'openai'
 import {
+  findServerTool,
+  serverTools,
+  trustedServerToolPolicy,
+} from './agent-tools'
+import {
   createDeepSeekToolCallMessage,
   getDeepSeekReasoningDelta,
 } from './deepseek-adapter'
-import agentFunctions from './func'
-import {
-  createToolExecutionFailure,
-  executeToolDefinition,
-} from './tool-result'
-import toolsSchema from './tools.json'
 
 interface Conversation {
   id: string
@@ -43,6 +43,12 @@ interface PendingToolCall {
 interface AgentTurnResult {
   content: string
   reasoning: string
+}
+
+/** 创建服务端 Agent 时可以注入的运行时观察能力。 */
+export interface AgentOptions {
+  /** 接收 CommonAgent 工具执行轨迹；监听器异常不会改变工具结果。 */
+  readonly onToolEvent?: ToolEventListener
 }
 
 export type AgentStreamEvent
@@ -122,13 +128,60 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** 模型工具参数必须先从 JSON 文本解析为 CommonAgent 接收的 unknown 输入。 */
+function parseToolArguments(argumentsText: string):
+  | { readonly ok: true, readonly value: unknown }
+  | { readonly ok: false, readonly error: ToolErrorInfo } {
+  try {
+    return {
+      ok: true,
+      value: JSON.parse(argumentsText || '{}'),
+    }
+  }
+  catch (error) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_TOOL_ARGUMENTS',
+        message: getErrorMessage(error),
+        retryable: false,
+      },
+    }
+  }
+}
+
+/** 将 CommonAgent 模型投影转换为当前 DeepSeek/OpenAI 兼容协议。 */
+function createModelTools(): ChatCompletionTool[] {
+  return serverTools.map(tool => ({
+    type: 'function',
+    function: {
+      name: tool.model.name,
+      description: tool.model.description,
+      parameters: tool.model.inputSchema,
+      strict: true,
+    },
+  })) as ChatCompletionTool[]
+}
+
+/** 为工具查找或 JSON 解析等调用前错误构造统一失败结果。 */
+function createToolFailure(error: ToolErrorInfo): ToolExecutionFailure {
+  return {
+    ok: false,
+    error,
+    content: `Error: ${error.message}`,
+    attempts: 0,
+    durationMs: 0,
+  }
+}
+
 export class Agent {
   private readonly client: OpenAI
   private readonly messages: ChatCompletionMessageParam[]
   private readonly maxTurn = 5
+  private readonly onToolEvent?: ToolEventListener
 
   /** 每个请求使用独立 Agent，历史消息会在 chatStream 中按会话 ID 恢复。 */
-  constructor() {
+  constructor(options: AgentOptions = {}) {
     const apiKey = process.env.DEEPSEEK_API_KEY
     if (!apiKey)
       throw new Error('缺少环境变量 DEEPSEEK_API_KEY')
@@ -137,6 +190,7 @@ export class Agent {
       baseURL: 'https://api.deepseek.com',
       apiKey,
     })
+    this.onToolEvent = options.onToolEvent
     this.messages = [
       { role: 'system', content: '你是一个AI助手' },
     ]
@@ -161,7 +215,7 @@ export class Agent {
 
     yield { type: 'conversation', conversationId: id }
 
-    const result = yield* this.runStream(signal)
+    const result = yield* this.runStream(id, signal)
     storeMessages(id, this.messages.slice(1), message, result)
 
     yield {
@@ -177,41 +231,43 @@ export class Agent {
     return this.client.chat.completions.create({
       model: 'deepseek-v4-flash',
       messages: this.messages,
-      tools: toolsSchema as ChatCompletionTool[],
+      tools: createModelTools(),
       stream: true,
     }, { signal })
   }
 
   /**
    * 执行一个完整工具调用。业务工具只返回原始值或抛出异常，Harness 在这里统一
-   * 完成重试、容错字符串化及错误投影，再以 role=tool 写回模型上下文。
+   * 完成输入输出校验、权限、重试、内容投影及错误归一化，再以 role=tool 写回模型上下文。
    */
   private async executeToolCall(
     toolCall: ChatCompletionMessageFunctionToolCall,
+    sessionId: string,
     signal?: AbortSignal,
   ) {
-    const definition = agentFunctions[toolCall.function.name]
+    const tool = findServerTool(toolCall.function.name)
     let execution
 
-    if (!definition) {
-      execution = createToolExecutionFailure({
+    if (!tool) {
+      execution = createToolFailure({
         code: 'TOOL_NOT_FOUND',
         message: `工具 ${toolCall.function.name} 不存在`,
         retryable: false,
-      }, 0)
+      })
     }
     else {
-      try {
-        const args = JSON.parse(toolCall.function.arguments || '{}')
-        execution = await executeToolDefinition(definition, args, signal)
+      const parsedArguments = parseToolArguments(toolCall.function.arguments)
+      if (!parsedArguments.ok) {
+        execution = createToolFailure(parsedArguments.error)
       }
-      catch (error) {
-        // JSON 参数在进入工具前解析；解析失败没有重试价值。
-        execution = createToolExecutionFailure({
-          code: 'INVALID_TOOL_ARGUMENTS',
-          message: getErrorMessage(error),
-          retryable: false,
-        }, 0)
+      else {
+        execution = await tool.invoke(parsedArguments.value, {
+          callId: toolCall.id,
+          sessionId,
+          ...(signal ? { signal } : {}),
+          policy: trustedServerToolPolicy,
+          ...(this.onToolEvent ? { onEvent: this.onToolEvent } : {}),
+        })
       }
     }
 
@@ -227,7 +283,10 @@ export class Agent {
    * 消费模型流并驱动多轮工具调用，直到得到最终文本或达到最大轮数。
    * 返回值供 done 事件兜底使用，yield 的 delta 则用于前端实时渲染。
    */
-  private async* runStream(signal?: AbortSignal): AsyncGenerator<AgentStreamEvent, AgentTurnResult> {
+  private async* runStream(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentStreamEvent, AgentTurnResult> {
     let accumulatedReasoning = ''
 
     for (let turn = 1; turn <= this.maxTurn; turn++) {
@@ -302,7 +361,7 @@ export class Agent {
         ))
 
         for (const toolCall of toolCalls)
-          await this.executeToolCall(toolCall, signal)
+          await this.executeToolCall(toolCall, sessionId, signal)
 
         continue
       }

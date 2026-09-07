@@ -22,8 +22,8 @@ export function defineTool<
   if (inputJsonSchema.type !== 'object')
     throw new TypeError(`工具 ${definition.name} 的 inputSchema 根节点必须是 object`)
   const outputJsonSchema = toJsonSchema(definition.outputSchema, 'output')
-  assertClosedObjects(inputJsonSchema, definition.name, 'inputSchema')
-  assertClosedObjects(outputJsonSchema, definition.name, 'outputSchema')
+  assertClosedObjects(inputJsonSchema, 'inputSchema', definition.name)
+  assertClosedObjects(outputJsonSchema, 'outputSchema', definition.name)
   const retry = definition.retry ? Object.freeze({ ...definition.retry }) : undefined
   const security = Object.freeze({
     ...definition.security,
@@ -74,14 +74,15 @@ function validateDefinition(
   }
 
   if (definition.retry) {
-    validateRetryPolicy(definition.name, definition.retry)
+    validateRetryPolicy(definition.retry, definition.name)
+    // 此处只能检查配置声明是否一致，无法从任意业务代码中证明真实幂等性。
     if (!definition.security.idempotent)
       throw new TypeError(`工具 ${definition.name} 只有声明为幂等后才能配置 retry`)
   }
 }
 
 /** 检查退避参数，避免无效策略在执行时制造忙循环或超长定时器。 */
-function validateRetryPolicy(toolName: string, retry: ToolRetryPolicy): void {
+function validateRetryPolicy(retry: ToolRetryPolicy, toolName: string): void {
   if (!Number.isInteger(retry.maxAttempts) || retry.maxAttempts < 1)
     throw new RangeError(`工具 ${toolName} 的 retry.maxAttempts 必须是正整数`)
 
@@ -118,13 +119,13 @@ function deepFreeze<T>(value: T): T {
  */
 function assertClosedObjects(
   value: unknown,
-  toolName: string,
   schemaName: 'inputSchema' | 'outputSchema',
+  toolName: string,
   path: string = schemaName,
 ): void {
   if (Array.isArray(value)) {
     value.forEach((child, index) => {
-      assertClosedObjects(child, toolName, schemaName, `${path}[${index}]`)
+      assertClosedObjects(child, schemaName, toolName, `${path}[${index}]`)
     })
     return
   }
@@ -140,5 +141,5 @@ function assertClosedObjects(
   }
 
   for (const [key, child] of Object.entries(node))
-    assertClosedObjects(child, toolName, schemaName, `${path}.${key}`)
+    assertClosedObjects(child, schemaName, toolName, `${path}.${key}`)
 }

@@ -1,5 +1,9 @@
-import type { ToolDefinition, ToolRunContext } from './tool-result'
-import { ToolCallError } from './tool-result'
+import { ToolError } from '../common-agent'
+
+/** 服务端业务工具真正需要的最小执行上下文。 */
+interface ServerToolContext {
+  readonly signal?: AbortSignal
+}
 
 type TimeUnit = 'day' | 'week' | 'month' | 'year'
 type TimePreset
@@ -143,14 +147,24 @@ function requireObject(value: unknown, name = '参数'): Record<string, unknown>
 }
 
 function requireString(value: unknown, field: string): string {
-  if (typeof value !== 'string' || !value.trim())
-    throw new ToolCallError('UPSTREAM_INVALID_RESPONSE', `外部服务缺少有效字段：${field}`, true)
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new ToolError({
+      code: 'UPSTREAM_INVALID_RESPONSE',
+      message: `外部服务缺少有效字段：${field}`,
+      retryable: true,
+    })
+  }
   return value.trim()
 }
 
 function requireNumber(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value))
-    throw new ToolCallError('UPSTREAM_INVALID_RESPONSE', `外部服务缺少有效字段：${field}`, true)
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new ToolError({
+      code: 'UPSTREAM_INVALID_RESPONSE',
+      message: `外部服务缺少有效字段：${field}`,
+      retryable: true,
+    })
+  }
   return value
 }
 
@@ -158,21 +172,28 @@ function normalizeRequestError(
   error: unknown,
   service: string,
   callerSignal?: AbortSignal,
-): ToolCallError {
-  if (error instanceof ToolCallError)
+): ToolError {
+  if (error instanceof ToolError)
     return error
 
   if (callerSignal?.aborted)
-    return new ToolCallError('ABORTED', '工具调用已取消', false)
+    return new ToolError({ code: 'ABORTED', message: '工具调用已取消' })
 
-  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError'))
-    return new ToolCallError('UPSTREAM_TIMEOUT', `${service}请求超时`, true)
+  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+    return new ToolError({
+      code: 'UPSTREAM_TIMEOUT',
+      message: `${service}请求超时`,
+      retryable: true,
+      cause: error,
+    })
+  }
 
-  return new ToolCallError(
-    'UPSTREAM_NETWORK_ERROR',
-    `${service}请求失败：${getErrorMessage(error)}`,
-    true,
-  )
+  return new ToolError({
+    code: 'UPSTREAM_NETWORK_ERROR',
+    message: `${service}请求失败：${getErrorMessage(error)}`,
+    retryable: true,
+    cause: error,
+  })
 }
 
 /**
@@ -192,19 +213,23 @@ async function requestJson<T>(url: URL, service: string, callerSignal?: AbortSig
     })
 
     if (!response.ok) {
-      throw new ToolCallError(
-        'UPSTREAM_HTTP_ERROR',
-        `${service}返回 HTTP ${response.status}`,
-        RETRYABLE_HTTP_STATUSES.has(response.status),
-        { status: response.status },
-      )
+      throw new ToolError({
+        code: 'UPSTREAM_HTTP_ERROR',
+        message: `${service}返回 HTTP ${response.status}`,
+        retryable: RETRYABLE_HTTP_STATUSES.has(response.status),
+        details: { status: response.status },
+      })
     }
 
     try {
       return await response.json() as T
     }
     catch {
-      throw new ToolCallError('UPSTREAM_INVALID_RESPONSE', `${service}返回了无效 JSON`, true)
+      throw new ToolError({
+        code: 'UPSTREAM_INVALID_RESPONSE',
+        message: `${service}返回了无效 JSON`,
+        retryable: true,
+      })
     }
   }
   catch (error) {
@@ -375,7 +400,7 @@ function getRange(preset: Exclude<TimePreset, 'now'>, today: Date) {
 }
 
 /**
- * OpenAI 函数工具实现：支持某个相对日期或预设时间范围，返回结构化 JSON。
+ * 日期工具业务实现：支持某个相对日期或预设时间范围，返回结构化 JSON。
  * preset 与 amount/unit 互斥，避免模型给出含义冲突的参数。
  */
 function calculateTime(args: GetTimeArgs = {}): GetTimeResult {
@@ -454,7 +479,7 @@ export function getTime(args: unknown = {}): GetTimeResult {
 }
 
 /** 通过服务器出口 IP 获取近似位置；IP 定位不等同于浏览器 GPS 精确定位。 */
-async function lookupUserLocation(context: ToolRunContext): Promise<UserLocationResult> {
+async function lookupUserLocation(context: ServerToolContext): Promise<UserLocationResult> {
   const url = new URL('https://ipwho.is/')
   url.searchParams.set('lang', 'zh-CN')
   url.searchParams.set(
@@ -464,11 +489,10 @@ async function lookupUserLocation(context: ToolRunContext): Promise<UserLocation
 
   const response = await requestJson<IpWhoIsResponse>(url, 'IP 定位服务', context.signal)
   if (response.success !== true) {
-    throw new ToolCallError(
-      'LOCATION_LOOKUP_FAILED',
-      response.message || 'IP 定位服务无法确定当前位置',
-      false,
-    )
+    throw new ToolError({
+      code: 'LOCATION_LOOKUP_FAILED',
+      message: response.message || 'IP 定位服务无法确定当前位置',
+    })
   }
 
   return {
@@ -487,7 +511,7 @@ async function lookupUserLocation(context: ToolRunContext): Promise<UserLocation
 /** 查询用户的近似 IP 位置，返回值不带 Harness 协议外壳。 */
 export async function getUserLocation(
   args: unknown = {},
-  context: ToolRunContext = {},
+  context: ServerToolContext = {},
 ): Promise<UserLocationResult> {
   const input = requireObject(args)
   if (Object.keys(input).length > 0)
@@ -497,7 +521,7 @@ export async function getUserLocation(
 }
 
 /** 将城市名称解析为天气接口所需的 WGS84 坐标。 */
-async function geocodeCity(city: string, context: ToolRunContext): Promise<WeatherLocation> {
+async function geocodeCity(city: string, context: ServerToolContext): Promise<WeatherLocation> {
   const url = new URL('https://geocoding-api.open-meteo.com/v1/search')
   url.searchParams.set('name', city)
   url.searchParams.set('count', '1')
@@ -507,11 +531,10 @@ async function geocodeCity(city: string, context: ToolRunContext): Promise<Weath
   const response = await requestJson<GeocodingResponse>(url, '城市地理编码服务', context.signal)
   const result = response.results?.[0]
   if (!result) {
-    throw new ToolCallError(
-      'CITY_NOT_FOUND',
-      response.reason || `未找到城市：${city}`,
-      false,
-    )
+    throw new ToolError({
+      code: 'CITY_NOT_FOUND',
+      message: response.reason || `未找到城市：${city}`,
+    })
   }
 
   return {
@@ -590,7 +613,7 @@ function getWindScale(speedKmh: number): number {
 /** 查询给定坐标的当前天气模型数据。 */
 async function lookupWeather(
   location: WeatherLocation,
-  context: ToolRunContext,
+  context: ServerToolContext,
 ): Promise<WeatherResult> {
   const url = new URL('https://api.open-meteo.com/v1/forecast')
   url.searchParams.set('latitude', String(location.latitude))
@@ -605,11 +628,11 @@ async function lookupWeather(
   const response = await requestJson<ForecastResponse>(url, '天气服务', context.signal)
   const current = response.current
   if (!current) {
-    throw new ToolCallError(
-      'WEATHER_DATA_UNAVAILABLE',
-      response.reason || '天气服务未返回当前天气',
-      true,
-    )
+    throw new ToolError({
+      code: 'WEATHER_DATA_UNAVAILABLE',
+      message: response.reason || '天气服务未返回当前天气',
+      retryable: true,
+    })
   }
 
   const weatherCode = requireNumber(current.weather_code, 'current.weather_code')
@@ -636,7 +659,7 @@ async function lookupWeather(
  */
 export async function getWeather(
   args: unknown = {},
-  context: ToolRunContext = {},
+  context: ServerToolContext = {},
 ): Promise<WeatherResult> {
   const input = requireObject(args)
   const rawCity = input.city
@@ -657,18 +680,3 @@ export async function getWeather(
   }
   return await lookupWeather(weatherLocation, context)
 }
-
-/** 仅给只读、幂等的外部网络工具开启 Harness 重试。 */
-const NETWORK_RETRY_POLICY = {
-  maxAttempts: 3,
-  baseDelayMs: 250,
-  maxDelayMs: 2_000,
-} as const
-
-const agentFunctions: Record<string, ToolDefinition> = {
-  get_time: { execute: getTime },
-  get_user_location: { execute: getUserLocation, retry: NETWORK_RETRY_POLICY },
-  get_weather: { execute: getWeather, retry: NETWORK_RETRY_POLICY },
-}
-
-export default agentFunctions

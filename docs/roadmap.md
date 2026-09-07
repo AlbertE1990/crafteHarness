@@ -1,28 +1,30 @@
 # CommonAgent 分阶段开发路线图
 
-## 1. 路线原则
+## 1. 当前优先级原则
 
-- 每个阶段先稳定协议、注释、文档和测试，再进入下一阶段。
-- CommonAgent 核心不依赖模型 SDK、HTTP 框架、数据库驱动和前端。
-- 未实现能力必须标记为“规划中”，不能通过类型占位造成已经可用的错觉。
-- 安全边界默认 fail closed；可观测性故障不能改变业务执行结果。
-- 当前先在单一项目中验证，不提前拆成 npm 多包工程。
+- **先完成可运行的 Agent 主链，再扩展低收益的防御性体系。**
+- 每个阶段先在当前单一项目中测试验证，不提前拆分 npm packages。
+- CommonAgent 核心继续保持与模型 SDK、HTTP 框架、数据库驱动和前端解耦。
+- 当前使用者是能够修改并运行服务端代码的第一方开发者，暂不支持不可信第三方工具注入。
+- 工具默认不重试；开发者声明幂等并提供重试策略即可，暂不实现第三方幂等性审查。
+- 安全信任、插件沙箱和第三方代码治理放在核心功能完成后的长期强化阶段。
 
 ## 2. 阶段总览
 
 ```mermaid
 flowchart LR
-  P1[阶段 1<br/>工具协议与 Harness<br/>已完成] --> P11[阶段 1.1<br/>异常诊断出口<br/>规划中]
+  P1[阶段 1<br/>Tool Harness<br/>已完成] --> P11[阶段 1.1<br/>接入现有 Server<br/>当前阶段]
   P11 --> P2[阶段 2<br/>ModelAdapter]
   P2 --> P3[阶段 3<br/>Session Log]
   P3 --> P4[阶段 4<br/>Agent Loop]
   P4 --> P5[阶段 5<br/>Runtime 与轨迹接口]
-  P5 --> P6[阶段 6<br/>强化与更多 Adapter]
+  P5 --> P6[阶段 6<br/>异常诊断]
+  P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
 
 ## 3. 阶段 1：工具协议与 Harness（已完成）
 
-范围：
+完成范围：
 
 - `defineTool()` 将 Schema、实现和执行元数据放在一起。
 - Zod 输入/输出校验及 Draft 7 JSON Schema 投影。
@@ -31,67 +33,42 @@ flowchart LR
 - `ToolError`、`ToolExecutionResult` 和工具轨迹事件。
 - `get_current_time`、`calculator` 安全内置工具。
 
-当前学习和验证入口见[第一阶段学习指南](./learning-guide.md)。
+学习入口见[第一阶段学习指南](./learning-guide.md)。
 
-## 4. 阶段 1.1：服务端异常诊断（规划中）
+## 4. 阶段 1.1：接入现有 Server（当前阶段）
 
-### 4.1 为什么放在这里
+目标是先在真实 DeepSeek 对话中使用和验证 CommonAgent 工具协议。
 
-当前 `ToolErrorInfo` 只保留安全公开字段。它适合返回模型、前端轨迹和未来会话事件，但普通
-`Error` 的 `stack`、`cause` 与 Node 系统错误字段在归一化后会丢失。
+当前完成：
 
-在接入 ModelAdapter 和更复杂 Runtime 前，应先补齐诊断边界，否则网络、策略、审批和事件输出故障会很难定位。
+- `src/server/agent.ts` 使用 `DefinedTool.model` 生成模型工具参数。
+- 模型 Tool Call 通过 CommonAgent `executeTool()` 执行。
+- 时间、IP 定位和天气工具使用 `defineTool()` 统一 Schema 与实现。
+- 移除旧的手写 `tools.json` 和旧 Tool Harness，避免双协议漂移。
+- 支持通过静态注册表开发第一方自定义工具。
+- 服务端工具测试覆盖 Schema 投影、输入校验、输出和网络重试。
 
-### 4.2 计划范围
+当前验证任务：
 
-- 定义供应商无关、可注入的 `DiagnosticSink` 或最小 `AgentLogger` 协议。
-- CommonAgent 不直接依赖 Pino、Winston 或具体日志平台。
-- 在原始异常被归一化前记录 `Error`、`stack`、`cause` 和安全的 Node 错误字段。
-- 为公开错误生成 `errorId`，用于关联公开轨迹和服务端诊断。
-- 覆盖工具执行、策略执行、审批通道和轨迹观察器自身异常。
-- Runtime 负责接入具体日志库、日志级别、输出位置、轮转和保留周期。
-- 定义脱敏规则，禁止记录 API Key、Authorization、Cookie、完整敏感输入和未经处理的模型上下文。
+1. 使用真实 DeepSeek 测试时间、指定城市天气和自动定位天气。
+2. 按[现有 Server 接入与自定义工具](./server-integration.md)新增一个简单工具。
+3. 验证错误输入、错误输出和可重试异常是否符合预期。
+4. 收集真实使用中暴露的 CommonAgent API 问题，再进入 ModelAdapter。
 
-### 4.3 数据分层目标
+## 5. 阶段 2：ModelAdapter（下一功能阶段）
 
-| 数据层         | 可以包含                                      | 默认不能包含                      |
-| -------------- | --------------------------------------------- | --------------------------------- |
-| 模型可见错误   | `code`、安全 `message`                        | `stack`、原始 `cause`、服务器路径 |
-| 前端公开轨迹   | 上述字段、`errorId`、安全详情                 | 未脱敏 Header、Secret、完整堆栈   |
-| Session Event  | 重建会话所需的安全事实                        | 诊断噪声和敏感运行环境信息        |
-| 服务端诊断日志 | `stack`、`cause`、调用关联字段、Node 错误字段 | Secret 和无上限原始载荷           |
-
-### 4.4 验收条件
-
-- 普通 `Error` 和带 `cause` 的 `ToolError` 都能在诊断 Sink 中保留调用链。
-- `ECONNRESET`、`ENOENT` 等 Node 错误的安全字段可以被记录。
-- 模型结果和公开轨迹中不出现绝对代码路径或完整堆栈。
-- 公开错误可通过 `errorId` 定位对应服务端日志。
-- Sink 抛出异常时不会改变工具成功或失败结果，也不会递归触发日志风暴。
-- 测试覆盖脱敏、关联、Sink 故障隔离和无 Logger 配置的情况。
-- 同步更新错误规范、轨迹规范和 Runtime 接入文档。
-
-### 4.5 明确不在本阶段做
-
-- 不选择或绑定具体日志产品。
-- 不实现前端日志查看器。
-- 不把 `stack` 添加到现有 `ToolErrorInfo` 后直接广播。
-- 不把诊断日志混入模型会话历史。
-
-## 5. 阶段 2：ModelAdapter（规划中）
-
-目标是让 Agent Loop 只依赖内部模型协议。
+目标是让 Agent Loop 只依赖内部模型协议，不直接依赖 OpenAI SDK。
 
 计划范围：
 
 - 定义供应商无关消息、工具调用、用量和结束原因。
 - 同时定义非流式响应与标准流事件。
 - 定义 `ModelAdapter` 接口、取消语义和错误分类。
-- 第一份实现采用 DeepSeek；兼容 OpenAI 协议的 SDK 只能存在于 adapter 内部。
+- 第一份实现采用 DeepSeek；OpenAI 兼容 SDK 只能存在于 adapter 内部。
 - adapter 将 `DefinedTool.model` 转换成供应商格式。
-- 使用契约测试保证 adapter 不泄漏供应商类型到核心。
+- 使用契约测试保证供应商类型不泄漏到 CommonAgent 核心。
 
-## 6. 阶段 3：Session Log（规划中）
+## 6. 阶段 3：Session Log
 
 计划范围：
 
@@ -101,7 +78,7 @@ flowchart LR
 - 区分持久事实、实时事件和诊断 Trace。
 - 定义并发追加、版本检查、分页和恢复语义。
 
-## 7. 阶段 4：Agent Loop（规划中）
+## 7. 阶段 4：Agent Loop
 
 计划范围：
 
@@ -111,25 +88,46 @@ flowchart LR
 - 定义停止原因，防止无限循环。
 - 明确并行工具调用、失败回写和重放语义。
 
-## 8. 阶段 5：Runtime 与轨迹接口（规划中）
+## 8. 阶段 5：Runtime 与轨迹接口
 
 计划范围：
 
 - 将现有 Fastify 代码收敛为外围 Runtime。
 - 提供 HTTP/SSE 会话入口和取消入口。
 - 暴露可分页查询的轨迹接口，服务前端调试。
-- 对公开轨迹实施脱敏、大小限制和访问控制。
-- Runtime 组装 ModelAdapter、工具、策略、审批、Store 和诊断 Sink。
+- Runtime 组装 ModelAdapter、工具、策略、审批和 Store。
+- 保持前端展示数据不进入 CommonAgent 核心协议。
 
-## 9. 阶段 6：强化与扩展（规划中）
+## 9. 阶段 6：异常诊断
 
-候选范围：
+主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
-- 更多模型 Adapter 及供应商能力协商。
-- 文件、网络、数据库工具的权限和沙箱设计。
-- Worker/子进程隔离与真正可终止的高风险工具。
-- Session 压缩、摘要、恢复与确定性重放。
-- 指标、OpenTelemetry 接入和评测框架。
-- 在协议稳定后评估是否拆分 npm packages。
+计划范围：
 
-候选项必须在前序边界稳定后再排期，不能因为“常用”而绕过权限和审计设计。
+- 定义供应商无关、可注入的 `DiagnosticSink` 或最小 `AgentLogger`。
+- 在原始异常归一化前记录 `stack`、`cause` 和安全的 Node 错误字段。
+- 使用 `errorId` 关联公开错误、轨迹和服务端诊断。
+- 覆盖工具、策略、审批、模型 Adapter 和事件输出异常。
+- Runtime 负责接入具体日志库、日志级别和输出位置。
+- 日志 Sink 故障不能改变 Agent 业务结果。
+
+## 10. 阶段 7：长期安全与扩展（最低优先级）
+
+只有项目需要加载不可信第三方工具时，才评估以下能力：
+
+- 工具来源、版本、代码摘要和部署侧 allowlist。
+- 第三方幂等声明审查或 Runtime 重试许可。
+- 受控文件、网络、数据库和 Secret Broker。
+- 独立低权限进程、容器或 OS 沙箱。
+- 文件系统挂载、网络出口、资源和系统调用限制。
+- 更多模型 Adapter、评测体系和 OpenTelemetry。
+- 协议稳定后评估拆分 npm packages。
+
+当前明确不实现：
+
+- 自动分析任意 JavaScript 是否真正幂等。
+- 根据工具源码自动推断真实风险。
+- 第三方插件安装和权限管理体系。
+- 为尚不存在的第三方工具场景提前搭建沙箱。
+
+[安全与信任模型](./security-model.md)保留为长期边界说明，不作为前序功能阶段的验收项。

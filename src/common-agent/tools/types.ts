@@ -21,12 +21,19 @@ export interface ToolRetryPolicy {
   readonly jitterRatio?: number
 }
 
-/** 工具声明的风险信息；最终是否允许执行仍由 Runtime 策略决定。 */
+/**
+ * 工具作者声明的风险信息；最终是否允许执行仍由 Runtime 策略决定。
+ *
+ * 这些字段是供可信注册流程审查的元数据，不是对任意工具代码的安全证明。
+ */
 export interface ToolSecurityMetadata {
   readonly risk: ToolRisk
   /** 工具需要的外部能力，例如 `network:public` 或 `filesystem:read`。 */
   readonly capabilities?: readonly string[]
-  /** 重放相同调用是否不会产生额外副作用。 */
+  /**
+   * 工具作者声明重放相同调用不会产生额外副作用。
+   * Harness 无法从任意业务代码中自动证明该声明，写操作仍需真实幂等键和集成测试。
+   */
   readonly idempotent: boolean
 }
 

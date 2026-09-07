@@ -1,6 +1,14 @@
+import type { ExecuteToolOptions } from '../src/common-agent'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
+import { defineTool } from '../src/common-agent'
+import {
+  createServerToolRegistration,
+  findServerTool,
+  serverTools,
+  trustedServerToolPolicy,
+} from '../src/server/agent-tools'
 import { getTime, getUserLocation, getWeather } from '../src/server/func'
-import { executeToolDefinition, ToolCallError } from '../src/server/tool-result'
 
 function jsonResponse(body: unknown): Response {
   return {
@@ -10,16 +18,83 @@ function jsonResponse(body: unknown): Response {
   } as Response
 }
 
-describe('server tools', () => {
+/** 通过服务端注册表调用工具，验证真实 Agent 使用的 CommonAgent 执行链。 */
+async function invokeServerTool(
+  name: string,
+  rawInput: unknown,
+  options: Partial<ExecuteToolOptions> = {},
+) {
+  const tool = findServerTool(name)
+  if (!tool)
+    throw new Error(`测试工具 ${name} 未注册`)
+
+  return await tool.invoke(rawInput, {
+    callId: `test-${name}`,
+    policy: trustedServerToolPolicy,
+    ...options,
+  })
+}
+
+describe('server tools through CommonAgent', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it('lets a tool return its raw business value', () => {
-    const result = getTime({ amount: 0, unit: 'day', preset: null, timezone: 'Asia/Shanghai' })
+  it('derives every model tool schema from its registered definition', () => {
+    expect(serverTools.map(tool => tool.model.name)).toEqual([
+      'get_time',
+      'get_user_location',
+      'get_weather',
+    ])
 
-    expect(result.timezone).toBe('Asia/Shanghai')
-    expect(result.label).toContain('今天')
+    for (const tool of serverTools) {
+      expect(tool.model.inputSchema).toMatchObject({
+        type: 'object',
+        additionalProperties: false,
+      })
+      expect(tool.model).not.toHaveProperty('execute')
+    }
+  })
+
+  it('wraps a custom defineTool definition without changing Agent branches', async () => {
+    const customTool = createServerToolRegistration(defineTool({
+      name: 'echo_for_test',
+      description: '返回测试文本。',
+      inputSchema: z.strictObject({ text: z.string() }),
+      outputSchema: z.strictObject({ text: z.string() }),
+      security: { risk: 'safe', capabilities: [], idempotent: true },
+      execute: input => input,
+    }))
+
+    const result = await customTool.invoke({ text: 'hello' }, {
+      callId: 'custom-tool-call',
+      policy: trustedServerToolPolicy,
+    })
+
+    expect(customTool.model.name).toBe('echo_for_test')
+    expect(result).toMatchObject({
+      ok: true,
+      value: { text: 'hello' },
+      content: '{"text":"hello"}',
+    })
+  })
+
+  it('executes the time tool through the CommonAgent result contract', async () => {
+    const result = await invokeServerTool('get_time', {
+      amount: 0,
+      unit: 'day',
+      preset: null,
+      timezone: 'Asia/Shanghai',
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      attempts: 1,
+      value: {
+        timezone: 'Asia/Shanghai',
+        label: expect.stringContaining('今天'),
+      },
+    })
   })
 
   it('gets an approximate user location from the IP service', async () => {
@@ -35,16 +110,19 @@ describe('server tools', () => {
     }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const result = await getUserLocation({})
+    const result = await invokeServerTool('get_user_location', {})
 
     expect(result).toMatchObject({
-      city: '杭州市',
-      accuracy: 'approximate_ip',
+      ok: true,
+      value: {
+        city: '杭州市',
+        accuracy: 'approximate_ip',
+      },
     })
     expect(String(fetchMock.mock.calls[0][0])).toContain('https://ipwho.is/')
   })
 
-  it('geocodes a city and returns current weather', async () => {
+  it('geocodes a city and returns validated current weather', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({
         results: [{
@@ -70,68 +148,68 @@ describe('server tools', () => {
       }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const result = await getWeather({ city: '杭州' })
+    const result = await invokeServerTool('get_weather', { city: '杭州' })
 
     expect(result).toMatchObject({
-      city: '杭州',
-      weather: '毛毛雨',
-      temperature_c: 25,
-      humidity_percent: 81,
-      wind_direction: '北风',
-      wind_scale: 2,
+      ok: true,
+      value: {
+        city: '杭州',
+        weather: '毛毛雨',
+        temperature_c: 25,
+        humidity_percent: 81,
+        wind_direction: '北风',
+        wind_scale: 2,
+      },
     })
     expect(String(fetchMock.mock.calls[0][0])).toContain('geocoding-api.open-meteo.com')
     expect(String(fetchMock.mock.calls[1][0])).toContain('api.open-meteo.com')
   })
 
-  it('throws invalid arguments for the Harness to normalize', async () => {
+  it('rejects invalid model arguments before starting a tool attempt', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await invokeServerTool('get_weather', { city: 123 })
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_TOOL_ARGUMENTS' },
+      attempts: 0,
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('retries retryable network errors through CommonAgent', async () => {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary network failure'))
+      .mockResolvedValueOnce(jsonResponse({
+        success: true,
+        ip: '203.0.113.42',
+        country: '中国',
+        region: '浙江省',
+        city: '杭州市',
+        latitude: 30.2741,
+        longitude: 120.1551,
+        timezone: { id: 'Asia/Shanghai' },
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await invokeServerTool('get_user_location', {}, {
+      random: () => 0,
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(result).toMatchObject({
+      ok: true,
+      attempts: 2,
+      value: { city: '杭州市' },
+    })
+  })
+
+  it('keeps raw business functions available for focused unit tests', async () => {
+    expect(getTime({ amount: 0, unit: 'day', preset: null, timezone: 'Asia/Shanghai' }).label)
+      .toContain('今天')
+    await expect(getUserLocation({ unexpected: true })).rejects.toThrow('不接受参数')
     await expect(getWeather({ city: 123 })).rejects.toThrow('city 必须是字符串或 null')
-  })
-
-  it('retries only when both the tool policy and error allow it', async () => {
-    const execute = vi.fn()
-      .mockRejectedValueOnce(new ToolCallError('UPSTREAM_TIMEOUT', '请求超时', true))
-      .mockRejectedValueOnce(new ToolCallError('UPSTREAM_HTTP_ERROR', 'HTTP 503', true))
-      .mockResolvedValue({ temperature_c: 25 })
-
-    const result = await executeToolDefinition({
-      execute,
-      retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
-    }, {})
-
-    expect(execute).toHaveBeenCalledTimes(3)
-    expect(result).toMatchObject({
-      isError: false,
-      value: { temperature_c: 25 },
-      content: '{"temperature_c":25}',
-      attempts: 3,
-    })
-  })
-
-  it('renders a non-JSON tool value instead of rejecting a successful call', async () => {
-    const circular: Record<string, unknown> = { temperature_c: 25n }
-    circular.self = circular
-
-    const result = await executeToolDefinition({ execute: () => circular }, {})
-
-    expect(result.isError).toBe(false)
-    expect(result.content).toContain('temperature_c: 25n')
-    expect(result.content).toContain('[Circular')
-  })
-
-  it('does not retry parameter errors even when a tool has retry policy', async () => {
-    const execute = vi.fn().mockRejectedValue(new TypeError('city 参数无效'))
-
-    const result = await executeToolDefinition({
-      execute,
-      retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
-    }, {})
-
-    expect(execute).toHaveBeenCalledTimes(1)
-    expect(result).toMatchObject({
-      isError: true,
-      error: { code: 'TOOL_EXECUTION_FAILED', retryable: false },
-      attempts: 1,
-    })
   })
 })

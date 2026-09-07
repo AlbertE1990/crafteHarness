@@ -39,6 +39,7 @@ export type ToolApprovalHandler = (
  * 无显式策略时使用的最小权限策略。
  *
  * 仅无外部能力的 safe 工具默认可运行，其余调用全部拒绝，避免新工具被意外授权。
+ * 该策略假定注册进程中的工具代码来自可信开发者；它不能约束恶意的同进程 Node.js 代码。
  */
 export const safeToolPolicy: ToolPolicy = Object.freeze({
   evaluate: (request: ToolPolicyRequest): ToolPolicyDecision => {
