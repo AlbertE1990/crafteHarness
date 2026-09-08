@@ -6,7 +6,7 @@
 
 ## 背景
 
-过渡 Agent 已能消费模型流和执行工具，但它把消息保存在可变数组中，并与 Server 会话和前端事件耦合。CommonAgent
+过渡 Agent 已能消费模型流和执行工具，但它把消息保存在可变数组中，并与 Server 会话和前端事件耦合。CraftAgent
 需要一个只依赖 `ModelAdapter`、Tool Harness 和 `SessionStore` 的通用循环，同时必须限制无限模型/工具循环、处理取消，
 并让调试层观察实时过程。
 

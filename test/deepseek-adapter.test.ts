@@ -10,7 +10,7 @@ import {
   normalizeDeepSeekChunk,
   normalizeDeepSeekCompletion,
   normalizeDeepSeekError,
-} from '../src/common-agent/adapters/deepseek'
+} from '../src/craft-agent/adapters/deepseek'
 
 function createMockClient(create: ReturnType<typeof vi.fn>): OpenAI {
   return {

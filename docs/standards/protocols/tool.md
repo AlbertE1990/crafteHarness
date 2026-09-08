@@ -16,7 +16,7 @@
 
 ```ts
 import { z } from 'zod'
-import { defineTool, ToolError } from '../src/common-agent'
+import { defineTool, ToolError } from '../src/craft-agent'
 
 export const getWeatherTool = defineTool({
   name: 'get_weather',
@@ -68,7 +68,7 @@ export const getWeatherTool = defineTool({
 })
 ```
 
-示例中的 `fetchWeather()` 由应用实现；工具应通过闭包注入网络或数据库依赖，不能从 CommonAgent 获取万能 service locator。
+示例中的 `fetchWeather()` 由应用实现；工具应通过闭包注入网络或数据库依赖，不能从 CraftAgent 获取万能 service locator。
 
 ## Schema 规范
 
@@ -187,7 +187,7 @@ Tool Harness 按顺序发送：
 import {
   createCalculatorTool,
   createCurrentTimeTool,
-} from '../src/common-agent'
+} from '../src/craft-agent'
 
 const tools = [
   createCurrentTimeTool(),

@@ -1,10 +1,8 @@
-import type { ExecuteToolOptions } from '../src/common-agent'
+import type { ExecuteToolOptions } from '../src/craft-agent'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { defineTool } from '../src/common-agent'
+import { defineTool, defineTools } from '../src/craft-agent'
 import {
-  createServerToolRegistration,
-  findServerTool,
   serverTools,
   trustedServerToolPolicy,
 } from '../src/server/agent-tools'
@@ -18,24 +16,24 @@ function jsonResponse(body: unknown): Response {
   } as Response
 }
 
-/** 通过服务端注册表调用工具，验证真实 Agent 使用的 CommonAgent 执行链。 */
+/** 通过服务端注册表调用工具，验证真实 Agent 使用的 CraftAgent 执行链。 */
 async function invokeServerTool(
   name: string,
   rawInput: unknown,
   options: Partial<ExecuteToolOptions> = {},
 ) {
-  const tool = findServerTool(name)
+  const tool = serverTools.find(item => item.name === name)
   if (!tool)
     throw new Error(`测试工具 ${name} 未注册`)
 
-  return await tool.invoke(rawInput, {
+  return await tool.execute(rawInput, {
     callId: `test-${name}`,
     policy: trustedServerToolPolicy,
     ...options,
   })
 }
 
-describe('server tools through CommonAgent', () => {
+describe('server tools through CraftAgent', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
@@ -45,6 +43,7 @@ describe('server tools through CommonAgent', () => {
       'get_user_location',
       'get_weather',
       'get_current_time',
+      'calculator',
     ])
 
     for (const tool of serverTools) {
@@ -57,7 +56,7 @@ describe('server tools through CommonAgent', () => {
   })
 
   it('wraps a custom defineTool definition without changing Agent branches', async () => {
-    const customTool = createServerToolRegistration(defineTool({
+    const [customTool] = defineTools(defineTool({
       name: 'echo_for_test',
       description: '返回测试文本。',
       inputSchema: z.strictObject({ text: z.string() }),
@@ -65,8 +64,10 @@ describe('server tools through CommonAgent', () => {
       security: { risk: 'safe', capabilities: [], idempotent: true },
       execute: input => input,
     }))
+    if (!customTool)
+      throw new Error('测试工具注册失败')
 
-    const result = await customTool.invoke({ text: 'hello' }, {
+    const result = await customTool.execute({ text: 'hello' }, {
       callId: 'custom-tool-call',
       policy: trustedServerToolPolicy,
     })
@@ -79,7 +80,7 @@ describe('server tools through CommonAgent', () => {
     })
   })
 
-  it('executes the built-in time tool through the CommonAgent result contract', async () => {
+  it('executes the built-in time tool through the CraftAgent result contract', async () => {
     const result = await invokeServerTool('get_current_time', {
       timezone: 'Asia/Shanghai',
     })
@@ -176,7 +177,7 @@ describe('server tools through CommonAgent', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('retries retryable network errors through CommonAgent', async () => {
+  it('retries retryable network errors through CraftAgent', async () => {
     const fetchMock = vi.fn()
       .mockRejectedValueOnce(new Error('temporary network failure'))
       .mockResolvedValueOnce(jsonResponse({

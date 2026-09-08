@@ -4,8 +4,8 @@ import type {
   ModelCompletion,
   ModelRequest,
   ModelStreamChunk,
-} from '../..'
-import { ModelError } from '../..'
+} from '../../contracts'
+import { ModelError } from '../../contracts'
 
 /** ScriptedModelAdapter 支持的单次调用脚本。 */
 export type ScriptedModelStep

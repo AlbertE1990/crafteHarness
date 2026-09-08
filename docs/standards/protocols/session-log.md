@@ -4,10 +4,10 @@
 
 ## 1. 目标
 
-Session Log 是 CommonAgent 的持久事实边界。它使用 append-only 事件记录模型可见消息和 Turn 生命周期，
+Session Log 是 CraftAgent 的持久事实边界。它使用 append-only 事件记录模型可见消息和 Turn 生命周期，
 并从事件确定性推导下一次模型请求所需的 `ModelMessage[]`。
 
-本阶段只定义供应商无关协议、内存实现和消息推导，不接数据库，也不接过渡 Server。
+本协议只定义供应商无关 Store、内存实现和消息推导，不接数据库或前端展示类型。
 
 ## 2. 核心原则
 
@@ -44,8 +44,8 @@ interface SessionEventEnvelope {
 | `turn.failed`      | 某个 Turn 因安全、可持久化的规范错误结束 | 否               |
 | `turn.cancelled`   | 某个 Turn 被调用方取消                   | 否               |
 
-`runId` 和 `turnId` 是关联字段，不用于决定事件顺序。第一阶段不验证完整 Turn 状态机；该状态机由后续
-Agent Loop 定义。
+`runId` 和 `turnId` 是关联字段，不用于决定事件顺序。SessionStore 只检查最小事件结构；完整 Turn 状态机
+由 AgentLoop 负责。
 
 ## 4. Session 初始化
 
@@ -154,6 +154,10 @@ interface SessionStore {
     sessionId: string,
     options?: ReadSessionEventsOptions,
   ) => Promise<SessionEventPage>
+
+  list?: (
+    options?: ListSessionsOptions,
+  ) => Promise<SessionListPage>
 }
 ```
 
@@ -164,6 +168,8 @@ interface SessionStore {
 - 相同 Session 的事件按 sequence 返回。
 - `throughVersion` 不能读取超过指定版本的事件。
 - 未找到的 Session 读取为空快照，version 为 0；创建仍必须显式追加 `session.created`。
+- `list()` 是可选目录能力，按首次创建顺序使用 `afterSessionId` 和 `limit` 分页。
+- 列表只返回 sessionId、createdAt、version 和 metadata；完整消息仍由事件快照推导。
 - 实现不得把数据库连接、ORM 类型或供应商异常泄漏到 Core 协议。
 
 ## 10. 规范错误
@@ -179,10 +185,10 @@ interface SessionStore {
 ## 11. 当前明确不实现
 
 - 数据库、Redis 或文件 Store。
-- Session 列表、删除、归档和搜索。
+- Session 删除、归档和搜索。
 - Session 压缩、摘要和历史裁剪。
 - 轨迹、指标和异常堆栈日志。
-- 将过渡 Server 的展示字段写入 Core Session 协议。
+- 将 Runtime 或前端展示字段写入 Core Session 协议。
 
 这些能力不能通过修改已写入事件实现；需要时应增加新事件、Store 适配器或上层投影。
 当前 Agent Loop 如何消费本协议见[Agent Loop 协议](./agent-loop.md)。

@@ -18,7 +18,7 @@
 
 ```mermaid
 flowchart LR
-  Config[AgentConfig] --> DeepSeek[DeepSeekModelAdapter]
+  Config[defineAgentConfig] --> DeepSeek[DeepSeekModelAdapter]
   Agent[Agent] --> Request[ModelRequest]
   Request --> DeepSeek
   DeepSeek --> Compatible[OpenAICompatibleModelAdapter]
@@ -36,22 +36,22 @@ flowchart LR
 
 ## 3. 推荐源码阅读顺序
 
-1. [`contracts/message.ts`](../../src/common-agent/contracts/message.ts)：消息和完整工具调用。
-2. [`contracts/model-events.ts`](../../src/common-agent/contracts/model-events.ts)：标准 chunk 和增量。
-3. [`contracts/model.ts`](../../src/common-agent/contracts/model.ts)：请求、非流结果和 Adapter 接口。
-4. [`contracts/model-errors.ts`](../../src/common-agent/contracts/model-errors.ts)：稳定错误分类。
-5. [`openai-compatible-model-adapter.ts`](../../src/common-agent/adapters/openai-compatible/openai-compatible-model-adapter.ts)：
+1. [`contracts/message.ts`](../../src/craft-agent/contracts/message.ts)：消息和完整工具调用。
+2. [`contracts/model-events.ts`](../../src/craft-agent/contracts/model-events.ts)：标准 chunk 和增量。
+3. [`contracts/model.ts`](../../src/craft-agent/contracts/model.ts)：请求、非流结果和 Adapter 接口。
+4. [`contracts/model-errors.ts`](../../src/craft-agent/contracts/model-errors.ts)：稳定错误分类。
+5. [`openai-compatible-model-adapter.ts`](../../src/craft-agent/adapters/openai-compatible/openai-compatible-model-adapter.ts)：
    兼容请求、响应、流和错误的公共实现。
-6. [`deepseek-model-adapter.ts`](../../src/common-agent/adapters/deepseek/deepseek-model-adapter.ts)：
+6. [`deepseek-model-adapter.ts`](../../src/craft-agent/adapters/deepseek/deepseek-model-adapter.ts)：
    DeepSeek 差异层。
-7. [`scripted-model-adapter.ts`](../../src/common-agent/adapters/testing/scripted-model-adapter.ts)：
+7. [`scripted-model-adapter.ts`](../../src/craft-agent/adapters/testing/scripted-model-adapter.ts)：
    无网络测试实现。
-8. [`server/agent.ts`](../../src/server/agent.ts)：标准 chunk 的消费者。
+8. [`agent/agent.ts`](../../src/craft-agent/agent/agent.ts)：标准 chunk 的消费者与应用事件投影。
 
 ## 4. “只增不减”如何工作
 
 `ModelStreamChunk` 保留 OpenAI 的 `id`、`choices`、`delta`、`finish_reason`、`usage` 等字段。
-DeepSeek 的 `reasoning_content` 和 CommonAgent 的 `provider` 是新增字段。通用兼容层负责保留标准字段、
+DeepSeek 的 `reasoning_content` 和 CraftAgent 的 `provider` 是新增字段。通用兼容层负责保留标准字段、
 未知字段和 provider；DeepSeek 差异层只负责读取 reasoning。
 
 Adapter 转换 chunk 时先展开原对象，再覆盖需要标准化的字段。因此未知的新字段在运行时仍然存在；
@@ -90,7 +90,7 @@ OpenAI 兼容流可能把一个工具调用拆成多个 delta：名称、ID 和 
 
 ## 8. 配置和错误
 
-`AgentConfig` 是 Runtime 唯一配置根。它保存 Agent 基础参数和模型连接参数，再创建具体 Adapter。
+`defineAgentConfig()` 归一化唯一配置根。它保存 Agent 基础参数和模型连接参数，再创建具体 Adapter。
 Adapter 将 SDK 异常转成 `ModelError`，但不会重试；否则重试次数、时间和 token 消耗无法被未来的
 Agent Loop 统一预算。
 

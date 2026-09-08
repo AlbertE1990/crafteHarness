@@ -1,4 +1,4 @@
-# CommonAgent 文档
+# CraftAgent 文档
 
 本文档库按用途分为开发规范、学习路径和产品记录。代码与当前规范必须在同一次变更中保持同步；
 学习文档和历史交付记录不能覆盖当前规范。
@@ -14,6 +14,7 @@
 - [模型 Adapter 协议](./standards/protocols/model-adapter.md)
 - [Session Log 协议](./standards/protocols/session-log.md)
 - [Agent Loop 协议](./standards/protocols/agent-loop.md)
+- [Agent 门面协议](./standards/protocols/agent.md)
 - [Server Runtime 接入规范](./standards/integrations/server-runtime.md)
 - [安全与信任模型](./standards/security/trust-model.md)
 
@@ -27,6 +28,7 @@
 - [自定义模型 Adapter 开发实践](./learning/custom-model-adapter.md)
 - [Session Log：从可变消息数组到事实日志](./learning/session-log.md)
 - [Agent Loop：从用户输入到确定终态](./learning/agent-loop.md)
+- [CraftAgent 统一入口：从配置到会话查询](./learning/craft-agent-facade.md)
 
 ### 查看方向、决策和进度
 
@@ -38,17 +40,19 @@
 
 ## 当前状态
 
-当前已完成 Tool Harness、现有 Server 接入、ModelAdapter、官方 Adapter 工具包、Session Log 和 Agent Loop：
+当前已完成 Tool Harness、ModelAdapter、官方 Adapter、Session Log、Agent Loop 和统一 Agent 门面：
 
 - 工具具有 Zod 输入输出边界、权限、审批、超时、幂等重试和执行事件。
 - 模型具有供应商无关消息、OpenAI 兼容标准 chunk、非流式结果、用量和错误协议。
 - OpenAI SDK 仅存在于官方 Adapter；Core 不依赖 SDK，DeepSeek 只维护供应商差异。
-- OpenAI 兼容服务可使用内置 Adapter，自定义实现可通过同一个 `AgentConfig` 注入。
+- `new Agent(config)` 可直接组装内置模型、自定义 Adapter、工具、Store、预算和事件观察器。
+- `defineAgentConfig()` 可显式提前校验配置，`defineTools()` 可一次组装异构工具。
 - Scripted Adapter 与契约探针为应用和 Adapter 开发提供无网络测试入口。
 - Session 使用 append-only 事件、乐观并发和一致性分页，并可确定性推导模型历史。
 - Agent Loop 以 Run/Turn/Step 串联模型、工具和 Session，并提供预算、取消、稳定终态和实时事件。
+- Agent 门面自动处理 Session ID，分离精简输出与完整轨迹，并提供会话读取和分页列表。
 - 真实 DeepSeek 冒烟仍需在配置 API Key 后执行。
-- Runtime 与轨迹查询接口是下一阶段。
+- Fastify 已迁移到 Agent 门面；持久化轨迹查询接口是下一阶段。
 
 ## 权威顺序
 

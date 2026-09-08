@@ -1,5 +1,21 @@
-> This repository is incrementally building a provider-, storage-, and UI-independent Agent core.
-> Start with the [Chinese project documentation](./docs/README.md). The original frontend-template notes remain below for now.
+# CraftAgent
+
+CraftAgent 是面向 Node.js、与 HTTP、数据库和前端解耦的通用 Agent。当前默认入口已经统一为：
+
+```ts
+import Agent from 'craft-agent'
+
+const agent = new Agent({
+  model: {
+    provider: 'deepseek',
+    apiKey: process.env.DEEPSEEK_API_KEY!,
+  },
+})
+
+const result = await agent.run({ input: '你好' })
+```
+
+完整架构、使用方式与开发规范见[中文项目文档](./docs/README.md)。下方暂时保留原前端模板说明，前端只用于联调。
 
 <p align='center'>
   <img src='https://user-images.githubusercontent.com/11247099/111864893-a457fd00-899e-11eb-9f05-f4b88987541d.png' alt='Vitesse - Opinionated Vite Starter Template' width='600'/>

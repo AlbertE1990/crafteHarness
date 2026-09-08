@@ -13,26 +13,15 @@ function collectTypeScriptFiles(path: string): string[] {
   })
 }
 
-function collectCommonAgentCoreFiles(): string[] {
-  const root = join(process.cwd(), 'src/common-agent')
-  return readdirSync(root).flatMap((name) => {
-    if (name === 'adapters')
-      return []
-    const child = join(root, name)
-    return statSync(child).isDirectory()
-      ? collectTypeScriptFiles(child)
-      : child.endsWith('.ts')
-        ? [child]
-        : []
-  })
+function collectCraftAgentCoreFiles(): string[] {
+  const root = join(process.cwd(), 'src/craft-agent')
+  return ['builtins', 'contracts', 'core', 'sessions', 'tools', 'types']
+    .flatMap(name => collectTypeScriptFiles(join(root, name)))
 }
 
 describe('model dependency boundary', () => {
-  it('keeps OpenAI SDK imports out of CommonAgent Core and server Agent', () => {
-    const files = [
-      ...collectCommonAgentCoreFiles(),
-      join(process.cwd(), 'src/server/agent.ts'),
-    ]
+  it('keeps OpenAI SDK imports out of CraftAgent Core', () => {
+    const files = collectCraftAgentCoreFiles()
 
     for (const file of files) {
       expect(readFileSync(file, 'utf8'), file)
@@ -42,7 +31,7 @@ describe('model dependency boundary', () => {
   })
 
   it('keeps co-located official adapters outside the Core dependency graph', () => {
-    const files = collectCommonAgentCoreFiles()
+    const files = collectCraftAgentCoreFiles()
 
     for (const file of files) {
       expect(readFileSync(file, 'utf8'), file)
@@ -54,11 +43,11 @@ describe('model dependency boundary', () => {
   it('keeps provider presets and testing exports out of the generic production entry', () => {
     const compatibleSource = readFileSync(join(
       process.cwd(),
-      'src/common-agent/adapters/openai-compatible/openai-compatible-model-adapter.ts',
+      'src/craft-agent/adapters/openai-compatible/openai-compatible-model-adapter.ts',
     ), 'utf8')
     const productionIndex = readFileSync(join(
       process.cwd(),
-      'src/common-agent/adapters/index.ts',
+      'src/craft-agent/adapters/index.ts',
     ), 'utf8')
 
     expect(compatibleSource).not.toMatch(/deepseek/i)

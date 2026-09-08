@@ -19,9 +19,9 @@
 
 ## 主要文件
 
-- `src/common-agent/tools/*`
-- `src/common-agent/builtins/*`
-- `test/common-agent-tools.test.ts`
+- `src/craft-agent/tools/*`
+- `src/craft-agent/builtins/*`
+- `test/craft-agent-tools.test.ts`
 
 ## 关键决定
 

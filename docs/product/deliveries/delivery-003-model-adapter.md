@@ -6,7 +6,7 @@
 
 ## 本阶段目标
 
-让 Agent 只依赖 CommonAgent 内部模型协议，将 OpenAI SDK、DeepSeek 请求参数、思考回放和错误分类
+让 Agent 只依赖 CraftAgent 内部模型协议，将 OpenAI SDK、DeepSeek 请求参数、思考回放和错误分类
 收进供应商 Adapter。
 
 ## 实际完成
@@ -23,8 +23,8 @@
 
 ## 主要文件
 
-- `src/common-agent/contracts/*`
-- `src/adapters/deepseek/*`（交付当时路径；现位于 `src/common-agent/adapters/deepseek/*`）
+- `src/craft-agent/contracts/*`
+- `src/adapters/deepseek/*`（交付当时路径；现位于 `src/craft-agent/adapters/deepseek/*`）
 - `src/server/agent-config.ts`
 - `src/server/agent.ts`
 - `test/deepseek-adapter.test.ts`

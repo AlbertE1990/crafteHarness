@@ -1,0 +1,78 @@
+import type {
+  ModelMessage,
+  SessionSummary,
+} from '../contracts'
+import type {
+  AgentEvent,
+  AgentEventListener,
+  AgentRunResult,
+} from '../core'
+import type { JsonObject } from '../types/json'
+
+/** Agent.run() 的业务输入；未传 sessionId 时由 Agent 自动创建。 */
+export interface AgentRequest {
+  readonly input: string
+  readonly sessionId?: string
+  readonly sessionMetadata?: JsonObject
+}
+
+/** 面向应用层的精简实时输出；完整执行轨迹由 onTrace 暴露。 */
+export type AgentOutputEvent
+  = | { readonly type: 'session.started', readonly sessionId: string }
+    | {
+      readonly type: 'message.delta'
+      readonly sessionId: string
+      readonly channel: 'reasoning' | 'content'
+      readonly delta: string
+    }
+    | {
+      readonly type: 'message.completed'
+      readonly sessionId: string
+      readonly content: string
+      readonly reasoning: string
+    }
+    | {
+      readonly type: 'error'
+      readonly sessionId: string
+      readonly message: string
+      readonly code: string
+      readonly stopReason: AgentRunResult['stopReason']
+    }
+
+/** 观察面向应用层实时输出的回调；异常会被隔离。 */
+export type AgentOutputEventListener
+  = (event: AgentOutputEvent) => void | Promise<void>
+
+/** 单次运行的取消、关联 ID 与两级事件观察选项。 */
+export interface AgentExecutionOptions {
+  readonly signal?: AbortSignal
+  readonly runId?: string
+  readonly turnId?: string
+  /** 适合 CLI、SSE 和业务界面的精简输出。 */
+  readonly onEvent?: AgentOutputEventListener
+  /** 适合调试器和轨迹存储的完整 AgentEvent。 */
+  readonly onTrace?: AgentEventListener
+}
+
+/** Agent 会话查询返回的通用投影，不包含任何前端专用字段。 */
+export interface AgentSession extends SessionSummary {
+  readonly messages: readonly ModelMessage[]
+}
+
+/** Agent.listSessions() 的分页结果。 */
+export interface AgentSessionPage {
+  readonly sessions: readonly AgentSession[]
+  readonly hasMore: boolean
+  readonly nextAfterSessionId?: string
+}
+
+/** Agent.getSession() 的可选查询参数。 */
+export interface GetAgentSessionOptions {
+  /** 读取完整快照时每页的事件数。 */
+  readonly pageSize?: number
+}
+
+/** 从低层事件创建输出投影器时使用的内部结构。 */
+export interface AgentOutputProjector {
+  readonly project: (event: AgentEvent) => Promise<void>
+}

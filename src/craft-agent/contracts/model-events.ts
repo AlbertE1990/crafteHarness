@@ -35,7 +35,7 @@ export type ModelToolCallDelta
 /**
  * 模型消息增量，以 OpenAI `ChatCompletionChunk.Choice.Delta` 为基线。
  *
- * 标准字段保持原名；`reasoning_content` 是 CommonAgent 的加法扩展。索引签名允许
+ * 标准字段保持原名；`reasoning_content` 是 CraftAgent 的加法扩展。索引签名允许
  * 后续 adapter 保留供应商新增字段，而不迫使 Agent Core 直接依赖供应商 SDK 类型。
  */
 export interface ModelChoiceDelta {
@@ -58,7 +58,7 @@ export interface ModelStreamChoice {
 }
 
 /**
- * CommonAgent 标准模型流块。
+ * CraftAgent 标准模型流块。
  *
  * 必需字段与 OpenAI Chat Completions chunk 一致，adapter 只能在此基础上增加字段，
  * 不能删改已有字段语义。`provider` 用于诊断来源，不参与模型控制流程。

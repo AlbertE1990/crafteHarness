@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   normalizeOpenAICompatibleCompletion,
   OpenAICompatibleModelAdapter,
-} from '../src/common-agent/adapters/openai-compatible'
+} from '../src/craft-agent/adapters/openai-compatible'
 
 function createMockClient(create: ReturnType<typeof vi.fn>): OpenAI {
   return {

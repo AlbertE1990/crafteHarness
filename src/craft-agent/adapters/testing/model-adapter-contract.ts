@@ -4,7 +4,7 @@ import type {
   ModelCompletion,
   ModelRequest,
   ModelStreamChunk,
-} from '../..'
+} from '../../contracts'
 
 /** 契约探针成功后返回的标准结果，便于调用方继续做供应商专属断言。 */
 export interface ModelAdapterContractResult {

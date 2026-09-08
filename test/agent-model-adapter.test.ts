@@ -1,9 +1,10 @@
-import type { ModelStreamChunk } from '../src/common-agent'
+import type { AgentOutputEvent, ModelStreamChunk } from '../src/craft-agent'
 import { describe, expect, it } from 'vitest'
-import { ScriptedModelAdapter } from '../src/common-agent/adapters/testing'
-import { Agent, getConversations } from '../src/server/agent'
-import { AgentConfig } from '../src/server/agent-config'
+import Agent from '../src/craft-agent'
+import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
+import { serverTools, trustedServerToolPolicy } from '../src/server/agent-tools'
 
+/** 构造供应商无关模型流块，验证 Server 只消费 CraftAgent 标准协议。 */
 function chunk(
   delta: ModelStreamChunk['choices'][number]['delta'],
   finishReason: ModelStreamChunk['choices'][number]['finish_reason'] = null,
@@ -18,8 +19,19 @@ function chunk(
   }
 }
 
-describe('agent model adapter boundary', () => {
-  it('consumes only standard chunks and preserves reasoning in stored history', async () => {
+/** 使用确定会话 ID 创建测试 Agent，避免测试依赖随机 UUID。 */
+function createAgent(adapter: ScriptedModelAdapter): Agent {
+  return new Agent({
+    model: adapter,
+    tools: serverTools,
+    toolPolicy: trustedServerToolPolicy,
+    systemPrompt: '你是一个AI助手',
+    createSessionId: () => 'generated-conversation',
+  })
+}
+
+describe('agent runtime model adapter boundary', () => {
+  it('projects standard chunks to frontend events and derives history from Session Log', async () => {
     const adapter = new ScriptedModelAdapter({
       provider: 'mock',
       model: 'mock-model',
@@ -31,42 +43,43 @@ describe('agent model adapter boundary', () => {
         ],
       }],
     })
-    const config = new AgentConfig({
-      model: { provider: 'custom', adapter },
-    })
-    const agent = new Agent(config)
+    const agent = createAgent(adapter)
+    const events: AgentOutputEvent[] = []
 
-    const events = []
-    for await (const event of agent.chatStream('你好', 'adapter-test-conversation'))
-      events.push(event)
+    const result = await agent.run({
+      input: '你好',
+      sessionId: 'adapter-test-conversation',
+    }, { onEvent: event => events.push(event) })
 
+    expect(result.status).toBe('completed')
     expect(adapter.calls[0]?.request.messages).toEqual([
       { role: 'system', content: '你是一个AI助手' },
       { role: 'user', content: '你好' },
     ])
-    expect(adapter.calls[0]?.request.tools).toHaveLength(3)
+    expect(adapter.calls[0]?.request.tools).toHaveLength(4)
     expect(events).toContainEqual({
       type: 'message.delta',
+      sessionId: 'adapter-test-conversation',
       channel: 'reasoning',
       delta: '正在分析',
     })
-    expect(events.at(-1)).toMatchObject({
+    expect(events.at(-1)).toEqual({
       type: 'message.completed',
+      sessionId: 'adapter-test-conversation',
       content: '最终回答',
       reasoning: '正在分析',
     })
-    expect(getConversations()
-      .find(item => item.id === 'adapter-test-conversation')
-      ?.history
-      .at(-1))
-      .toEqual({
-        role: 'assistant',
-        content: '最终回答',
-        reasoning_content: '正在分析',
-      })
+
+    const page = await agent.listSessions()
+    expect(page.sessions[0]?.messages.at(-1)).toEqual({
+      role: 'assistant',
+      content: '最终回答',
+      reasoning_content: '正在分析',
+    })
+    expect(page.sessions[0]?.sessionId).toBe('adapter-test-conversation')
   })
 
-  it('assembles fragmented tool calls before invoking the Harness', async () => {
+  it('uses AgentLoop to assemble and execute fragmented tool calls', async () => {
     const adapter = new ScriptedModelAdapter({
       provider: 'mock',
       model: 'mock-model',
@@ -80,7 +93,7 @@ describe('agent model adapter boundary', () => {
                 index: 0,
                 id: 'call-time',
                 type: 'function',
-                function: { name: 'get_', arguments: '{"amount":0,' },
+                function: { name: 'get_current_', arguments: '{"time' },
               }],
             }),
             chunk({
@@ -89,7 +102,7 @@ describe('agent model adapter boundary', () => {
                 type: 'function',
                 function: {
                   name: 'time',
-                  arguments: '"unit":"day","preset":null,"timezone":"Asia/Shanghai"}',
+                  arguments: 'zone":"Asia/Shanghai"}',
                 },
               }],
             }, 'tool_calls'),
@@ -101,15 +114,15 @@ describe('agent model adapter boundary', () => {
         },
       ],
     })
-    const config = new AgentConfig({
-      model: { provider: 'custom', adapter },
-    })
-    const agent = new Agent(config)
+    const agent = createAgent(adapter)
+    const events: AgentOutputEvent[] = []
 
-    const events = []
-    for await (const event of agent.chatStream('现在几点', 'fragmented-tool-call'))
-      events.push(event)
+    const result = await agent.run({
+      input: '现在几点',
+      sessionId: 'fragmented-tool-call',
+    }, { onEvent: event => events.push(event) })
 
+    expect(result).toMatchObject({ status: 'completed', steps: 2, toolCalls: 1 })
     expect(adapter.calls).toHaveLength(2)
     expect(adapter.calls[1]?.request.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -119,8 +132,8 @@ describe('agent model adapter boundary', () => {
           id: 'call-time',
           type: 'function',
           function: {
-            name: 'get_time',
-            arguments: '{"amount":0,"unit":"day","preset":null,"timezone":"Asia/Shanghai"}',
+            name: 'get_current_time',
+            arguments: '{"timezone":"Asia/Shanghai"}',
           },
         }],
       }),
@@ -135,7 +148,37 @@ describe('agent model adapter boundary', () => {
     })
   })
 
-  it('reports unsupported custom tool chunks as model protocol errors', async () => {
+  it('reuses one SessionStore across requests and restores the complete next-turn context', async () => {
+    const adapter = new ScriptedModelAdapter({
+      script: [
+        { method: 'stream', chunks: [chunk({ content: '第一轮回答' }, 'stop')] },
+        { method: 'stream', chunks: [chunk({ content: '第二轮回答' }, 'stop')] },
+      ],
+    })
+    const agent = createAgent(adapter)
+
+    await agent.run({ input: '第一轮问题', sessionId: 'multi-turn' })
+    await agent.run({ input: '第二轮问题', sessionId: 'multi-turn' })
+
+    expect(adapter.calls[1]?.request.messages).toEqual([
+      { role: 'system', content: '你是一个AI助手' },
+      { role: 'user', content: '第一轮问题' },
+      { role: 'assistant', content: '第一轮回答' },
+      { role: 'user', content: '第二轮问题' },
+    ])
+    const page = await agent.listSessions()
+    expect(page.sessions).toHaveLength(1)
+    expect(page.sessions[0]?.messages.filter(message => (
+      message.role === 'user' || message.role === 'assistant'
+    )).map(message => message.content)).toEqual([
+      '第一轮问题',
+      '第一轮回答',
+      '第二轮问题',
+      '第二轮回答',
+    ])
+  })
+
+  it('projects AgentLoop protocol failures as frontend error events', async () => {
     const adapter = new ScriptedModelAdapter({
       provider: 'mock',
       model: 'mock-model',
@@ -151,18 +194,22 @@ describe('agent model adapter boundary', () => {
         }, 'tool_calls')],
       }],
     })
-    const config = new AgentConfig({
-      model: { provider: 'custom', adapter },
-    })
-    const agent = new Agent(config)
+    const agent = createAgent(adapter)
+    const events: AgentOutputEvent[] = []
 
-    await expect((async () => {
-      for await (const _event of agent.chatStream('执行自定义工具')) {
-        // 消费生成器才能观察流迭代期间抛出的协议错误。
-      }
-    })()).rejects.toMatchObject({
+    const result = await agent.run({ input: '执行自定义工具' }, {
+      onEvent: event => events.push(event),
+    })
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      stopReason: 'model_protocol_error',
+      error: { code: 'MODEL_PROTOCOL_ERROR' },
+    })
+    expect(events.at(-1)).toMatchObject({
+      type: 'error',
       code: 'MODEL_PROTOCOL_ERROR',
-      provider: 'mock',
+      stopReason: 'model_protocol_error',
     })
   })
 })

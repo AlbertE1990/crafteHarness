@@ -1,12 +1,12 @@
 import type {
   ModelCompletion,
   ModelStreamChunk,
-} from '../src/common-agent'
+} from '../src/craft-agent'
 import { describe, expect, it } from 'vitest'
 import {
   assertModelAdapterContract,
   ScriptedModelAdapter,
-} from '../src/common-agent/adapters/testing'
+} from '../src/craft-agent/adapters/testing'
 
 function completion(): ModelCompletion {
   return {

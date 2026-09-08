@@ -25,10 +25,10 @@
 
 ## 主要文件
 
-- `src/common-agent/contracts/session.ts`
-- `src/common-agent/sessions/errors.ts`
-- `src/common-agent/sessions/memory-session-store.ts`
-- `src/common-agent/sessions/derive-messages.ts`
+- `src/craft-agent/contracts/session.ts`
+- `src/craft-agent/sessions/errors.ts`
+- `src/craft-agent/sessions/memory-session-store.ts`
+- `src/craft-agent/sessions/derive-messages.ts`
 - `test/session-log.test.ts`
 - `docs/standards/protocols/session-log.md`
 - `docs/learning/session-log.md`

@@ -28,13 +28,13 @@ SessionStore 串成可运行主链，并提供有界预算、取消、稳定终�
 
 ## 主要文件
 
-- `src/common-agent/core/types.ts`
-- `src/common-agent/core/tool-registry.ts`
-- `src/common-agent/core/agent-loop.ts`
-- `src/common-agent/core/model-stream.ts`
-- `src/common-agent/core/run-state.ts`
-- `src/common-agent/core/stop-policy.ts`
-- `src/common-agent/core/errors.ts`
+- `src/craft-agent/core/types.ts`
+- `src/craft-agent/core/tool-registry.ts`
+- `src/craft-agent/core/agent-loop.ts`
+- `src/craft-agent/core/model-stream.ts`
+- `src/craft-agent/core/run-state.ts`
+- `src/craft-agent/core/stop-policy.ts`
+- `src/craft-agent/core/errors.ts`
 - `test/agent-loop.test.ts`
 - `docs/standards/protocols/agent-loop.md`
 - `docs/learning/agent-loop.md`
@@ -64,4 +64,4 @@ SessionStore 串成可运行主链，并提供有界预算、取消、稳定终�
 - 原始 stack/cause 服务端诊断出口。
 
 下一阶段由 Runtime 组装 AgentLoop，并把实时事件转成可取消、可查询和可调试的外围接口；这些 Runtime 细节不进入
-CommonAgent 产品协议。
+CraftAgent 产品协议。

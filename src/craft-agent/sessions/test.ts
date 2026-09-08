@@ -1,7 +1,7 @@
 /**
  * Sessions 学习型可执行测试。
  *
- * 运行方式：pnpm tsx src/common-agent/sessions/test.ts
+ * 运行方式：pnpm tsx src/craft-agent/sessions/test.ts
  *
  * 这个文件刻意不使用 Vitest：它是一段可以逐行阅读、直接运行的示例，
  * 通过断言保证结果正确，并通过日志展示 Session 的作用、意义和数据流。
@@ -270,7 +270,7 @@ async function main(): Promise<void> {
   const firstTurnVersion = await testAppendOnlyEventLog(store)
   const latestVersion = await testContinueConversation(store, firstTurnVersion)
   await testReadAndDeriveMessages(store)
-  // await testOptimisticConcurrency(store, latestVersion)
+  await testOptimisticConcurrency(store, latestVersion)
 
   console.log('\n🎉 所有 Sessions 学习测试均已通过。')
 }

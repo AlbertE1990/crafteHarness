@@ -9,5 +9,5 @@ export interface JsonObject {
   [key: string]: JsonValue
 }
 
-/** CommonAgent 内部使用的 JSON Schema 对象。 */
+/** CraftAgent 内部使用的 JSON Schema 对象。 */
 export type JsonSchema = Record<string, unknown>

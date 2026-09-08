@@ -14,7 +14,7 @@
 - `DefinedTool.model` 自动生成模型可见工具参数。
 - 模型 Tool Call 统一经过 `executeTool()`。
 - 异构工具通过 `ServerToolRegistration` 放入静态注册表。
-- 定位和天气的临时网络错误进入 CommonAgent 幂等重试管线。
+- 定位和天气的临时网络错误进入 CraftAgent 幂等重试管线。
 - Fastify SSE 支持内容与思考两个增量频道，并在浏览器断开时取消上游请求。
 
 ## 主要文件

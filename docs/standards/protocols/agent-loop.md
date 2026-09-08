@@ -16,8 +16,8 @@ ModelAdapter | SessionStore
         Tool Harness
 ```
 
-它不得依赖具体模型 SDK、HTTP/SSE、数据库驱动或前端展示类型。`src/server/agent.ts` 是过渡 Runtime，
-不是本协议的一部分。
+它不得依赖具体模型 SDK、HTTP/SSE、数据库驱动或前端展示类型。默认 `Agent` 门面只是它的上层消费者，
+不改变本协议的状态机语义。
 
 ## 2. 状态层级
 

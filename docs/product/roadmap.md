@@ -1,4 +1,4 @@
-# CommonAgent 分阶段开发路线图
+# CraftAgent 分阶段开发路线图
 
 > 文档类型：产品路线图；状态：Active。
 
@@ -6,7 +6,7 @@
 
 - **先完成可运行的 Agent 主链，再扩展低收益的防御性体系。**
 - 每个阶段先在当前单一项目中测试验证，不提前拆分 npm packages。
-- CommonAgent 核心继续保持与模型 SDK、HTTP 框架、数据库驱动和前端解耦。
+- CraftAgent 核心继续保持与模型 SDK、HTTP 框架、数据库驱动和前端解耦。
 - 当前使用者是能够修改并运行服务端代码的第一方开发者，暂不支持不可信第三方工具注入。
 - 工具默认不重试；开发者声明幂等并提供重试策略即可，暂不实现第三方幂等性审查。
 - 安全信任、插件沙箱和第三方代码治理放在核心功能完成后的长期强化阶段。
@@ -20,7 +20,8 @@ flowchart LR
   P2 --> P21[阶段 2.1<br/>官方 Adapter 工具包<br/>已完成]
   P21 --> P3[阶段 3<br/>Session Log<br/>已完成]
   P3 --> P4[阶段 4<br/>Agent Loop<br/>已完成]
-  P4 --> P5[阶段 5<br/>Runtime 与轨迹接口<br/>下一阶段]
+  P4 --> P41[阶段 4.1<br/>CraftAgent 门面<br/>已完成]
+  P41 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -40,12 +41,12 @@ flowchart LR
 
 ## 4. 阶段 1.1：接入现有 Server（已完成）
 
-目标是先在真实 DeepSeek 对话中使用和验证 CommonAgent 工具协议。
+目标是先在真实 DeepSeek 对话中使用和验证 CraftAgent 工具协议。
 
 当前完成：
 
-- `src/server/agent.ts` 使用 `DefinedTool.model` 生成模型工具参数。
-- 模型 Tool Call 通过 CommonAgent `executeTool()` 执行。
+- Server 的工具通过 `defineTools()` 注册，模型参数仍只来自 `DefinedTool.model`。
+- 模型 Tool Call 由 CraftAgent AgentLoop 通过 `executeTool()` 执行。
 - 时间、IP 定位和天气工具使用 `defineTool()` 统一 Schema 与实现。
 - 移除旧的手写 `tools.json` 和旧 Tool Harness，避免双协议漂移。
 - 支持通过静态注册表开发第一方自定义工具。
@@ -69,9 +70,9 @@ flowchart LR
 - 定义 `ModelAdapter` 接口、取消语义和错误分类。
 - 第一份实现采用 DeepSeek；OpenAI 兼容 SDK 只能存在于 adapter 内部。
 - adapter 将 `DefinedTool.model` 转换成供应商格式。
-- 使用契约测试保证供应商类型不泄漏到 CommonAgent 核心。
+- 使用契约测试保证供应商类型不泄漏到 CraftAgent 核心。
 - 标准 chunk 最大程度复用 OpenAI Chat Completions，新增字段采用只增不减原则。
-- 增加 `AgentConfig`，统一保存 Agent 基础配置与模型配置。
+- 增加统一模型配置，并在阶段 4.1 收敛为 `defineAgentConfig()`。
 
 真实环境验收仍需配置 `DEEPSEEK_API_KEY`，覆盖普通对话、工具调用、多轮 reasoning 回放和取消。
 详细交付见[阶段 2 记录](./deliveries/delivery-003-model-adapter.md)。
@@ -85,7 +86,7 @@ flowchart LR
 - 提取 `OpenAICompatibleModelAdapter`，复用消息、工具、响应、流、usage 和错误映射。
 - 将 DeepSeek 收缩为消息、token 参数、thinking 和 reasoning 差异层。
 - 提供 Scripted Adapter 与不绑定测试框架的契约探针。
-- `AgentConfig` 同时支持内置兼容服务和自定义 Adapter。
+- Agent 配置同时支持内置兼容服务和自定义 Adapter。
 - 生产 Adapter 与测试工具使用独立入口，Core 继续禁止导入 SDK。
 
 详细交付见[阶段 2.1 记录](./deliveries/delivery-004-official-adapter-toolkit.md)，设计依据见
@@ -123,18 +124,30 @@ flowchart LR
 详细交付见[阶段 4 记录](./deliveries/delivery-006-agent-loop.md)，设计依据见
 [ADR-0005](./decisions/adr-0005-deterministic-agent-loop.md)。
 
-## 9. 阶段 5：Runtime 与轨迹接口（下一阶段）
+## 9. 阶段 4.1：CraftAgent 门面与 Server 迁移（已完成）
+
+已完成范围：
+
+- 产品名、源码目录、导入和文档统一迁移为 CraftAgent。
+- 默认导出 `Agent`，并提供 `defineAgentConfig()` 与 `defineTools()`。
+- 声明式创建内置 DeepSeek/OpenAI Compatible Adapter，或直接注入自定义 Adapter。
+- 自动 Session ID、精简输出事件、完整 `onTrace` 和 Session 查询。
+- SessionStore 增加可选会话目录能力，MemorySessionStore 支持创建顺序分页。
+- 删除 Server 过渡 Agent/Config；Fastify 只保留部署配置、HTTP/SSE 和展示投影。
+
+详细交付见[阶段 4.1 记录](./deliveries/delivery-007-agent-facade.md)。
+
+## 10. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
-- 将现有 Fastify 代码收敛为外围 Runtime。
-- 提供 HTTP/SSE 会话入口和取消入口。
 - 暴露可分页查询的轨迹接口，服务前端调试。
-- Runtime 组装 ModelAdapter、工具、策略、审批和 Store。
-- Runtime 使用 AgentLoop 替代过渡 `src/server/agent.ts`，但 Fastify 和前端类型不进入 CommonAgent 文档协议。
-- 保持前端展示数据不进入 CommonAgent 核心协议。
+- 定义独立 TraceStore 或 TraceSink，不与 Session 的模型事实混写。
+- 支持轨迹脱敏、按 Session/Run 查询和保留策略。
+- Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
+- 保持前端展示数据不进入 CraftAgent 核心协议。
 
-## 10. 阶段 6：异常诊断
+## 11. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -147,7 +160,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 11. 阶段 7：长期安全与扩展（最低优先级）
+## 12. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

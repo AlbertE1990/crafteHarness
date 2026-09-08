@@ -1,10 +1,10 @@
-# CommonAgent 开发与代码规范
+# CraftAgent 开发与代码规范
 
 > 文档类型：规范；状态：Accepted。
 
 ## 1. 适用范围
 
-本规范适用于 `src/common-agent` 及后续 ModelAdapter、Session、Agent Loop 和 Runtime 协议。
+本规范适用于 `src/craft-agent` 及后续 ModelAdapter、Session、Agent Loop 和 Runtime 协议。
 它用于保持公共 API、内部函数、注释和测试的可读性。已有公共 API 如需改变参数顺序，必须考虑兼容性，
 不能只为了格式一致而直接破坏调用方。
 
@@ -148,6 +148,16 @@ executeAttempt(tool, input, {
 详细行为见[Agent Loop 协议](./protocols/agent-loop.md)。
 
 ## 8. 变更检查清单
+
+### 8.1 Agent 配置与门面
+
+- 公共构造配置使用单一对象参数；新增模型、Store 或策略选项不得制造第二个配置根。
+- `defineAgentConfig()` 只归一化显式输入，不读取环境变量或全局配置。
+- 门面可以提供官方 Adapter 的便利创建，但 contracts/core/sessions/tools 不得反向依赖 Adapter。
+- 默认依赖必须可替换；时钟和 ID 生成器保留测试注入点。
+- 应用输出与完整轨迹使用不同类型和回调，不能为了前端方便删减底层 AgentEvent。
+- Session 列表来自 Store 能力，不在 Runtime 维护第二份会话 ID 索引。
+- 配置结构可以冻结，但不得擅自深度冻结调用方注入的有状态 Adapter、Store 或策略实例。
 
 新增或修改函数时检查：
 

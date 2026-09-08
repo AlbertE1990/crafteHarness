@@ -1,14 +1,14 @@
 import type {
   SessionEvent,
   SessionStore,
-} from '../src/common-agent'
+} from '../src/craft-agent'
 import { describe, expect, it } from 'vitest'
 import {
   deriveModelMessages,
   loadModelMessages,
   MemorySessionStore,
   readSessionSnapshot,
-} from '../src/common-agent'
+} from '../src/craft-agent'
 
 /** 创建 ID 和时间稳定的内存 Store，避免测试依赖真实时钟与 UUID。 */
 function createStore() {

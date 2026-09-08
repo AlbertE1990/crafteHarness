@@ -9,5 +9,6 @@
 - [Delivery 004：阶段 2.1 官方 Adapter 工具包](./delivery-004-official-adapter-toolkit.md)
 - [Delivery 005：阶段 3 Session Log](./delivery-005-session-log.md)
 - [Delivery 006：阶段 4 Agent Loop](./delivery-006-agent-loop.md)
+- [Delivery 007：阶段 4.1 CraftAgent 统一门面与 Server 迁移](./delivery-007-agent-facade.md)
 
 交付记录不是当前协议的权威来源。后续阶段改变行为时更新规范并新增交付记录，不覆盖旧记录中的历史状态。

@@ -23,7 +23,7 @@
 ## 3. 模块地图
 
 ```text
-src/common-agent/core/
+src/craft-agent/core/
   types.ts           # 配置、预算、事件、工具注册项和 Run 结果
   tool-registry.ts   # DefinedTool -> AgentTool 泛型擦除边界
   agent-loop.ts      # 主状态机、Session 写入和终态收口
@@ -46,7 +46,7 @@ import {
   createAgentTool,
   defineTool,
   MemorySessionStore,
-} from './common-agent'
+} from './craft-agent'
 
 const weather = defineTool({
   name: 'weather',

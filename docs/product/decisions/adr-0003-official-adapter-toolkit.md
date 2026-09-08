@@ -14,16 +14,16 @@
 
 ## 决定
 
-- 官方 Adapter 归档在 `src/common-agent/adapters`，与 Core 同属 CommonAgent 产品目录但使用独立入口；
-  Core 根入口不导入 Adapter 或供应商 SDK。
+- 官方 Adapter 归档在 `src/craft-agent/adapters`，与底层 Core 分层；contracts/core/sessions/tools 不导入
+  Adapter 或供应商 SDK。产品根入口可以通过 Agent 门面提供内置 Adapter 的便利配置。
 - 提供 `OpenAICompatibleModelAdapter`，集中实现 Chat Completions 通用请求、响应、流和错误逻辑。
 - DeepSeek Adapter 继承兼容层的模板方法，只覆盖 developer 消息降级、token 参数和 reasoning 扩展。
-- 生产 Adapter 从 `src/common-agent/adapters` 入口导出；测试 Adapter 和契约探针从
-  `src/common-agent/adapters/testing` 独立导出。
+- 生产 Adapter 从 `src/craft-agent/adapters` 入口导出；测试 Adapter 和契约探针从
+  `src/craft-agent/adapters/testing` 独立导出。
 - `ScriptedModelAdapter` 使用确定性脚本替代网络，支持调用快照、取消和流迭代错误。
 - `assertModelAdapterContract()` 同时检查 `complete()` 与 `stream()` 的最小运行时协议，测试时必须配合
   SDK 客户端替身或 Scripted Adapter，不能访问生产模型。
-- `AgentConfig` 继续作为唯一配置根，使用判别联合支持 DeepSeek、OpenAI Compatible 和自定义 Adapter。
+- `defineAgentConfig()` 作为唯一归一化入口，使用判别联合支持 DeepSeek、OpenAI Compatible 和自定义 Adapter。
 - 协议差异明显的供应商应新增独立 Adapter，不能向通用兼容层不断加入厂商条件分支。
 
 ## 后果

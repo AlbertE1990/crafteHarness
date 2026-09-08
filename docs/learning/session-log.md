@@ -45,7 +45,7 @@ append-only 日志记录“发生过什么”：
 ## 4. 模块地图
 
 ```text
-src/common-agent/
+src/craft-agent/
   contracts/
     session.ts                 # Event、分页、Store 接口
   sessions/
@@ -85,7 +85,7 @@ flowchart TD
 ## 6. 第一次创建 Session
 
 ```ts
-import { MemorySessionStore } from '../../src/common-agent'
+import { MemorySessionStore } from '../../src/craft-agent'
 
 const store = new MemorySessionStore()
 
@@ -164,7 +164,7 @@ Writer B 必须失败。若 Store 自动把它追加成 sequence 6，它的结�
 ## 9. 读取固定快照
 
 ```ts
-import { readSessionSnapshot } from '../../src/common-agent'
+import { readSessionSnapshot } from '../../src/craft-agent'
 
 const snapshot = await readSessionSnapshot('session-1', store, {
   pageSize: 100,
@@ -184,7 +184,7 @@ const snapshot = await readSessionSnapshot('session-1', store, {
 ## 10. 推导模型历史
 
 ```ts
-import { loadModelMessages } from '../../src/common-agent'
+import { loadModelMessages } from '../../src/craft-agent'
 
 const messages = await loadModelMessages('session-1', store)
 ```

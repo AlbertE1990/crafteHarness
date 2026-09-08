@@ -19,21 +19,21 @@
 
 建议阅读时同时打开：
 
-- [`src/common-agent/tools/types.ts`](../../src/common-agent/tools/types.ts)：先看公共数据结构。
-- [`src/common-agent/tools/define-tool.ts`](../../src/common-agent/tools/define-tool.ts)：理解注册期。
-- [`src/common-agent/tools/execute-tool.ts`](../../src/common-agent/tools/execute-tool.ts)：理解调用期。
-- [`test/common-agent-tools.test.ts`](../../test/common-agent-tools.test.ts)：用可运行的例子验证理解。
+- [`src/craft-agent/tools/types.ts`](../../src/craft-agent/tools/types.ts)：先看公共数据结构。
+- [`src/craft-agent/tools/define-tool.ts`](../../src/craft-agent/tools/define-tool.ts)：理解注册期。
+- [`src/craft-agent/tools/execute-tool.ts`](../../src/craft-agent/tools/execute-tool.ts)：理解调用期。
+- [`test/craft-agent-tools.test.ts`](../../test/craft-agent-tools.test.ts)：用可运行的例子验证理解。
 
 ## 2. 先建立整体认识
 
-### 2.1 CommonAgent 最终所处的位置
+### 2.1 CraftAgent 最终所处的位置
 
 下面是整体目标；Agent Core、模型、Session 和内存 Store 已实现，Runtime 轨迹接口和数据库 Store 仍在规划中：
 
 ```mermaid
 flowchart TB
   UI[前端 / CLI] --> Runtime[Agent Runtime]
-  Runtime --> Agent[CommonAgent]
+  Runtime --> Agent[CraftAgent]
   Runtime --> Approval[用户审批通道]
   Runtime --> TraceUI[轨迹查询 / SSE]
 
@@ -77,8 +77,8 @@ flowchart LR
 ## 3. 目录与模块职责
 
 ```text
-src/common-agent/
-  index.ts                       # CommonAgent 第一阶段统一导出入口
+src/craft-agent/
+  index.ts                       # CraftAgent 第一阶段统一导出入口
   types/
     json.ts                      # 与供应商无关的 JSON 基础类型
   tools/
@@ -460,10 +460,10 @@ risk === 'safe' 且 capabilities 为空
 
 ### 7.2 权限层不能替代业务鉴权
 
-CommonAgent 可以判断某工具是否允许访问网络，但“当前用户是否能读取订单 123”仍应由业务服务判断。
+CraftAgent 可以判断某工具是否允许访问网络，但“当前用户是否能读取订单 123”仍应由业务服务判断。
 
 ```text
-CommonAgent 能力级授权：允许调用 order_read 工具
+CraftAgent 能力级授权：允许调用 order_read 工具
 业务服务资源级授权：用户 A 是否能读取 orderId=123
 ```
 
@@ -639,7 +639,7 @@ Schema 校验：values 是有限数字数组，长度 1 到 100
 运行：
 
 ```bash
-pnpm test -- --run test/common-agent-tools.test.ts
+pnpm test -- --run test/craft-agent-tools.test.ts
 ```
 
 然后给单个测试加断点，依次观察：
@@ -715,10 +715,10 @@ TypeScript 类型在编译后消失，模型传入的是运行时 `unknown`。Zo
 
 后续已经完成：
 
-- CommonAgent 内部 `ModelAdapter` 协议、通用 OpenAI Compatible Adapter 与 DeepSeek 差异层；现有 Server
+- CraftAgent 内部 `ModelAdapter` 协议、通用 OpenAI Compatible Adapter 与 DeepSeek 差异层；现有 Server
   不再直接依赖 OpenAI SDK。
 - OpenAI Chat Completions 兼容的标准 chunk、非流式结果、用量和模型错误分类。
-- 统一 `AgentConfig`、Scripted 测试 Adapter 与契约探针。详见
+- 统一 `defineAgentConfig()`、Scripted 测试 Adapter 与契约探针。详见
   [阶段 2 交付记录](../product/deliveries/delivery-003-model-adapter.md)和
   [阶段 2.1 交付记录](../product/deliveries/delivery-004-official-adapter-toolkit.md)。
 - append-only Session Log、乐观并发和模型消息推导。

@@ -4,21 +4,21 @@
 
 ## 1. 目标与边界
 
-ModelAdapter 把模型供应商 SDK 隔离在 CommonAgent Core 之外。Core 只认识内部消息、工具定义、
+ModelAdapter 把模型供应商 SDK 隔离在 CraftAgent Core 之外。Core 只认识内部消息、工具定义、
 非流式结果、标准流块和规范错误；模型名、API Key、base URL 与供应商参数由 Runtime 配置并交给
 具体 Adapter。
 
 当前协议以 OpenAI Chat Completions 为兼容基线：
 
 - 已有字段保持原名和原语义，不重新发明一套事件名称。
-- CommonAgent 和供应商需要的新能力通过增加可选字段表达，不能删除标准字段。
+- CraftAgent 和供应商需要的新能力通过增加可选字段表达，不能删除标准字段。
 - Adapter 在运行时保留未知 chunk 字段，避免供应商或 OpenAI 增加字段后被静默丢弃。
-- CommonAgent 不导入 `openai` 包；结构兼容不等于依赖其 TypeScript 类型。
+- CraftAgent 不导入 `openai` 包；结构兼容不等于依赖其 TypeScript 类型。
 
 ## 2. 公共文件
 
 ```text
-src/common-agent/contracts/
+src/craft-agent/contracts/
   message.ts
   model.ts
   model-events.ts
@@ -132,10 +132,10 @@ Completions 主体字段，并和 chunk 一样透传未知新增字段。用量�
 官方 Adapter 与 Core 同仓库提供，但不是 Core 依赖：
 
 ```text
-src/common-agent/contracts  <-  src/common-agent/adapters/openai-compatible
-                              <-  src/common-agent/adapters/deepseek
+src/craft-agent/contracts  <-  src/craft-agent/adapters/openai-compatible
+                              <-  src/craft-agent/adapters/deepseek
 
-src/common-agent/index.ts  -X->  src/common-agent/adapters
+src/craft-agent/index.ts  -X->  src/craft-agent/adapters
 ```
 
 `OpenAICompatibleModelAdapter` 提供：
@@ -157,7 +157,7 @@ src/common-agent/index.ts  -X->  src/common-agent/adapters
 
 ## 8. 测试入口
 
-`src/common-agent/adapters/testing` 与生产汇总入口分离：
+`src/craft-agent/adapters/testing` 与生产汇总入口分离：
 
 - `ScriptedModelAdapter` 严格按脚本顺序输出 completion 或 chunk，捕获请求快照并响应取消。
 - 脚本耗尽、调用方法错位作为 `MODEL_PROTOCOL_ERROR`，原始脚本异常作为 `MODEL_CALL_FAILED`。
@@ -168,7 +168,7 @@ reasoning、供应商请求扩展和错误映射等专项测试。
 
 ## 9. 统一配置
 
-当前 Runtime 使用 `AgentConfig` 作为唯一配置根，集中保存：
+当前 `Agent` 使用 `defineAgentConfig()` 归一化唯一配置根，集中保存：
 
 - system prompt、最大模型 Step。
 - provider、模型名、API Key、base URL。
@@ -179,10 +179,10 @@ reasoning、供应商请求扩展和错误映射等专项测试。
 
 - `provider: 'deepseek'` 使用官方 DeepSeek 差异层。
 - `provider: 'openai-compatible'` 使用通用兼容 Adapter，并以 `providerName` 保存真实来源。
-- `provider: 'custom'` 接收开发者实现的 `ModelAdapter` 实例。
+- 直接传入开发者实现的 `ModelAdapter`；早期 `provider: 'custom'` 包装也兼容。
 
-环境变量只在 `AgentConfig.fromEnv()` 中读取。Adapter 和 Agent 不再分别读取环境变量或维护重复默认值。
-未来 Session Store、审批、预算和日志配置继续加入这一配置根，而不是增加平行的全局配置入口。
+环境变量只在外部 Runtime 中读取，再作为显式配置传入。`defineAgentConfig()` 不访问 `process.env`。
+Session Store、审批、预算和观察器位于同一配置根，而不是增加平行的全局配置入口。
 
 ## 10. 契约测试要求
 
@@ -191,7 +191,8 @@ reasoning、供应商请求扩展和错误映射等专项测试。
 - 工具调用可以跨多个 chunk 拼装。
 - assistant 的空 `reasoning_content` 也会被回放。
 - 中断和供应商错误得到稳定分类。
-- `src/common-agent` 与 `src/server/agent.ts` 不得导入 OpenAI SDK。
+- `src/craft-agent` 的 contracts、core、sessions、tools 与 builtins 不得导入 OpenAI SDK。
+- `src/craft-agent/agent` 可以创建官方 Adapter，但不能直接消费 SDK 对象。
 - 通用兼容层不得出现按供应商名称分支的请求或响应逻辑。
 - DeepSeek 专项测试必须证明其差异字段没有回流到通用 Adapter。
 - 核心测试不访问真实模型；真实 API 只用于单独的冒烟验收。

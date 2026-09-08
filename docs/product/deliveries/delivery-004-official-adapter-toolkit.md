@@ -6,7 +6,7 @@
 
 ## 本阶段目标
 
-将可复用 Adapter 作为 CommonAgent 官方能力提供，在不增加 Core 供应商依赖的前提下，降低应用接入
+将可复用 Adapter 作为 CraftAgent 官方能力提供，在不增加 Core 供应商依赖的前提下，降低应用接入
 和第三方 Adapter 开发所需代码。
 
 ## 实际完成
@@ -22,10 +22,10 @@
 
 ## 主要文件
 
-- `src/common-agent/adapters/openai-compatible/*`
-- `src/common-agent/adapters/deepseek/*`
-- `src/common-agent/adapters/testing/*`
-- `src/common-agent/adapters/index.ts`
+- `src/craft-agent/adapters/openai-compatible/*`
+- `src/craft-agent/adapters/deepseek/*`
+- `src/craft-agent/adapters/testing/*`
+- `src/craft-agent/adapters/index.ts`
 - `src/server/agent-config.ts`
 - `test/openai-compatible-adapter.test.ts`
 - `test/model-adapter-testing.test.ts`

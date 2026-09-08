@@ -1,4 +1,4 @@
-import type { AgentEvent, ModelAdapter, ModelStreamChunk, SessionStore } from '../src/common-agent'
+import type { AgentEvent, ModelAdapter, ModelStreamChunk, SessionStore } from '../src/craft-agent'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import {
@@ -8,8 +8,8 @@ import {
   deriveModelMessages,
   MemorySessionStore,
   readSessionSnapshot,
-} from '../src/common-agent'
-import { ScriptedModelAdapter } from '../src/common-agent/adapters/testing'
+} from '../src/craft-agent'
+import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
 
 /** 构造只包含候选 0 的标准流块，让测试关注 Agent 控制流而不是供应商 SDK。 */
 function chunk(

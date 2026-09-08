@@ -17,7 +17,7 @@
 - 在注册阶段通过 `z.toJSONSchema()` 生成 Draft 7 JSON Schema。
 - 输入根节点必须是 `z.strictObject()`，未知字段必须拒绝。
 - 成功输出必须通过 `outputSchema`；工具失败使用独立结果类型。
-- CommonAgent 可以依赖 Zod，但不得依赖 OpenAI SDK。
+- CraftAgent 可以依赖 Zod，但不得依赖 OpenAI SDK。
 
 ## 备选方案
 

@@ -79,7 +79,7 @@ export interface ModelFunctionMessage {
   readonly content: string | null
 }
 
-/** CommonAgent 内部使用的供应商无关消息联合类型。 */
+/** CraftAgent 内部使用的供应商无关消息联合类型。 */
 export type ModelMessage
   = | ModelInstructionMessage
     | ModelUserMessage

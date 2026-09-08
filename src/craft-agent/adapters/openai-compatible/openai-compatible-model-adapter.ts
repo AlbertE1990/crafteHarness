@@ -21,7 +21,7 @@ import type {
   ModelStreamChunk,
   ModelTokenUsage,
   ModelToolCall,
-} from '../..'
+} from '../../contracts'
 import OpenAI, {
   APIConnectionError,
   APIConnectionTimeoutError,
@@ -33,7 +33,7 @@ import OpenAI, {
   PermissionDeniedError,
   RateLimitError,
 } from 'openai'
-import { ModelError } from '../..'
+import { ModelError } from '../../contracts'
 
 /** OpenAI Compatible Adapter 的连接、诊断来源和模型配置。 */
 export interface OpenAICompatibleModelAdapterConfig {
@@ -81,7 +81,7 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
     })
   }
 
-  /** 执行非流式调用并输出 CommonAgent 标准 completion。 */
+  /** 执行非流式调用并输出 CraftAgent 标准 completion。 */
   async complete(
     request: ModelRequest,
     options: ModelCallOptions = {},
@@ -190,7 +190,7 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
   }
 }
 
-/** 将 CommonAgent 消息投影为标准 OpenAI Chat Completions 消息。 */
+/** 将 CraftAgent 消息投影为标准 OpenAI Chat Completions 消息。 */
 export function toOpenAICompatibleMessage(
   message: ModelMessage,
 ): ChatCompletionMessageParam {
@@ -233,7 +233,7 @@ export function toOpenAICompatibleMessage(
   }
 }
 
-/** 将 CommonAgent 工具描述投影为严格函数工具。 */
+/** 将 CraftAgent 工具描述投影为严格函数工具。 */
 export function toOpenAICompatibleTool(
   tool: NonNullable<ModelRequest['tools']>[number],
 ): ChatCompletionTool {
@@ -248,7 +248,7 @@ export function toOpenAICompatibleTool(
   }
 }
 
-/** 将 CommonAgent 完整工具调用投影为 SDK 工具调用。 */
+/** 将 CraftAgent 完整工具调用投影为 SDK 工具调用。 */
 export function toOpenAICompatibleToolCall(
   toolCall: ModelToolCall,
 ): ChatCompletionMessageToolCall {

@@ -124,6 +124,30 @@ export interface SessionSnapshot {
   readonly events: readonly SessionEvent[]
 }
 
+/** 会话目录分页查询参数；游标使用上一页最后一个会话 ID。 */
+export interface ListSessionsOptions {
+  /** 只返回该会话之后创建的条目。 */
+  readonly afterSessionId?: string
+  /** 单页会话数，默认 100，最大 1000。 */
+  readonly limit?: number
+}
+
+/** SessionStore 可枚举的最小会话摘要，不包含完整事件和模型消息。 */
+export interface SessionSummary {
+  readonly sessionId: string
+  readonly createdAt: string
+  readonly version: number
+  readonly metadata?: JsonObject
+}
+
+/** SessionStore 的稳定创建顺序分页结果。 */
+export interface SessionListPage {
+  readonly sessions: readonly SessionSummary[]
+  readonly hasMore: boolean
+  /** 下一页继续使用的游标；空页面没有游标。 */
+  readonly nextAfterSessionId?: string
+}
+
 /**
  * Session 持久化端口。
  *
@@ -135,4 +159,8 @@ export interface SessionStore {
     sessionId: string,
     options?: ReadSessionEventsOptions,
   ) => Promise<SessionEventPage>
+  /**
+   * 可选的会话目录能力。Agent 执行只需要 append/read；列表 API 会在缺少该能力时明确报错。
+   */
+  list?: (options?: ListSessionsOptions) => Promise<SessionListPage>
 }

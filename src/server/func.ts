@@ -1,4 +1,4 @@
-import { ToolError } from '../common-agent'
+import { ToolError } from '../craft-agent'
 
 /** 服务端业务工具真正需要的最小执行上下文。 */
 interface ServerToolContext {

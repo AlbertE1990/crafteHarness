@@ -1,4 +1,4 @@
-/** CommonAgent 的供应商无关模型协议。 */
+/** CraftAgent 的供应商无关模型协议。 */
 export * from './message'
 export * from './model'
 export * from './model-errors'

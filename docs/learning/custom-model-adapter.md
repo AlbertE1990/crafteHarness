@@ -7,7 +7,7 @@
 如果服务支持 OpenAI Chat Completions，通常不需要编写 Adapter：
 
 ```ts
-const config = new AgentConfig({
+const agent = new Agent({
   model: {
     provider: 'openai-compatible',
     providerName: 'my-provider',
@@ -32,7 +32,7 @@ DeepSeek 直接使用 `provider: 'deepseek'`，其 thinking、reasoning 和消�
 - `normalizeError()`：SDK 之外的错误类型。
 
 不要根据 `provider` 名称在通用基类中增加条件分支。一个差异只属于某个供应商时，就留在对应目录。
-可参考 `src/common-agent/adapters/deepseek/deepseek-model-adapter.ts`。
+可参考 `src/craft-agent/adapters/deepseek/deepseek-model-adapter.ts`。
 
 ## 3. 非兼容协议的最小实现
 
@@ -64,14 +64,11 @@ class NativeModelAdapter implements ModelAdapter {
 
 ```ts
 const adapter = new NativeModelAdapter()
-const config = new AgentConfig({
-  model: { provider: 'custom', adapter },
-})
-const agent = new Agent(config)
+const agent = new Agent({ model: adapter })
 ```
 
-当一个 Adapter 被项目正式支持后，再为 `AgentModelConfig` 增加命名分支和默认值。模型配置仍留在
-`AgentConfig`，不能在 Adapter、Agent 和环境变量读取代码中维护三份默认值。
+当一个 Adapter 被项目正式支持后，再为 `AgentModelInput` 增加命名分支和默认值。模型配置仍留在
+`AgentConfigInput`，不能在 Adapter、Agent 和环境变量读取代码中维护三份默认值。
 
 ## 5. 无网络测试
 
@@ -96,7 +93,7 @@ const result = await assertModelAdapterContract(adapter)
 
 ## 6. 提交前检查
 
-- Core 和 `server/agent.ts` 没有导入供应商 SDK。
+- contracts、core、sessions、tools 与 builtins 没有导入供应商 SDK。
 - provider、model 和标准对象身份非空。
 - `AbortSignal` 同时覆盖请求创建和流迭代。
 - 标准字段与未知扩展字段没有被静默删除。

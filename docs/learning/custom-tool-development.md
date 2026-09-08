@@ -20,7 +20,7 @@
 
 ```ts
 import { z } from 'zod'
-import { defineTool } from '../common-agent'
+import { defineTool } from '../craft-agent'
 
 export const echoTool = defineTool({
   name: 'echo',
@@ -42,7 +42,7 @@ export const echoTool = defineTool({
 })
 ```
 
-需要网络、数据库或其他依赖时，优先通过闭包注入。不要从 CommonAgent 获取全局 service locator。
+需要网络、数据库或其他依赖时，优先通过闭包注入。不要从 CraftAgent 获取全局 service locator。
 
 ## 3. 加入静态注册表
 

@@ -11,7 +11,7 @@ import type {
   ModelMessage,
   ModelRequest,
   ModelStreamChunk,
-} from '../..'
+} from '../../contracts'
 import type { OpenAICompatibleRequestParams } from '../openai-compatible'
 import {
   normalizeOpenAICompatibleChunk,

@@ -1,10 +1,12 @@
 import type {
   AppendSessionEventsRequest,
   AppendSessionEventsResult,
+  ListSessionsOptions,
   ReadSessionEventsOptions,
   SessionEvent,
   SessionEventDraft,
   SessionEventPage,
+  SessionListPage,
   SessionStore,
 } from '../contracts'
 import { randomUUID } from 'node:crypto'
@@ -142,6 +144,46 @@ export class MemorySessionStore implements SessionStore {
       nextAfterSequence,
     })
   }
+
+  /** 按首次写入顺序分页列出已有 Session，不复制完整事件历史。 */
+  async list(options: ListSessionsOptions = {}): Promise<SessionListPage> {
+    const limit = options.limit ?? DEFAULT_PAGE_SIZE
+    validatePositiveInteger(limit, 'limit', '')
+    if (limit > MAX_PAGE_SIZE)
+      throw invalidArgument('', `limit 不能超过 ${MAX_PAGE_SIZE}`)
+
+    const entries = [...this.logs.entries()]
+    let startIndex = 0
+    if (options.afterSessionId !== undefined) {
+      validateIdentifier(options.afterSessionId, 'afterSessionId')
+      const cursorIndex = entries.findIndex(([sessionId]) => (
+        sessionId === options.afterSessionId
+      ))
+      if (cursorIndex < 0)
+        throw invalidArgument('', `afterSessionId ${options.afterSessionId} 不存在`)
+      startIndex = cursorIndex + 1
+    }
+
+    const selected = entries.slice(startIndex, startIndex + limit)
+    const sessions = selected.map(([sessionId, events]) => {
+      const created = events[0]
+      if (!created || created.type !== 'session.created')
+        throw invalidArgument(sessionId, 'Session 日志缺少 session.created')
+      return deepFreeze({
+        sessionId,
+        createdAt: created.timestamp,
+        version: events.length,
+        ...(created.metadata ? { metadata: created.metadata } : {}),
+      })
+    })
+    const nextAfterSessionId = sessions.at(-1)?.sessionId
+
+    return deepFreeze({
+      sessions,
+      hasMore: startIndex + selected.length < entries.length,
+      ...(nextAfterSessionId ? { nextAfterSessionId } : {}),
+    })
+  }
 }
 
 /** 新 Session 必须以 session.created 开始，已有 Session 不能再次创建。 */
@@ -179,7 +221,7 @@ function validateDraft(event: SessionEventDraft, sessionId: string): void {
   if ('turnId' in event && event.turnId !== undefined)
     validateIdentifier(event.turnId, 'turnId')
 
-  if(!['session.created', 'message.appended', 'turn.started', 'turn.completed', 'turn.failed', 'turn.cancelled'].includes(event.type))
+  if (!['session.created', 'message.appended', 'turn.started', 'turn.completed', 'turn.failed', 'turn.cancelled'].includes(event.type))
     throw invalidArgument(sessionId, '不支持的 Session Event type')
 }
 
