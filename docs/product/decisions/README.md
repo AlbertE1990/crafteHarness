@@ -5,6 +5,8 @@ ADR 记录重要技术选择及其背景、备选方案和后果。
 - [ADR-0001：采用 Zod 作为工具 Schema 单一来源](./adr-0001-zod-tool-contract.md)
 - [ADR-0002：模型流协议以 OpenAI Chat Completions 为兼容基线](./adr-0002-openai-compatible-model-contract.md)
 - [ADR-0003：官方 Adapter 随项目提供但不进入 Core 依赖](./adr-0003-official-adapter-toolkit.md)
+- [ADR-0004：Session 使用 append-only Event Log](./adr-0004-append-only-session-log.md)
+- [ADR-0005：Agent Loop 使用 Session 驱动的确定性串行状态机](./adr-0005-deterministic-agent-loop.md)
 
 状态使用：
 

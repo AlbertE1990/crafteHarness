@@ -9,6 +9,8 @@
 2. [自定义工具开发实践](./custom-tool-development.md)
 3. [ModelAdapter：从供应商 chunk 到 Agent](./model-adapter.md)
 4. [自定义模型 Adapter 开发实践](./custom-model-adapter.md)
+5. [Session Log：从可变消息数组到事实日志](./session-log.md)
+6. [Agent Loop：从用户输入到确定终态](./agent-loop.md)
 
 每篇学习文档都应给出前置知识、学习目标、源码入口、调试方法和练习，并通过链接引用规范，避免复制
 一份可能漂移的协议定义。

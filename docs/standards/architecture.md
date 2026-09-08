@@ -41,6 +41,19 @@ src/
       model.ts
       model-events.ts
       model-errors.ts
+      session.ts
+    core/
+      types.ts
+      tool-registry.ts
+      agent-loop.ts
+      model-stream.ts
+      run-state.ts
+      stop-policy.ts
+      errors.ts
+    sessions/
+      errors.ts
+      memory-session-store.ts
+      derive-messages.ts
     types/
       json.ts
     tools/
@@ -66,17 +79,6 @@ src/
 ```text
 src/
   common-agent/
-    contracts/
-      session.ts
-      event.ts
-    core/
-      agent-loop.ts
-      run-context.ts
-      stop-policy.ts
-    sessions/
-      session-log.ts
-      derive-messages.ts
-      memory-session-store.ts
     tracing/
       trace-sink.ts
   runtime/
@@ -104,7 +106,7 @@ src/
 - Redis、数据库 ORM 或具体持久化驱动。
 - 应用层会话标题、列表和展示模型。
 
-`src/common-agent` 是项目内的 CommonAgent 产品目录，其中根入口、contracts、types、tools 和 builtins
+`src/common-agent` 是项目内的 CommonAgent 产品目录，其中根入口、contracts、core、sessions、types、tools 和 builtins
 组成 Core；`adapters` 是同目录下独立导出的官方扩展，不属于 Core 依赖图。
 
 OpenAI SDK 现在只由 `src/common-agent/adapters/openai-compatible` 及其供应商差异层使用，其类型不能
@@ -118,7 +120,7 @@ OpenAI SDK 现在只由 `src/common-agent/adapters/openai-compatible` 及其供�
 - **Step**：一次模型请求及其产生的一批工具调用。
 - **Tool Call**：模型要求执行的一个逻辑工具调用；重试期间 callId 不变。
 - **Attempt**：Tool Call 的某一次实际尝试。
-- **Session Event**：未来写入 append-only 日志的持久事实。
+- **Session Event**：写入 append-only 日志的持久事实，拥有 Store 分配的 sequence 和版本。
 - **Live Event**：实时输出但不一定持久化的过程事件。
 
 ## 工具执行主流程
@@ -141,10 +143,10 @@ OpenAI SDK 现在只由 `src/common-agent/adapters/openai-compatible` 及其供�
 
 ## 轨迹与会话方向
 
-当前工具事件是完整轨迹协议的第一部分。后续会区分：
+当前已经区分以下数据：
 
-- append-only `SessionEvent`：模型可见事实、工具调用与结果、审批审计、Turn/Step 边界。
-- `LiveAgentEvent`：模型增量、reasoning 增量、工具进度和状态变化。
+- append-only `SessionEvent`：模型可见消息和基础 Turn 生命周期事实。
+- `AgentEvent`：模型增量、reasoning 增量、工具进度和 Run 状态变化。
 - Trace：耗时、token、重试和异常等诊断数据。
 
 模型真正看到的历史必须能够由 Session Event 推导，不能另外维护一份可能发生偏差的可变消息数组。
@@ -155,9 +157,9 @@ OpenAI SDK 现在只由 `src/common-agent/adapters/openai-compatible` 及其供�
 2. **现有 Server 接入（已完成）**：DeepSeek 对话使用 `DefinedTool.model` 和 `executeTool()`，支持开发自定义工具。
 3. **ModelAdapter（代码已完成）**：供应商无关消息和 OpenAI 兼容流协议，SDK 收进 adapter 边界。
 4. **官方 Adapter 工具包（已完成）**：兼容基类、DeepSeek 差异层、Scripted Adapter 和契约探针。
-5. **Session Log（下一阶段）**：实现内存 append-only store，并从事件推导模型历史。
-6. **Agent Loop**：以 Run/Turn/Step 驱动模型与工具。
-7. **Runtime 与轨迹接口**：Fastify 只负责 HTTP、SSE、审批和轨迹查询。
+5. **Session Log（已完成）**：内存 append-only store、乐观并发、一致性分页和模型历史推导。
+6. **Agent Loop（已完成）**：以 Run/Turn/Step 驱动模型、工具与 Session Store，提供预算、取消和实时事件。
+7. **Runtime 与轨迹接口（下一阶段）**：Fastify 只负责 HTTP、SSE、审批和轨迹查询。
 8. **诊断与长期强化**：补充服务端异常日志；核心功能稳定后再评估第三方信任、幂等审查和沙箱。
 
 每个阶段必须先通过单元测试和契约测试，再迁移下一层。

@@ -42,9 +42,9 @@ describe('server tools through CommonAgent', () => {
 
   it('derives every model tool schema from its registered definition', () => {
     expect(serverTools.map(tool => tool.model.name)).toEqual([
-      'get_time',
       'get_user_location',
       'get_weather',
+      'get_current_time',
     ])
 
     for (const tool of serverTools) {
@@ -79,11 +79,8 @@ describe('server tools through CommonAgent', () => {
     })
   })
 
-  it('executes the time tool through the CommonAgent result contract', async () => {
-    const result = await invokeServerTool('get_time', {
-      amount: 0,
-      unit: 'day',
-      preset: null,
+  it('executes the built-in time tool through the CommonAgent result contract', async () => {
+    const result = await invokeServerTool('get_current_time', {
       timezone: 'Asia/Shanghai',
     })
 
@@ -92,7 +89,7 @@ describe('server tools through CommonAgent', () => {
       attempts: 1,
       value: {
         timezone: 'Asia/Shanghai',
-        label: expect.stringContaining('今天'),
+        currentDatetime: expect.stringContaining('+08:00'),
       },
     })
   })

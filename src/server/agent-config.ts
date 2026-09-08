@@ -1,7 +1,8 @@
+import { loadEnvFile } from 'node:process'
+
 import type { ModelAdapter, ToolEventListener } from '../common-agent'
 import type { DeepSeekModelAdapterConfig, DeepSeekThinkingMode } from '../common-agent/adapters/deepseek'
 import type { OpenAICompatibleModelAdapterConfig } from '../common-agent/adapters/openai-compatible'
-import process from 'node:process'
 import { DeepSeekModelAdapter } from '../common-agent/adapters/deepseek'
 import { OpenAICompatibleModelAdapter } from '../common-agent/adapters/openai-compatible'
 
@@ -76,7 +77,8 @@ export class AgentConfig {
 
   /** 从进程环境创建当前服务的完整配置。 */
   static fromEnv(overrides: AgentEnvironmentOverrides = {}): AgentConfig {
-    const apiKey = process.env.DEEPSEEK_API_KEY
+    loadEnvFile('.env.local')
+    const apiKey = process.env.DEEPSEEK_API_KEY?.trim()
     if (!apiKey)
       throw new Error('缺少环境变量 DEEPSEEK_API_KEY')
 

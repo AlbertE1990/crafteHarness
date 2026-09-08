@@ -18,9 +18,9 @@ flowchart LR
   P1[阶段 1<br/>Tool Harness<br/>已完成] --> P11[阶段 1.1<br/>接入现有 Server<br/>已完成]
   P11 --> P2[阶段 2<br/>ModelAdapter<br/>代码已完成]
   P2 --> P21[阶段 2.1<br/>官方 Adapter 工具包<br/>已完成]
-  P21 --> P3[阶段 3<br/>Session Log<br/>下一阶段]
-  P3 --> P4[阶段 4<br/>Agent Loop]
-  P4 --> P5[阶段 5<br/>Runtime 与轨迹接口]
+  P21 --> P3[阶段 3<br/>Session Log<br/>已完成]
+  P3 --> P4[阶段 4<br/>Agent Loop<br/>已完成]
+  P4 --> P5[阶段 5<br/>Runtime 与轨迹接口<br/>下一阶段]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -91,27 +91,39 @@ flowchart LR
 详细交付见[阶段 2.1 记录](./deliveries/delivery-004-official-adapter-toolkit.md)，设计依据见
 [ADR-0003](./decisions/adr-0003-official-adapter-toolkit.md)。
 
-## 7. 阶段 3：Session Log（下一阶段）
+## 7. 阶段 3：Session Log（已完成）
 
-计划范围：
+已完成范围：
 
 - 定义 append-only `SessionEvent`。
-- 先实现内存 `SessionStore`，不接具体数据库。
+- 实现内存 `SessionStore`，不接具体数据库。
 - 从事件推导模型消息，而不是维护第二份可变消息数组。
-- 区分持久事实、实时事件和诊断 Trace。
-- 定义并发追加、版本检查、分页和恢复语义。
+- 使用批量原子追加和 `expectedVersion` 乐观并发。
+- 分页读取固定 `throughVersion`，得到一致性快照。
+- 事件通过 JSON 序列化边界复制并冻结。
+- 提供稳定错误、离线测试、协议规范和学习文档。
 
-## 8. 阶段 4：Agent Loop
+详细交付见[阶段 3 记录](./deliveries/delivery-005-session-log.md)，设计依据见
+[ADR-0004](./decisions/adr-0004-append-only-session-log.md)。
 
-计划范围：
+## 8. 阶段 4：Agent Loop（已完成）
+
+已完成范围：
 
 - 建立 Run、Turn、Step、Tool Call 和 Attempt 状态模型。
 - 串联 ModelAdapter、Tool Harness 与 Session Store。
-- 支持最大 Step、最大工具调用、token/时间预算和取消。
-- 定义停止原因，防止无限循环。
-- 明确并行工具调用、失败回写和重放语义。
+- 支持最大 Step、最大工具调用、每 Step completion token、总 token、时间预算和取消。
+- 定义 completed/stopped/failed 终态与稳定停止原因，防止无限循环。
+- 从 Session 固定快照生成每次模型请求，并通过 expectedVersion 阻止旧上下文结果写入。
+- 组装流式 reasoning、content、usage 和分片 Tool Call。
+- 工具按 index 串行执行；未知工具和 Harness 失败写回模型继续处理。
+- 提供独立于持久化 Session 的实时 Agent Event，观察器异常不影响主链。
+- 明确当前不自动重试模型、并行工具或恢复崩溃后未完成 Tool Call。
 
-## 9. 阶段 5：Runtime 与轨迹接口
+详细交付见[阶段 4 记录](./deliveries/delivery-006-agent-loop.md)，设计依据见
+[ADR-0005](./decisions/adr-0005-deterministic-agent-loop.md)。
+
+## 9. 阶段 5：Runtime 与轨迹接口（下一阶段）
 
 计划范围：
 
@@ -119,6 +131,7 @@ flowchart LR
 - 提供 HTTP/SSE 会话入口和取消入口。
 - 暴露可分页查询的轨迹接口，服务前端调试。
 - Runtime 组装 ModelAdapter、工具、策略、审批和 Store。
+- Runtime 使用 AgentLoop 替代过渡 `src/server/agent.ts`，但 Fastify 和前端类型不进入 CommonAgent 文档协议。
 - 保持前端展示数据不进入 CommonAgent 核心协议。
 
 ## 10. 阶段 6：异常诊断

@@ -6,7 +6,7 @@
 
 ## 1. 这份指南要解决什么
 
-本阶段还没有实现完整 Agent。它实现的是未来 Agent Loop 会依赖的 **Tool Harness（工具执行内核）**。
+本指南聚焦 **Tool Harness（工具执行内核）**。当前 Agent Loop 已经使用该模块，但工具注册与单次调用边界仍可独立学习。
 
 学完本指南，你应该能够回答以下问题：
 
@@ -28,7 +28,7 @@
 
 ### 2.1 CommonAgent 最终所处的位置
 
-下面是最终目标，不代表所有模块都已经实现：
+下面是整体目标；Agent Core、模型、Session 和内存 Store 已实现，Runtime 轨迹接口和数据库 Store 仍在规划中：
 
 ```mermaid
 flowchart TB
@@ -49,11 +49,11 @@ flowchart TB
 
   classDef current fill:#d9f7be,stroke:#389e0d,color:#000;
   classDef planned fill:#fff7e6,stroke:#d48806,color:#000;
-  class ToolHarness,AppTools current;
-  class UI,Runtime,Agent,Approval,TraceUI,ModelPort,SessionPort,DeepSeek,SDK,Memory,Database planned;
+  class ToolHarness,AppTools,Agent,ModelPort,SessionPort,DeepSeek,SDK,Memory current;
+  class UI,Runtime,Approval,TraceUI,Database planned;
 ```
 
-图中绿色部分是本阶段的新实现。黄色部分是目标架构中的后续能力。
+图中绿色部分已经实现；黄色部分仍由后续 Runtime 和 Store 阶段完成。
 
 ### 2.2 本阶段只有两条主线
 
@@ -63,14 +63,14 @@ flowchart LR
   Definition --> Register[defineTool 注册期]
   Register --> Defined[DefinedTool]
 
-  Caller[未来 Agent Loop / 当前测试] --> Execute[executeTool 调用期]
+  Caller[Agent Loop / 独立测试] --> Execute[executeTool 调用期]
   Defined --> Execute
   Execute --> Result[ToolExecutionResult]
   Execute --> Events[ToolExecutionEvent]
 ```
 
 - **注册期**：应用启动或组装 Runtime 时调用 `defineTool()`，提前发现工具定义错误。
-- **调用期**：模型产生工具调用后，由未来 Agent Loop 调用 `executeTool()`。
+- **调用期**：模型产生工具调用后，由 Agent Loop 通过 `createAgentTool()` 包装入口调用 `executeTool()`。
 
 不要把两者混为一谈。`defineTool()` 不执行业务；`executeTool()` 也不会重新设计工具协议。
 
@@ -359,7 +359,7 @@ flowchart LR
   PublicError --> Failure
   OutputError --> Failure
 
-  Result --> Caller[未来 Agent Loop]
+  Result --> Caller[Agent Loop]
   Failure --> Caller
 ```
 
@@ -375,7 +375,7 @@ unknown 原始输入 -> 校验后的类型化输入 -> 未校验的业务返回 
 
 ```mermaid
 sequenceDiagram
-  participant L as Agent Loop（未来）
+  participant L as Agent Loop
   participant H as executeTool
   participant Z as Zod
   participant P as ToolPolicy
@@ -709,8 +709,6 @@ TypeScript 类型在编译后消失，模型传入的是运行时 `unknown`。Zo
 
 尚未完成：
 
-- Agent Loop、步数预算和停止条件。
-- append-only Session Log 和消息推导。
 - 完整 Trace、服务端异常堆栈日志与脱敏管线。
 - 轨迹查询 API、SSE 协议和前端调试视图。
 - 文件、网络、数据库和 Shell 等高风险内置工具。
@@ -723,5 +721,8 @@ TypeScript 类型在编译后消失，模型传入的是运行时 `unknown`。Zo
 - 统一 `AgentConfig`、Scripted 测试 Adapter 与契约探针。详见
   [阶段 2 交付记录](../product/deliveries/delivery-003-model-adapter.md)和
   [阶段 2.1 交付记录](../product/deliveries/delivery-004-official-adapter-toolkit.md)。
+- append-only Session Log、乐观并发和模型消息推导。
+- Agent Loop、流式工具调用组装、预算、取消、停止原因和实时事件。详见
+  [Agent Loop 学习指南](./agent-loop.md)。
 
-掌握这一边界后再进入下一阶段，可以避免误以为“工具能独立运行”等于“通用 Agent 已经完成”。
+掌握这一边界后继续阅读 Agent Loop，可以看到工具怎样进入完整模型循环，同时仍保持独立协议。

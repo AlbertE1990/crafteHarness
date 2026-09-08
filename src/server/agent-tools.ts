@@ -6,7 +6,7 @@ import type {
   ToolPolicy,
 } from '../common-agent'
 import { z } from 'zod'
-import { defineTool, executeTool } from '../common-agent'
+import { createCurrentTimeTool, defineTool, executeTool } from '../common-agent'
 import { getTime, getUserLocation, getWeather } from './func'
 
 const timeUnits = ['day', 'week', 'month', 'year'] as const
@@ -180,9 +180,10 @@ export function createServerToolRegistration<
  * `tool.model` 发送给模型，并通过 CommonAgent Harness 执行对应实现。
  */
 export const serverTools = Object.freeze([
-  createServerToolRegistration(getTimeTool),
+  // createServerToolRegistration(getTimeTool),
   createServerToolRegistration(getUserLocationTool),
   createServerToolRegistration(getWeatherTool),
+  createServerToolRegistration(createCurrentTimeTool()),
 ] as const)
 
 /** 当前服务工具定义的联合类型。 */

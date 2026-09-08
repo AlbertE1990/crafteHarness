@@ -8,6 +8,8 @@
 - [开发与代码规范](./development-conventions.md)：公共 API、参数、命名、注释和错误措辞。
 - [工具协议](./protocols/tool.md)：工具定义、校验、权限、重试、超时和事件。
 - [模型 Adapter 协议](./protocols/model-adapter.md)：消息、兼容 chunk、官方 Adapter 分层、测试入口和供应商边界。
+- [Session Log 协议](./protocols/session-log.md)：append-only 事实、乐观并发、一致性分页和消息推导。
+- [Agent Loop 协议](./protocols/agent-loop.md)：Run/Turn/Step、模型流组装、工具调度、预算、终态和实时事件。
 - [安全与信任模型](./security/trust-model.md)：当前威胁模型和长期隔离边界。
 - [Server Runtime 接入规范](./integrations/server-runtime.md)：现有 Fastify Runtime 的组装边界。
 
