@@ -39,7 +39,7 @@ src/
     core/                       # AgentLoop 状态机、预算与工具注册
     sessions/                   # append-only 内存 Store 与消息推导
     tools/                      # defineTool、Harness、策略、重试和错误
-    builtins/                   # 常用安全内置工具
+    builtins/                   # 默认工具实现、名称与自动注册表
     types/                      # JSON 基础类型
 
   server/

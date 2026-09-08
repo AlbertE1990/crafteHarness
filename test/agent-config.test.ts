@@ -1,8 +1,29 @@
 // @vitest-environment node
 
 import { describe, expect, it } from 'vitest'
-import { Agent, defineAgentConfig } from '../src/craft-agent'
+import { z } from 'zod'
+import {
+  Agent,
+  defineAgentConfig,
+  defineTool,
+  defineTools,
+} from '../src/craft-agent'
 import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
+
+/** 创建配置测试使用的最小安全工具。 */
+function createTestTool(name: string) {
+  const [tool] = defineTools(defineTool({
+    name,
+    description: `${name} 测试工具`,
+    inputSchema: z.strictObject({}),
+    outputSchema: z.strictObject({ name: z.string() }),
+    security: { risk: 'safe', capabilities: [], idempotent: true },
+    execute: () => ({ name }),
+  }))
+  if (!tool)
+    throw new Error(`测试工具 ${name} 创建失败`)
+  return tool
+}
 
 describe('agent config', () => {
   it('keeps agent and model settings under one configuration root', () => {
@@ -75,5 +96,88 @@ describe('agent config', () => {
 
     expect(agent.store).toBe(agent.config.store)
     expect(agent.limits).toEqual({ maxModelSteps: 8, maxToolCalls: 32 })
+  })
+
+  it('automatically registers all built-in tools by default', () => {
+    const config = defineAgentConfig({
+      model: new ScriptedModelAdapter({ script: [] }),
+    })
+
+    expect(config.tools.map(tool => tool.name)).toEqual([
+      'get_current_time',
+      'calculator',
+    ])
+    expect(Object.isFrozen(config.tools)).toBe(true)
+  })
+
+  it('can disable a built-in tool and append application tools', () => {
+    const weather = createTestTool('get_weather')
+    const config = defineAgentConfig({
+      model: new ScriptedModelAdapter({ script: [] }),
+      tools: {
+        disabledBuiltins: ['calculator'],
+        additional: [weather],
+      },
+    })
+
+    expect(config.tools.map(tool => tool.name)).toEqual([
+      'get_current_time',
+      'get_weather',
+    ])
+  })
+
+  it('can explicitly override one built-in tool', () => {
+    const calculator = createTestTool('calculator')
+    const config = defineAgentConfig({
+      model: new ScriptedModelAdapter({ script: [] }),
+      tools: {
+        overrides: { calculator },
+      },
+    })
+
+    expect(config.tools.map(tool => tool.name)).toEqual([
+      'get_current_time',
+      'calculator',
+    ])
+    expect(config.tools[1]).toBe(calculator)
+  })
+
+  it('can replace the complete built-in tool collection', () => {
+    const custom = createTestTool('only_custom_tool')
+    const config = defineAgentConfig({
+      model: new ScriptedModelAdapter({ script: [] }),
+      tools: {
+        mode: 'replace',
+        tools: [custom],
+      },
+    })
+
+    expect(config.tools).toEqual([custom])
+  })
+
+  it('rejects ambiguous or duplicate tool configuration', () => {
+    const calculator = createTestTool('calculator')
+    expect(() => defineAgentConfig({
+      model: new ScriptedModelAdapter({ script: [] }),
+      tools: {
+        disabledBuiltins: ['calculator'],
+        overrides: { calculator },
+      },
+    })).toThrow('不能同时禁用和覆盖')
+
+    expect(() => defineAgentConfig({
+      model: new ScriptedModelAdapter({ script: [] }),
+      tools: {
+        additional: [calculator],
+      },
+    })).toThrow('Agent 工具名称重复：calculator')
+
+    const wrongName = createTestTool('business_calculator')
+    expect(() => defineAgentConfig({
+      model: new ScriptedModelAdapter({ script: [] }),
+      tools: {
+        overrides: { calculator: wrongName },
+      },
+    })).toThrow('覆盖实现必须使用相同名称')
   })
 })

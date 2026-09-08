@@ -48,7 +48,9 @@ const agent = new Agent({
     baseURL: 'https://example.com/v1',
     model: 'example-model',
   },
-  tools: defineTools(echoTool),
+  tools: {
+    additional: defineTools(echoTool),
+  },
   limits: { maxModelSteps: 8, maxToolCalls: 16 },
 })
 
@@ -76,7 +78,8 @@ flowchart TD
   Config[AgentConfigInput] --> Normalize[defineAgentConfig]
   Normalize --> Adapter[ModelAdapter]
   Normalize --> Store[SessionStore]
-  Normalize --> Tools[AgentTool 数组]
+  Builtins[默认内置工具] --> Normalize
+  Normalize --> Tools[最终 AgentTool 数组]
   Request[Agent.run 输入] --> SessionId[复用或生成 sessionId]
   SessionId --> Loop[AgentLoop]
   Adapter --> Loop
@@ -119,6 +122,8 @@ sequenceDiagram
 
 - `defineAgentConfig()` 不是环境变量加载器；它只处理已经交给它的数据。
 - `defineTools()` 不执行工具，也不绕过 `executeTool()`。
+- 不配置 `tools` 不代表没有工具；Agent 会自动装载时间和计算器。
+- `tools.additional` 只追加应用工具；完全不使用内置工具时显式选择 `mode: 'replace'`。
 - `session.started` 表示本次 run 已确定 Session ID，不保证它此前不存在。
 - `listSessions()` 来自 Store 目录，不维护第二份 Server 内存索引。
 - `onEvent/onTrace` 是观察旁路，不能拿来修改控制流。

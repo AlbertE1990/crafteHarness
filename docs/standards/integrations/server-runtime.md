@@ -29,7 +29,9 @@ const agent = new Agent({
     baseURL,
     model,
   },
-  tools: serverTools,
+  tools: {
+    additional: serverTools,
+  },
   toolPolicy: trustedServerToolPolicy,
 })
 
@@ -38,7 +40,8 @@ const app = createServerApp({ agent })
 
 - 环境变量只在 Runtime 启动边界读取，CraftAgent 不读取 `process.env`。
 - 一个进程复用一个 Agent，确保默认 MemorySessionStore 能跨请求保留 Session。
-- 应用工具使用 `defineTool()`，再由 `defineTools()` 组成静态注册表。
+- `get_current_time` 和 `calculator` 由 Agent 自动装载，不进入 Server 工具注册表。
+- 应用工具使用 `defineTool()`，再由 `defineTools()` 组成静态注册表，通过 `tools.additional` 追加。
 - 当前许可策略只适用于代码仓库内受信第一方工具，不代表第三方插件安全边界。
 
 ## 4. 请求与取消

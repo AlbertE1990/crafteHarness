@@ -45,7 +45,8 @@
 - 工具具有 Zod 输入输出边界、权限、审批、超时、幂等重试和执行事件。
 - 模型具有供应商无关消息、OpenAI 兼容标准 chunk、非流式结果、用量和错误协议。
 - OpenAI SDK 仅存在于官方 Adapter；Core 不依赖 SDK，DeepSeek 只维护供应商差异。
-- `new Agent(config)` 可直接组装内置模型、自定义 Adapter、工具、Store、预算和事件观察器。
+- `new Agent(config)` 可直接组装内置模型、自定义 Adapter、Store、预算和事件观察器，并自动装载安全内置工具。
+- 工具配置支持禁用或覆盖指定内置工具、整体替换内置集合，以及只追加应用工具。
 - `defineAgentConfig()` 可显式提前校验配置，`defineTools()` 可一次组装异构工具。
 - Scripted Adapter 与契约探针为应用和 Adapter 开发提供无网络测试入口。
 - Session 使用 append-only 事件、乐观并发和一致性分页，并可确定性推导模型历史。

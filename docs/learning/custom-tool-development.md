@@ -44,21 +44,36 @@ export const echoTool = defineTool({
 
 需要网络、数据库或其他依赖时，优先通过闭包注入。不要从 CraftAgent 获取全局 service locator。
 
-## 3. 加入静态注册表
+## 3. 加入应用工具注册表
 
 在 `src/server/agent-tools.ts` 中加入定义：
 
 ```ts
-export const serverTools = Object.freeze([
-  createServerToolRegistration(getTimeTool),
-  createServerToolRegistration(getUserLocationTool),
-  createServerToolRegistration(getWeatherTool),
-  createServerToolRegistration(echoTool),
-] as const)
+export const serverTools = defineTools(
+  getUserLocationTool,
+  getWeatherTool,
+  echoTool,
+)
 ```
 
-不需要修改独立 JSON Schema、工具名映射或 `agent.ts` 的 switch/case。Agent 会把 `tool.model` 交给
+然后只在 Runtime 中追加这个注册表：
+
+```ts
+const agent = new Agent({
+  model,
+  tools: {
+    additional: serverTools,
+  },
+})
+```
+
+不需要把 `get_current_time`、`calculator` 加入 `serverTools`，它们由 Agent 自动装载；也不需要修改独立
+JSON Schema、工具名映射或 `agent.ts` 的 switch/case。Agent 会把最终集合的 `tool.model` 交给
 ModelAdapter，并在收到同名 Tool Call 时通过 Tool Harness 执行。
+
+如果业务明确不需要某个内置工具，使用 `disabledBuiltins`；如果需要保持工具名和模型用法不变但替换实现，
+使用 `overrides`；测试隔离或严格白名单场景才使用 `mode: 'replace'`。不要把同名工具放进 `additional`，
+因为追加发生名称冲突时 Agent 会在启动阶段拒绝配置。
 
 ## 4. 编写测试
 

@@ -42,8 +42,6 @@ describe('server tools through CraftAgent', () => {
     expect(serverTools.map(tool => tool.model.name)).toEqual([
       'get_user_location',
       'get_weather',
-      'get_current_time',
-      'calculator',
     ])
 
     for (const tool of serverTools) {
@@ -77,21 +75,6 @@ describe('server tools through CraftAgent', () => {
       ok: true,
       value: { text: 'hello' },
       content: '{"text":"hello"}',
-    })
-  })
-
-  it('executes the built-in time tool through the CraftAgent result contract', async () => {
-    const result = await invokeServerTool('get_current_time', {
-      timezone: 'Asia/Shanghai',
-    })
-
-    expect(result).toMatchObject({
-      ok: true,
-      attempts: 1,
-      value: {
-        timezone: 'Asia/Shanghai',
-        currentDatetime: expect.stringContaining('+08:00'),
-      },
     })
   })
 

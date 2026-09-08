@@ -4,6 +4,7 @@ import type {
 import type {
   OpenAICompatibleModelAdapterConfig,
 } from '../adapters/openai-compatible'
+import type { BuiltinToolName } from '../builtins/registry'
 import type {
   ModelAdapter,
   SessionStore,
@@ -21,6 +22,7 @@ import type {
 import { randomUUID } from 'node:crypto'
 import { DeepSeekModelAdapter } from '../adapters/deepseek'
 import { OpenAICompatibleModelAdapter } from '../adapters/openai-compatible'
+import { builtinToolNames, createBuiltinTools } from '../builtins/registry'
 import { createLimits } from '../core/stop-policy'
 import { MemorySessionStore } from '../sessions'
 
@@ -51,10 +53,28 @@ export type AgentModelInput
     | CustomAgentModelConfig
     | ModelAdapter
 
+/** 保留默认内置工具，并允许对它们进行显式调整和追加。 */
+export interface ExtendAgentToolsConfig {
+  readonly mode?: 'extend'
+  readonly disabledBuiltins?: readonly BuiltinToolName[]
+  readonly overrides?: Readonly<Partial<Record<BuiltinToolName, AgentTool>>>
+  readonly additional?: readonly AgentTool[]
+}
+
+/** 完全跳过默认内置工具，仅注册调用方给出的工具集合。 */
+export interface ReplaceAgentToolsConfig {
+  readonly mode: 'replace'
+  readonly tools: readonly AgentTool[]
+}
+
+/** Agent 工具配置：默认扩展内置集合，也可以显式整体替换。 */
+export type AgentToolsInput = ExtendAgentToolsConfig | ReplaceAgentToolsConfig
+
 /** 创建 CraftAgent 时由开发者提供的单一配置根。 */
 export interface AgentConfigInput {
   readonly model: AgentModelInput
-  readonly tools?: readonly AgentTool[]
+  /** 未配置时自动装载全部内置工具。 */
+  readonly tools?: AgentToolsInput
   /** 默认使用进程内 MemorySessionStore；生产环境应注入持久化实现。 */
   readonly store?: SessionStore
   readonly systemPrompt?: string
@@ -97,8 +117,6 @@ export interface DefinedAgentConfig {
 export function defineAgentConfig(input: AgentConfigInput): DefinedAgentConfig {
   if (typeof input !== 'object' || input === null)
     throw new TypeError('Agent 配置必须是对象')
-  if (input.tools !== undefined && !Array.isArray(input.tools))
-    throw new TypeError('Agent config.tools 必须是数组')
   if (input.store !== undefined
     && (typeof input.store.append !== 'function'
       || typeof input.store.read !== 'function')) {
@@ -112,6 +130,7 @@ export function defineAgentConfig(input: AgentConfigInput): DefinedAgentConfig {
     throw new TypeError('Agent config.createSessionId 必须是函数')
 
   const model = createModelAdapter(input.model)
+  const tools = createTools(input.tools)
   const limits = createLimits(input.limits)
   const systemPrompt = input.systemPrompt?.trim()
   const now = input.now ?? (() => new Date())
@@ -120,7 +139,7 @@ export function defineAgentConfig(input: AgentConfigInput): DefinedAgentConfig {
 
   return Object.freeze({
     model,
-    tools: Object.freeze([...(input.tools ?? [])]),
+    tools,
     store: input.store ?? new MemorySessionStore({ now }),
     ...(systemPrompt ? { systemPrompt } : {}),
     limits,
@@ -134,6 +153,94 @@ export function defineAgentConfig(input: AgentConfigInput): DefinedAgentConfig {
     ...(input.createId ? { createId: input.createId } : {}),
     createSessionId,
   })
+}
+
+/** 将工具选择配置解析为 AgentLoop 可直接消费的最终只读集合。 */
+function createTools(input: AgentToolsInput | undefined): readonly AgentTool[] {
+  if (input === undefined)
+    return createBuiltinTools()
+  if (typeof input !== 'object' || input === null || Array.isArray(input))
+    throw new TypeError('Agent config.tools 必须是工具配置对象')
+
+  if (input.mode === 'replace') {
+    rejectReplaceOnlyFields(input)
+    if (!Array.isArray(input.tools))
+      throw new TypeError('Agent config.tools.tools 必须是数组')
+    return freezeUniqueTools(input.tools)
+  }
+  if (input.mode !== undefined && input.mode !== 'extend')
+    throw new TypeError('Agent config.tools.mode 必须是 extend 或 replace')
+
+  const extend = input as ExtendAgentToolsConfig
+  if (extend.disabledBuiltins !== undefined
+    && !Array.isArray(extend.disabledBuiltins)) {
+    throw new TypeError('Agent config.tools.disabledBuiltins 必须是数组')
+  }
+  if (extend.additional !== undefined && !Array.isArray(extend.additional))
+    throw new TypeError('Agent config.tools.additional 必须是数组')
+  if (extend.overrides !== undefined
+    && (typeof extend.overrides !== 'object'
+      || extend.overrides === null
+      || Array.isArray(extend.overrides))) {
+    throw new TypeError('Agent config.tools.overrides 必须是对象')
+  }
+
+  const builtinNames = new Set<string>(builtinToolNames)
+  const disabled = new Set<string>()
+  for (const name of extend.disabledBuiltins ?? []) {
+    if (!builtinNames.has(name))
+      throw new TypeError(`未知的内置工具：${name}`)
+    disabled.add(name)
+  }
+
+  const overrides = extend.overrides ?? {}
+  for (const name of Object.keys(overrides)) {
+    if (!builtinNames.has(name))
+      throw new TypeError(`不能覆盖未知的内置工具：${name}`)
+    if (disabled.has(name))
+      throw new TypeError(`内置工具不能同时禁用和覆盖：${name}`)
+    const tool = overrides[name as BuiltinToolName]
+    if (!tool || tool.name !== name)
+      throw new TypeError(`内置工具 ${name} 的覆盖实现必须使用相同名称`)
+  }
+
+  const builtins = createBuiltinTools()
+  const resolved = builtins.flatMap((tool) => {
+    if (disabled.has(tool.name))
+      return []
+    const name = tool.name as BuiltinToolName
+    const override = Object.hasOwn(overrides, name) ? overrides[name] : undefined
+    return [override ?? tool]
+  })
+  resolved.push(...(extend.additional ?? []))
+  return freezeUniqueTools(resolved)
+}
+
+/** replace 是互斥模式，运行时也拒绝混入 extend 专属字段。 */
+function rejectReplaceOnlyFields(input: ReplaceAgentToolsConfig): void {
+  const value = input as ReplaceAgentToolsConfig & {
+    readonly disabledBuiltins?: unknown
+    readonly overrides?: unknown
+    readonly additional?: unknown
+  }
+  if (value.disabledBuiltins !== undefined
+    || value.overrides !== undefined
+    || value.additional !== undefined) {
+    throw new TypeError('Agent config.tools 的 replace 模式不能配置禁用、覆盖或追加字段')
+  }
+}
+
+/** 冻结工具集合，并在 Agent 启动阶段拒绝空名称和任何重复注册。 */
+function freezeUniqueTools(tools: readonly AgentTool[]): readonly AgentTool[] {
+  const names = new Set<string>()
+  for (const tool of tools) {
+    if (typeof tool !== 'object' || tool === null || typeof tool.name !== 'string' || !tool.name.trim())
+      throw new TypeError('Agent 工具必须提供非空名称')
+    if (names.has(tool.name))
+      throw new TypeError(`Agent 工具名称重复：${tool.name}`)
+    names.add(tool.name)
+  }
+  return Object.freeze([...tools])
 }
 
 /** 将声明式供应商配置或自定义实现统一转换为 ModelAdapter。 */

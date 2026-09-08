@@ -7,6 +7,7 @@ ADR 记录重要技术选择及其背景、备选方案和后果。
 - [ADR-0003：官方 Adapter 随项目提供但不进入 Core 依赖](./adr-0003-official-adapter-toolkit.md)
 - [ADR-0004：Session 使用 append-only Event Log](./adr-0004-append-only-session-log.md)
 - [ADR-0005：Agent Loop 使用 Session 驱动的确定性串行状态机](./adr-0005-deterministic-agent-loop.md)
+- [ADR-0006：Agent 默认装载安全内置工具](./adr-0006-agent-default-builtin-tools.md)
 
 状态使用：
 

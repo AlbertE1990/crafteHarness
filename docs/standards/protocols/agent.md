@@ -19,10 +19,14 @@ const agent = new Agent({
     provider: 'deepseek',
     apiKey: process.env.DEEPSEEK_API_KEY!,
   },
-  tools: defineTools(myTool),
+  tools: {
+    additional: defineTools(myTool),
+  },
   systemPrompt: '你是一个可靠的助手。',
 })
 ```
+
+未提供 `tools` 时，Agent 自动注册 `get_current_time` 和 `calculator` 两个安全内置工具。
 
 `model` 接受三种形式：
 
@@ -39,7 +43,7 @@ const agent = new Agent({
 
 - 模型声明转换为 `ModelAdapter`。
 - `limits` 由 AgentLoop 的同一规则补齐并校验。
-- 工具数组复制并冻结。
+- 工具配置解析为包含内置、覆盖和应用追加工具的最终只读数组。
 - 未传 Store 时创建 `MemorySessionStore`。
 - 未传 Session ID 生成器时使用 Node.js `randomUUID()`。
 - 不读取 `process.env`，不替调用方决定密钥来源。
@@ -53,10 +57,44 @@ const agent = new Agent({
 
 ```ts
 const tools = defineTools(weatherTool, calculatorTool)
-const agent = new Agent({ model, tools })
+const agent = new Agent({
+  model,
+  tools: { additional: tools },
+})
 ```
 
 这只是泛型擦除与不可变数组边界；执行仍然经过 Tool Harness 的输入输出校验、策略、超时和重试。
+
+`AgentConfigInput.tools` 使用两种互斥模式：
+
+- 省略 `mode` 或使用 `mode: 'extend'`：以全部内置工具为基础，可以通过 `disabledBuiltins` 禁用、
+  通过 `overrides` 覆盖，并通过 `additional` 追加应用工具。
+- 使用 `mode: 'replace'`：完全跳过内置工具，只注册 `tools` 指定的集合。
+
+```ts
+const agent = new Agent({
+  model,
+  tools: {
+    disabledBuiltins: ['get_current_time'],
+    overrides: {
+      calculator: customCalculator,
+    },
+    additional: defineTools(weatherTool),
+  },
+})
+
+const isolatedAgent = new Agent({
+  model,
+  tools: {
+    mode: 'replace',
+    tools: defineTools(weatherTool),
+  },
+})
+```
+
+解析顺序固定为“默认内置 → 禁用 → 覆盖 → 追加”。同一内置工具不能同时禁用和覆盖；覆盖实现必须使用
+被覆盖工具的同一名称；追加工具不能与最终集合重名。需要同名替换时必须使用 `overrides`，禁止静默覆盖。
+`replace` 模式不能混入禁用、覆盖或追加字段。
 
 ## 5. 运行与事件
 

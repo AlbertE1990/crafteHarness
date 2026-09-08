@@ -24,7 +24,9 @@ const agent = new Agent({
     maxToolCalls: 16,
     maxDurationMs: 120_000,
   },
-  tools: serverTools,
+  tools: {
+    additional: serverTools,
+  },
   toolPolicy: trustedServerToolPolicy,
 })
 const fastify = createServerApp({ agent })

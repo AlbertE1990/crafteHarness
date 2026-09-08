@@ -21,7 +21,8 @@ flowchart LR
   P21 --> P3[阶段 3<br/>Session Log<br/>已完成]
   P3 --> P4[阶段 4<br/>Agent Loop<br/>已完成]
   P4 --> P41[阶段 4.1<br/>CraftAgent 门面<br/>已完成]
-  P41 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
+  P41 --> P42[阶段 4.2<br/>内置工具自动装载<br/>已完成]
+  P42 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -137,7 +138,19 @@ flowchart LR
 
 详细交付见[阶段 4.1 记录](./deliveries/delivery-007-agent-facade.md)。
 
-## 10. 阶段 5：轨迹持久化与查询（下一阶段）
+## 10. 阶段 4.2：Agent 内置工具自动装载（已完成）
+
+已完成范围：
+
+- Agent 默认装载 `get_current_time` 和 `calculator`。
+- 工具配置支持禁用、显式同名覆盖、追加和整体替换。
+- 配置阶段拒绝歧义组合与静默名称覆盖。
+- Server 工具注册表只保留应用拥有的定位和天气工具。
+
+详细交付见[阶段 4.2 记录](./deliveries/delivery-008-default-builtin-tools.md)，设计依据见
+[ADR-0006](./decisions/adr-0006-agent-default-builtin-tools.md)。
+
+## 11. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -147,7 +160,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 CraftAgent 核心协议。
 
-## 11. 阶段 6：异常诊断
+## 12. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -160,7 +173,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 12. 阶段 7：长期安全与扩展（最低优先级）
+## 13. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

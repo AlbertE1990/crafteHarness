@@ -23,7 +23,9 @@ function chunk(
 function createAgent(adapter: ScriptedModelAdapter): Agent {
   return new Agent({
     model: adapter,
-    tools: serverTools,
+    tools: {
+      additional: serverTools,
+    },
     toolPolicy: trustedServerToolPolicy,
     systemPrompt: '你是一个AI助手',
     createSessionId: () => 'generated-conversation',
@@ -56,7 +58,12 @@ describe('agent runtime model adapter boundary', () => {
       { role: 'system', content: '你是一个AI助手' },
       { role: 'user', content: '你好' },
     ])
-    expect(adapter.calls[0]?.request.tools).toHaveLength(4)
+    expect(adapter.calls[0]?.request.tools?.map(tool => tool.name)).toEqual([
+      'get_current_time',
+      'calculator',
+      'get_user_location',
+      'get_weather',
+    ])
     expect(events).toContainEqual({
       type: 'message.delta',
       sessionId: 'adapter-test-conversation',

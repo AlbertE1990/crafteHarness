@@ -3,8 +3,6 @@ import type {
 } from '../craft-agent'
 import { z } from 'zod'
 import {
-  createCalculatorTool,
-  createCurrentTimeTool,
   defineTool,
   defineTools,
 } from '../craft-agent'
@@ -95,8 +93,6 @@ export const getWeatherTool = defineTool({
 export const serverTools = defineTools(
   getUserLocationTool,
   getWeatherTool,
-  createCurrentTimeTool(),
-  createCalculatorTool(),
 )
 
 /**

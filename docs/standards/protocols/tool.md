@@ -181,22 +181,19 @@ Tool Harness 按顺序发送：
 
 ## 内置工具
 
-框架提供但不会自动注册：
+`Agent` 默认自动注册两个无外部服务依赖的安全工具：
 
 ```ts
-import {
-  createCalculatorTool,
-  createCurrentTimeTool,
-} from '../src/craft-agent'
-
-const tools = [
-  createCurrentTimeTool(),
-  createCalculatorTool(),
-]
+const agent = new Agent({ model })
 ```
 
 - `get_current_time`：支持 IANA 时区，可注入 Clock 做确定性测试。
 - `calculator`：使用结构化运算，不使用 `eval()` 或动态代码执行。
+
+应用可以通过 `AgentConfigInput.tools` 禁用、覆盖或整体替换内置集合，也可以使用 `additional` 只追加工具。
+`createCurrentTimeTool()` 和 `createCalculatorTool()` 继续导出，用于直接使用 Tool Harness、编写测试或构造
+同名覆盖实现，但应用 Runtime 不需要为了启用默认能力而手动导入它们。具体配置见
+[Agent 门面协议](./agent.md#4-工具组装)。
 
 天气和 IP 定位依赖外部服务且存在隐私语义，保留为应用示例而不是通用内置工具。文件、网络和 Shell 工具将在权限与沙箱边界稳定后再考虑。
 
