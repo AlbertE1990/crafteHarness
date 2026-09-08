@@ -70,6 +70,7 @@ export function normalizeSessionError(error: unknown, sessionId: string): AgentR
         sessionId: error.sessionId ?? sessionId,
         ...(error.expectedVersion === undefined ? {} : { expectedVersion: error.expectedVersion }),
         ...(error.actualVersion === undefined ? {} : { actualVersion: error.actualVersion }),
+        ...(error.operation === undefined ? {} : { operation: error.operation }),
       },
     }
   }

@@ -8,6 +8,7 @@ import {
   deriveModelMessages,
   MemorySessionStore,
   readSessionSnapshot,
+  SessionStoreError,
 } from '../src/craft-agent'
 import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
 
@@ -457,6 +458,40 @@ describe('agent loop', () => {
       status: 'failed',
       stopReason: 'session_error',
       error: { code: 'SESSION_VERSION_CONFLICT' },
+    })
+    expect(adapter.calls).toHaveLength(0)
+  })
+
+  it('classifies external persistence failures as session errors', async () => {
+    const memory = createStore()
+    let reads = 0
+    const store: SessionStore = {
+      append: request => memory.append(request),
+      async read(sessionId, options) {
+        reads += 1
+        if (reads > 1) {
+          throw new SessionStoreError({
+            code: 'SESSION_OPERATION_FAILED',
+            message: '数据库暂时不可用',
+            sessionId,
+            operation: 'read',
+          })
+        }
+        return await memory.read(sessionId, options)
+      },
+    }
+    const adapter = new ScriptedModelAdapter({ script: [] })
+    const loop = new AgentLoop({ model: adapter, store })
+
+    const result = await loop.run({ sessionId: 'session-storage-error', input: '触发存储错误' })
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      stopReason: 'session_error',
+      error: {
+        code: 'SESSION_OPERATION_FAILED',
+        details: { operation: 'read' },
+      },
     })
     expect(adapter.calls).toHaveLength(0)
   })

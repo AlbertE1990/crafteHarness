@@ -154,7 +154,9 @@ export interface SessionListPage {
  * 实现可以使用内存、文件或数据库，但必须保持原子追加、乐观并发和稳定顺序语义。
  */
 export interface SessionStore {
+  /** 原子追加一批事实，并以 expectedVersion 实现乐观并发。 */
   append: (request: AppendSessionEventsRequest) => Promise<AppendSessionEventsResult>
+  /** 按 sequence 读取一个固定版本的事件页；不存在的 Session 返回零版本空页。 */
   read: (
     sessionId: string,
     options?: ReadSessionEventsOptions,
@@ -163,4 +165,9 @@ export interface SessionStore {
    * 可选的会话目录能力。Agent 执行只需要 append/read；列表 API 会在缺少该能力时明确报错。
    */
   list?: (options?: ListSessionsOptions) => Promise<SessionListPage>
+}
+
+/** 明确提供会话目录分页能力的 SessionStore。 */
+export interface SessionCatalogStore extends SessionStore {
+  list: (options?: ListSessionsOptions) => Promise<SessionListPage>
 }

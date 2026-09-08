@@ -7,7 +7,8 @@
 Session Log 是 CraftAgent 的持久事实边界。它使用 append-only 事件记录模型可见消息和 Turn 生命周期，
 并从事件确定性推导下一次模型请求所需的 `ModelMessage[]`。
 
-本协议只定义供应商无关 Store、内存实现和消息推导，不接数据库或前端展示类型。
+本协议定义供应商无关 Store、内存参考实现、外部持久化约束和消息推导，不把数据库、ORM、HTTP 或前端类型
+引入 CraftAgent Core。
 
 ## 2. 核心原则
 
@@ -159,6 +160,10 @@ interface SessionStore {
     options?: ListSessionsOptions,
   ) => Promise<SessionListPage>
 }
+
+interface SessionCatalogStore extends SessionStore {
+  list: (options?: ListSessionsOptions) => Promise<SessionListPage>
+}
 ```
 
 实现要求：
@@ -171,24 +176,112 @@ interface SessionStore {
 - `list()` 是可选目录能力，按首次创建顺序使用 `afterSessionId` 和 `limit` 分页。
 - 列表只返回 sessionId、createdAt、version 和 metadata；完整消息仍由事件快照推导。
 - 实现不得把数据库连接、ORM 类型或供应商异常泄漏到 Core 协议。
+- 明确支持目录的实现可以声明为 `SessionCatalogStore`；`SessionStore.list?` 暂时保留以兼容执行型 Store。
 
-## 10. 规范错误
+## 10. 外部持久化适配
 
-| code                             | 含义                             |
-| -------------------------------- | -------------------------------- |
-| `SESSION_INVALID_ARGUMENT`       | ID、版本、分页或事件参数无效     |
-| `SESSION_VERSION_CONFLICT`       | expectedVersion 与实际版本不一致 |
-| `SESSION_INVALID_EVENT_SEQUENCE` | 初始化、顺序或读取协议不成立     |
-| `SESSION_SERIALIZATION_FAILED`   | 事件不能安全持久化为 JSON        |
-| `SESSION_EVENT_ID_CONFLICT`      | Store 生成了重复事件 ID          |
+SQL、ORM、文件、远程 API 和业务 Service 都通过实现 `SessionStore` 接入：
 
-## 11. 当前明确不实现
+```ts
+const store = new ApiSessionStore({ client })
+const agent = new Agent({ model, store })
+```
 
-- 数据库、Redis 或文件 Store。
+`read()` 必须直接从该实现的权威外部数据源读取，`append()` 必须直接提交到该数据源。禁止先把外部历史完整
+装入 `MemorySessionStore` 再维护第二份日志，也禁止新增覆盖式 `saveSession()` 或 `updateSessionLog()`。
+
+连接池、ORM Client、HTTP Client 和业务 Service 由 Runtime 构造后注入 Store。以下操作不属于
+`SessionStore`：
+
+- 建库、建表和数据库迁移。
+- 建立或关闭连接池。
+- 历史数据批量导入、备份和恢复。
+- Session 删除、归档、搜索和展示投影。
+
+这些能力由部署生命周期或独立管理接口负责。历史导入若有需要，应定义独立的 `SessionLogImporter`，不能成为
+Agent 正常执行所依赖的方法。
+
+## 11. SQL 事务参考
+
+关系数据库推荐至少维护：
+
+```text
+sessions
+  session_id      primary key
+  version         non-negative integer
+  created_at      timestamp
+  metadata_json   json
+
+session_events
+  session_id
+  sequence
+  event_id        unique
+  timestamp
+  type
+  payload_json    json
+  primary key (session_id, sequence)
+```
+
+一次 `append()` 必须在同一事务中完成：
+
+1. 锁定或条件更新 Session 当前版本。
+2. 比较当前版本与 `expectedVersion`。
+3. 为整批事件分配连续 sequence、唯一 eventId 和 timestamp。
+4. 插入全部事件并把 Session version 增加批次长度。
+5. 提交后返回数据库实际保存的事件；任一步失败都回滚。
+
+ORM 实现也必须建立同样的数据库约束，不能只依靠进程内检查。多实例部署时禁止使用进程锁代替数据库事务或
+compare-and-swap。
+
+远程 API Adapter 若在一次 `append()` 内自动重试，所有下游尝试必须复用同一幂等键，并在第一次提交成功后
+返回同一结果。无法确认请求是否已经提交时不得用新幂等键盲目重试；CraftAgent Core 当前不会自动重试 Store
+写入。
+
+## 12. 规范错误
+
+| code                             | 含义                                  |
+| -------------------------------- | ------------------------------------- |
+| `SESSION_INVALID_ARGUMENT`       | ID、版本、分页或事件参数无效          |
+| `SESSION_VERSION_CONFLICT`       | expectedVersion 与实际版本不一致      |
+| `SESSION_INVALID_EVENT_SEQUENCE` | 初始化、顺序或读取协议不成立          |
+| `SESSION_SERIALIZATION_FAILED`   | 事件不能安全持久化为 JSON             |
+| `SESSION_EVENT_ID_CONFLICT`      | Store 生成了重复事件 ID               |
+| `SESSION_OPERATION_FAILED`       | 数据库、文件、Service 或 API 操作失败 |
+
+外部实现必须把驱动、ORM、网络和 Service 异常包装为 `SessionStoreError`，使用
+`SESSION_OPERATION_FAILED` 并填写 `operation: 'append' | 'read' | 'list'`。原始异常只放入 `cause`，不能把
+连接字符串、SQL、认证信息或供应商对象写入公开 message。版本冲突必须继续使用专用错误并返回
+`expectedVersion` 与 `actualVersion`。
+
+## 13. 契约测试
+
+所有 SessionStore 实现必须运行独立入口提供的无测试框架契约探针：
+
+```ts
+import { assertSessionStoreContract } from 'craft-agent/sessions/testing'
+
+await assertSessionStoreContract(store, {
+  requireCatalog: true,
+})
+```
+
+探针覆盖空会话、初始化、批量原子性、版本冲突、JSON 序列化、事件身份与连续顺序、调用方对象隔离、固定快照
+分页和可选目录分页。它会真实写入多个 Session，测试必须提供临时 schema、事务夹具、测试容器或独立命名空间；
+不得对生产数据源运行。
+
+契约探针验证通用行为，不能代替实现专项测试。SQL 实现仍需测试死锁、唯一约束映射和事务回滚；远程 API 实现
+仍需测试超时、认证、幂等重试和响应协议错误。
+
+## 14. 当前明确不实现
+
+- 随 CraftAgent Core 内置具体数据库、ORM、Redis、文件或 API Store。
 - Session 删除、归档和搜索。
 - Session 压缩、摘要和历史裁剪。
 - 轨迹、指标和异常堆栈日志。
 - 将 Runtime 或前端展示字段写入 Core Session 协议。
 
-这些能力不能通过修改已写入事件实现；需要时应增加新事件、Store 适配器或上层投影。
+数据库查询不会作为模型可调用的内置工具提供。Session 持久化属于基础设施；确需让模型访问业务数据时，应定义
+最小权限的领域工具，而不是通用 SQL 工具。
+
+这些能力不能通过修改已写入事件实现；需要时应增加新事件、Store 适配器、管理端口或上层投影。
 当前 Agent Loop 如何消费本协议见[Agent Loop 协议](./agent-loop.md)。

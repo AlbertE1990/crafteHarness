@@ -5,6 +5,10 @@ export type SessionStoreErrorCode
     | 'SESSION_INVALID_EVENT_SEQUENCE'
     | 'SESSION_SERIALIZATION_FAILED'
     | 'SESSION_EVENT_ID_CONFLICT'
+    | 'SESSION_OPERATION_FAILED'
+
+/** 发生持久化错误的 SessionStore 操作。 */
+export type SessionStoreOperation = 'append' | 'read' | 'list'
 
 /** 构造 SessionStoreError 时使用的结构化信息。 */
 export interface SessionStoreErrorOptions {
@@ -13,6 +17,7 @@ export interface SessionStoreErrorOptions {
   readonly sessionId?: string
   readonly expectedVersion?: number
   readonly actualVersion?: number
+  readonly operation?: SessionStoreOperation
   readonly cause?: unknown
 }
 
@@ -22,6 +27,7 @@ export class SessionStoreError extends Error {
   readonly sessionId?: string
   readonly expectedVersion?: number
   readonly actualVersion?: number
+  readonly operation?: SessionStoreOperation
 
   constructor(options: SessionStoreErrorOptions) {
     super(options.message, { cause: options.cause })
@@ -30,5 +36,6 @@ export class SessionStoreError extends Error {
     this.sessionId = options.sessionId
     this.expectedVersion = options.expectedVersion
     this.actualVersion = options.actualVersion
+    this.operation = options.operation
   }
 }

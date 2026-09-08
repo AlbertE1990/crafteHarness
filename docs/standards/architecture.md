@@ -37,7 +37,7 @@ src/
       testing/                  # 无网络 Scripted Adapter 和契约探针
     contracts/                  # 模型、消息、错误和 Session Port
     core/                       # AgentLoop 状态机、预算与工具注册
-    sessions/                   # append-only 内存 Store 与消息推导
+    sessions/                   # Store 实现、消息推导与独立契约探针入口
     tools/                      # defineTool、Harness、策略、重试和错误
     builtins/                   # 默认工具实现、名称与自动注册表
     types/                      # JSON 基础类型

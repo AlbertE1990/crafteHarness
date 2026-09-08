@@ -278,3 +278,51 @@ Session Log 只提供事实和持久化语义，不控制模型循环。当前 A
 
 Agent Loop 不会重新维护一份长期可变消息数组；每个模型请求的历史都由 Session Log 推导。完整流程见
 [Agent Loop 学习指南](./agent-loop.md)。
+
+## 16. 如何实现持久化 Store
+
+持久化实现不是 Agent Tool，而是注入 Agent 的基础设施 Adapter：
+
+```ts
+class ServiceSessionStore implements SessionStore {
+  constructor(private readonly service: SessionService) {}
+
+  async append(request: AppendSessionEventsRequest) {
+    try {
+      return await this.service.appendEvents(request)
+    }
+    catch (cause) {
+      throw new SessionStoreError({
+        code: 'SESSION_OPERATION_FAILED',
+        message: 'Session 写入失败',
+        sessionId: request.sessionId,
+        operation: 'append',
+        cause,
+      })
+    }
+  }
+
+  async read(sessionId: string, options?: ReadSessionEventsOptions) {
+    return await this.service.readEvents(sessionId, options)
+  }
+}
+
+const agent = new Agent({ model, store: new ServiceSessionStore(service) })
+```
+
+`service` 可以在内部使用原生 SQL、ORM 或 HTTP API。Agent 不需要知道其实现，也不需要调用 `initialize()`
+把历史复制到内存。连接和迁移在 Runtime 启动阶段完成，关闭连接则由 Runtime 的退出流程负责。
+
+实现完成后先运行契约探针：
+
+```ts
+import { assertSessionStoreContract } from '../src/craft-agent/sessions/testing'
+
+await assertSessionStoreContract(store, {
+  sessionIdPrefix: 'temporary-test-run',
+  requireCatalog: true,
+})
+```
+
+探针会写数据且 Session Log 没有删除接口，因此应使用临时数据库、测试 schema 或可整体销毁的测试容器。
+SQL 事务结构、远程重试和错误映射要求见[Session Log 协议](../standards/protocols/session-log.md)。

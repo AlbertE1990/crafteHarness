@@ -22,7 +22,8 @@ flowchart LR
   P3 --> P4[阶段 4<br/>Agent Loop<br/>已完成]
   P4 --> P41[阶段 4.1<br/>CraftAgent 门面<br/>已完成]
   P41 --> P42[阶段 4.2<br/>内置工具自动装载<br/>已完成]
-  P42 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
+  P42 --> P43[阶段 4.3<br/>SessionStore 持久化契约<br/>已完成]
+  P43 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -150,7 +151,20 @@ flowchart LR
 详细交付见[阶段 4.2 记录](./deliveries/delivery-008-default-builtin-tools.md)，设计依据见
 [ADR-0006](./decisions/adr-0006-agent-default-builtin-tools.md)。
 
-## 11. 阶段 5：轨迹持久化与查询（下一阶段）
+## 11. 阶段 4.3：SessionStore 持久化契约（已完成）
+
+已完成范围：
+
+- 明确 SQL、ORM、Service 和 API 只通过 SessionStore Port 接入。
+- 增加外部持久化操作错误及操作类型。
+- 增加可复用、无测试框架依赖的 SessionStore 契约探针。
+- 定义 SQL 原子事务、远程 API 幂等和 Runtime 生命周期边界。
+- 明确 Session 持久化不是模型工具，不提供通用 SQL 内置工具。
+
+详细交付见[阶段 4.3 记录](./deliveries/delivery-009-session-store-persistence-contract.md)，设计依据见
+[ADR-0007](./decisions/adr-0007-session-store-persistence-port.md)。
+
+## 12. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -160,7 +174,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 CraftAgent 核心协议。
 
-## 12. 阶段 6：异常诊断
+## 13. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -173,7 +187,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 13. 阶段 7：长期安全与扩展（最低优先级）
+## 14. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

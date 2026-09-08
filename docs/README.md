@@ -50,6 +50,7 @@
 - `defineAgentConfig()` 可显式提前校验配置，`defineTools()` 可一次组装异构工具。
 - Scripted Adapter 与契约探针为应用和 Adapter 开发提供无网络测试入口。
 - Session 使用 append-only 事件、乐观并发和一致性分页，并可确定性推导模型历史。
+- 外部 SessionStore 通过统一持久化语义和独立契约探针接入 SQL、ORM、Service 或 API。
 - Agent Loop 以 Run/Turn/Step 串联模型、工具和 Session，并提供预算、取消、稳定终态和实时事件。
 - Agent 门面自动处理 Session ID，分离精简输出与完整轨迹，并提供会话读取和分页列表。
 - 真实 DeepSeek 冒烟仍需在配置 API Key 后执行。

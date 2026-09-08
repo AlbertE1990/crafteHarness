@@ -49,8 +49,13 @@ describe('model dependency boundary', () => {
       process.cwd(),
       'src/craft-agent/adapters/index.ts',
     ), 'utf8')
+    const sessionIndex = readFileSync(join(
+      process.cwd(),
+      'src/craft-agent/sessions/index.ts',
+    ), 'utf8')
 
     expect(compatibleSource).not.toMatch(/deepseek/i)
     expect(productionIndex).not.toMatch(/export\s+\*\s+from\s+['"][^'"]*testing/i)
+    expect(sessionIndex).not.toMatch(/export\s+\*\s+from\s+['"][^'"]*testing/i)
   })
 })
