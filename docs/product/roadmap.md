@@ -24,7 +24,8 @@ flowchart LR
   P41 --> P42[阶段 4.2<br/>内置工具自动装载<br/>已完成]
   P42 --> P43[阶段 4.3<br/>SessionStore 持久化契约<br/>已完成]
   P43 --> P44[阶段 4.4<br/>Agent API 归一化与收口<br/>已完成]
-  P44 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
+  P44 --> P45[阶段 4.5<br/>PostgreSQL 学习基座<br/>已完成]
+  P45 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -182,7 +183,31 @@ flowchart LR
 
 详细交付见[阶段 4.4 记录](./deliveries/delivery-010-internal-tool-normalization.md)。
 
-## 13. 阶段 5：轨迹持久化与查询（下一阶段）
+## 13. 阶段 4.5：PostgreSQL 持久化学习基座（已完成）
+
+已完成范围：
+
+- 创建本地 PostgreSQL 开发数据库和通用 Session Log 表。
+- 提供可重复迁移、Node 连接配置及数据库检查命令。
+- 建立 `PostgresSessionStore` 学习骨架和独立契约测试入口。
+- 保留 `read/append/list` 实现、Server 注入和重启恢复验证作为学习任务。
+- 常规 Agent 测试继续使用 MemorySessionStore，不依赖本地数据库。
+
+详细交付见[阶段 4.5 记录](./deliveries/delivery-011-postgres-learning-scaffold.md)。
+
+## 14. 阶段 4.6：会话读模型与 PostgreSQL Store（已完成）
+
+已完成范围：
+
+- 会话目录只读取摘要，详情按 Session ID 加载，消除列表 N+1 和全历史读取。
+- 详情消息保留事件、Run 和 Turn 关联信息。
+- 完成 PostgreSQL SessionStore 的事务追加、固定快照读取和稳定目录分页。
+- Server Runtime 正式注入 PostgreSQL Store，并管理连接池生命周期。
+- 契约测试使用自动清理的临时 schema，不污染开发数据。
+
+详细交付见[阶段 4.6 记录](./deliveries/delivery-012-session-query-and-postgres-store.md)。
+
+## 15. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -192,7 +217,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 CraftAgent 核心协议。
 
-## 14. 阶段 6：异常诊断
+## 16. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -205,7 +230,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 15. 阶段 7：长期安全与扩展（最低优先级）
+## 17. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

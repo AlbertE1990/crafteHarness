@@ -53,16 +53,20 @@ export interface AgentExecutionOptions {
   readonly onTrace?: AgentEventListener
 }
 
-/** Agent 会话查询返回的通用投影，不包含任何前端专用字段。 */
-export interface AgentSession extends SessionSummary {
-  readonly messages: readonly ModelMessage[]
+/** 会话详情中的一条模型消息，同时保留其 Session Log 关联信息。 */
+export interface AgentSessionMessage {
+  readonly eventId: string
+  readonly sessionId: string
+  readonly sequence: number
+  readonly timestamp: string
+  readonly runId?: string
+  readonly turnId?: string
+  readonly message: ModelMessage
 }
 
-/** Agent.listSessions() 的分页结果。 */
-export interface AgentSessionPage {
-  readonly sessions: readonly AgentSession[]
-  readonly hasMore: boolean
-  readonly nextAfterSessionId?: string
+/** Agent.getSession() 返回的会话详情，不包含任何前端专用字段。 */
+export interface AgentSessionDetail extends SessionSummary {
+  readonly messages: readonly AgentSessionMessage[]
 }
 
 /** Agent.getSession() 的可选查询参数。 */

@@ -449,14 +449,64 @@ Turn”，同时继续保留数据库中的完整事件事实。
 在该能力实现前，应用应设置合理的 Session 生命周期和 Agent token 预算，不要通过删除中间 Tool Call、只保留
 最后几条消息等方式破坏历史结构。
 
-## 13. 完成检查表
+## 13. 本项目的 PostgreSQL 参考实现
 
-- [ ] Runtime 管理数据库连接池，CraftAgent 只接收 Store 对象。
-- [ ] `append()` 在一个事务中完成全部写入和版本推进。
-- [ ] 数据库约束保证 `(session_id, sequence)` 与 `event_id` 唯一。
-- [ ] `read()` 支持固定 `throughVersion` 分页。
-- [ ] `list()` 使用稳定创建顺序，而不是易变化的更新时间。
-- [ ] 驱动异常被包装为 `SessionStoreError`，公开消息不泄露 SQL 和连接信息。
-- [ ] 用户字段属于应用扩展，不进入 CraftAgent 用户或权限模型。
-- [ ] Store 已通过契约探针和数据库专项并发测试。
-- [ ] 生产 Agent 显式注入持久化 Store，不依赖默认内存数据。
+本地已经创建 PostgreSQL 数据库 `craft_agent_dev`，其中包含：
+
+- `craft_agent_sessions`
+- `craft_agent_session_events`
+
+仓库内对应文件：
+
+```text
+database/migrations/001-create-session-log.sql
+src/server/database/postgres.ts
+src/server/database/migrate.ts
+src/server/database/check.ts
+src/server/stores/postgres-session-store.ts
+src/server/stores/postgres-session-store.contract.ts
+```
+
+先将 `.env.example` 中的数据库配置复制到被 Git 忽略的 `.env.local`，并填写本地真实密码。随后可以运行：
+
+```bash
+pnpm db:migrate
+pnpm db:check
+pnpm db:test-store
+```
+
+迁移可以重复执行；连接检查只输出数据库名、PostgreSQL 版本和表是否存在，不输出连接字符串或密码。
+契约命令会创建独立临时 schema，验证完成后自动删除，不会把测试 Session 写进开发目录。
+
+### 13.1 当前实现的阅读顺序
+
+[postgres-session-store.ts](../../src/server/stores/postgres-session-store.ts) 是可运行的 `pg` 参考实现。建议按数据流
+而不是按文件行号阅读：
+
+1. 从 `read()` 观察“数据库行 → SessionEvent → 固定快照页”。
+2. 阅读 `list()`，比较摘要目录为何不查询事件表。
+3. 阅读 `append()` 的 `BEGIN → INSERT/锁行 → 比较版本 → 插入事件 → 更新版本 → COMMIT`。
+4. 阅读 `createEventPayload()` 与 `restoreEvent()`，理解列和 JSON payload 如何组合为判别联合。
+5. 阅读契约测试中的并发探针，观察两个相同 `expectedVersion` 为什么只能成功一个。
+
+你最值得亲手完成的验证是：在页面连续进行 10 轮对话，停止并重启 Node 服务，再进行第 11 轮；随后直接查询
+两张表，对照 `version`、`sequence`、`turn_id` 和 `payload_json`。原始学习草稿保存在
+`docs/learning/drafts/postgres-session-store-attempt.ts.txt`，可以与正式实现逐段比较。
+
+实现过程中优先使用以下现有代码作为行为参考：
+
+- [memory-session-store.ts](../../src/craft-agent/sessions/memory-session-store.ts)：事件校验、分页结果和错误语义。
+- [session-store-contract.ts](../../src/craft-agent/sessions/testing/session-store-contract.ts)：必须通过的行为断言。
+- [Session Log 协议](../standards/protocols/session-log.md)：持久化不变量。
+
+## 14. 完成检查表
+
+- [x] Runtime 管理数据库连接池，CraftAgent 只接收 Store 对象。
+- [x] `append()` 在一个事务中完成全部写入和版本推进。
+- [x] 数据库约束保证 `(session_id, sequence)` 与 `event_id` 唯一。
+- [x] `read()` 支持固定 `throughVersion` 分页。
+- [x] `list()` 使用稳定创建顺序，而不是易变化的更新时间。
+- [x] 驱动异常被包装为 `SessionStoreError`，公开消息不泄露 SQL 和连接信息。
+- [x] 用户字段属于应用扩展，不进入 CraftAgent 用户或权限模型。
+- [x] Store 已通过契约探针和数据库专项并发测试。
+- [x] Server Agent 显式注入持久化 Store，不依赖默认内存数据。

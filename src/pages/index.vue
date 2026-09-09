@@ -18,10 +18,13 @@ interface HistoryMessage {
   reasoning_content?: unknown
 }
 
-interface Conversation {
+interface ConversationSummary {
   id: string
   name: string
   createAt: string
+}
+
+interface ConversationDetail extends ConversationSummary {
   history: HistoryMessage[]
   displayHistory?: HistoryMessage[]
 }
@@ -42,11 +45,15 @@ type ChatStreamEvent
     | { type: 'error', message: string }
 
 interface ConversationListResponse {
-  data: Conversation[]
+  data: ConversationSummary[]
+}
+
+interface ConversationDetailResponse {
+  data: ConversationDetail
 }
 
 const messages = ref<Message[]>([])
-const conversations = ref<Conversation[]>([])
+const conversations = ref<ConversationSummary[]>([])
 const input = ref('')
 const conversationId = ref('')
 const isSending = ref(false)
@@ -108,16 +115,21 @@ function historyToMessages(history: HistoryMessage[]): Message[] {
   })
 }
 
-/** 对接口数据做运行时校验，避免异常会话记录破坏页面状态。 */
-function isConversation(value: unknown): value is Conversation {
+/** 校验会话目录项；列表接口不要求携带完整历史。 */
+function isConversationSummary(value: unknown): value is ConversationSummary {
   if (typeof value !== 'object' || value === null)
     return false
 
-  const item = value as Partial<Conversation>
+  const item = value as Partial<ConversationSummary>
   return typeof item.id === 'string'
     && typeof item.name === 'string'
     && typeof item.createAt === 'string'
-    && Array.isArray(item.history)
+}
+
+/** 校验按需读取的会话详情，避免异常历史破坏页面状态。 */
+function isConversationDetail(value: unknown): value is ConversationDetail {
+  return isConversationSummary(value)
+    && Array.isArray((value as Partial<ConversationDetail>).history)
 }
 
 /** 兼容 ISO 时间和旧版逗号分隔时间戳，并格式化为列表中的简短时间。 */
@@ -147,19 +159,31 @@ async function scrollToLatest(behavior: ScrollBehavior = 'smooth') {
   })
 }
 
-/** 切换到已存在的会话，并用后端保存的历史消息替换当前视图。 */
-function selectConversation(conversation: Conversation) {
+/** 切换会话时按 ID 加载详情，避免列表请求一次读取所有历史。 */
+async function selectConversation(conversation: ConversationSummary) {
   if (isSending.value)
     return
 
-  conversationId.value = conversation.id
-  // 新版接口返回精简展示历史；旧数据仍回退到模型原始 history。
-  messages.value = historyToMessages(conversation.displayHistory ?? conversation.history)
-  input.value = ''
-  errorMessage.value = ''
-  failedPrompt.value = ''
-  isSidebarOpen.value = false
-  void scrollToLatest('auto')
+  try {
+    const response = await fetch(`/api/conversation/${encodeURIComponent(conversation.id)}`)
+    if (!response.ok)
+      throw new Error(`会话详情加载失败（${response.status}）`)
+
+    const result = await response.json() as Partial<ConversationDetailResponse>
+    if (!isConversationDetail(result.data))
+      throw new TypeError('会话详情返回格式不正确')
+
+    conversationId.value = conversation.id
+    messages.value = historyToMessages(result.data.displayHistory ?? result.data.history)
+    input.value = ''
+    errorMessage.value = ''
+    failedPrompt.value = ''
+    isSidebarOpen.value = false
+    void scrollToLatest('auto')
+  }
+  catch (error) {
+    conversationError.value = error instanceof Error ? error.message : '会话详情加载失败'
+  }
 }
 
 /** 清空当前上下文；下一次发送时不携带 ID，由后端创建新会话。 */
@@ -189,10 +213,10 @@ async function loadConversations(selectInitial = false) {
     if (!Array.isArray(result.data))
       throw new TypeError('会话列表返回格式不正确')
 
-    conversations.value = result.data.filter(isConversation)
+    conversations.value = result.data.filter(isConversationSummary)
 
     if (selectInitial && !conversationId.value && displayedConversations.value[0])
-      selectConversation(displayedConversations.value[0])
+      await selectConversation(displayedConversations.value[0])
   }
   catch (error) {
     conversationError.value = error instanceof Error ? error.message : '会话列表加载失败'

@@ -3,8 +3,9 @@ import type { ServerResponse } from 'node:http'
 import type {
   Agent,
   AgentOutputEvent,
-  AgentSession,
+  AgentSessionDetail,
   ModelMessage,
+  SessionSummary,
 } from '../craft-agent'
 import Fastify from 'fastify'
 
@@ -15,11 +16,15 @@ export interface DisplayMessage {
   readonly reasoning_content?: string
 }
 
-/** 当前 Fastify 层返回给页面的会话投影。 */
-export interface Conversation {
+/** 会话目录项只携带列表展示所需字段，避免为每项加载完整历史。 */
+export interface ConversationSummary {
   readonly id: string
   readonly name: string
   readonly createAt: string
+}
+
+/** 用户进入一个会话后按需读取的完整页面投影。 */
+export interface ConversationDetail extends ConversationSummary {
   readonly history: readonly ModelMessage[]
   readonly displayHistory: readonly DisplayMessage[]
 }
@@ -118,7 +123,22 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     },
   }, async () => {
     const page = await options.agent.listSessions()
-    return { data: page.sessions.map(createConversation) }
+    return { data: page.sessions.map(createConversationSummary) }
+  })
+
+  fastify.get<{
+    Params: { sessionId: string }
+  }>('/api/conversation/:sessionId', async (request, reply) => {
+    const session = await options.agent.getSession(request.params.sessionId)
+    if (!session) {
+      await reply.code(404)
+      return {
+        error: 'SESSION_NOT_FOUND',
+        message: `会话 ${request.params.sessionId} 不存在`,
+      }
+    }
+
+    return { data: createConversationDetail(session) }
   })
 
   fastify.post<{
@@ -162,7 +182,14 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
         ...(request.body.conversationId
           ? { sessionId: request.body.conversationId }
           : {}),
-        sessionMetadata: { source: 'server-runtime' },
+        ...(!request.body.conversationId
+          ? {
+              sessionMetadata: {
+                source: 'server-runtime',
+                name: createConversationTitle(request.body.message),
+              },
+            }
+          : {}),
       }, {
         signal: abortController.signal,
         onEvent: async (event) => {
@@ -216,24 +243,34 @@ function projectAgentEvent(event: AgentOutputEvent): AgentStreamEvent | undefine
   }
 }
 
-/** 把通用 Session 投影为当前页面使用的会话对象。 */
-function createConversation(session: AgentSession): Conversation {
+/** 把最小 Session 摘要投影为会话目录项。 */
+function createConversationSummary(session: SessionSummary): ConversationSummary {
   return Object.freeze({
     id: session.sessionId,
-    name: getConversationName(session.messages),
+    name: getMetadataName(session) ?? '新对话',
     createAt: session.createdAt,
-    history: session.messages,
-    displayHistory: createDisplayHistory(session.messages),
   })
 }
 
-/** 从第一条用户消息生成稳定短标题，不额外调用模型。 */
-function getConversationName(history: readonly ModelMessage[]): string {
-  const firstUserMessage = history.find(message => message.role === 'user')
-  const content = firstUserMessage?.content
-  return typeof content === 'string' && content.trim()
-    ? content.trim().slice(0, 40)
-    : '新对话'
+/** 把带事件上下文的 Agent 详情转换为页面所需的消息数组。 */
+function createConversationDetail(session: AgentSessionDetail): ConversationDetail {
+  const history = Object.freeze(session.messages.map(item => item.message))
+  return Object.freeze({
+    ...createConversationSummary(session),
+    history,
+    displayHistory: createDisplayHistory(history),
+  })
+}
+
+/** 读取创建 Session 时写入的可选标题。 */
+function getMetadataName(session: SessionSummary): string | undefined {
+  const name = session.metadata?.name
+  return typeof name === 'string' && name.trim() ? name.trim() : undefined
+}
+
+/** 从第一条用户输入生成稳定短标题，不额外调用模型。 */
+function createConversationTitle(message: string): string {
+  return message.trim().slice(0, 40) || '新对话'
 }
 
 /** 过滤系统、工具和中间 Tool Call，只保留页面真正展示的消息。 */

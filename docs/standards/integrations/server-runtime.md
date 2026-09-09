@@ -14,6 +14,8 @@ CraftAgent 公共协议，不需要复制到产品学习文档中。
 | `src/server/index.ts`       | 读取环境变量、构造 Agent、启动监听                |
 | `src/server/agent-tools.ts` | 定义并静态注册当前应用的第一方工具                |
 | `src/server/app.ts`         | Fastify 路由、SSE 帧、断开取消和前端展示投影      |
+| `src/server/database/*`     | PostgreSQL Runtime 配置、迁移和连通性检查         |
+| `src/server/stores/*`       | 应用 Store；当前 Runtime 使用 PostgreSQL 实现     |
 | `src/craft-agent/agent/*`   | 与传输无关的 Agent 门面、配置、事件和 Session API |
 
 过渡的 `src/server/agent.ts` 与 `src/server/agent-config.ts` 已删除。模型循环、会话目录和通用输出不应再次
@@ -33,14 +35,15 @@ const agent = new Agent({
     additional: [getUserLocationTool, getWeatherTool],
   },
   toolPolicy: trustedServerToolPolicy,
+  store: new PostgresSessionStore(databasePool),
 })
 
 const app = createServerApp({ agent })
 ```
 
 - 环境变量只在 Runtime 启动边界读取，CraftAgent 不读取 `process.env`。
-- 一个进程复用一个 Agent，确保默认 MemorySessionStore 能跨开发请求保留 Session；长期运行和多实例部署应注入
-  持久化 Store。
+- 一个进程复用一个 Agent；当前 Server 显式注入 PostgreSQL Store，进程重启后由数据库恢复 Session。
+- 连接池由 Runtime 创建和关闭，不能进入 CraftAgent Core，也不能由 Store 模块在 import 时隐式创建。
 - `get_current_time` 和 `calculator` 由 Agent 自动装载，不进入 Server 工具注册表。
 - 应用工具使用 `defineTool()`，可直接组成普通只读数组并通过 `tools.additional` 追加；Agent 负责归一化。
 - 当前许可策略只适用于代码仓库内受信第一方工具，不代表第三方插件安全边界。
@@ -61,7 +64,8 @@ message.completed -> message.completed
 error             -> error
 ```
 
-会话列表调用 `agent.listSessions()`。标题和 `displayHistory` 在 Server 中从通用 ModelMessage 投影，不写入
-CraftAgent Session 协议，也不维护第二份会话 ID Map。
+会话列表调用 `agent.listSessions()`，只返回 `id/name/createAt` 摘要；进入某个会话后再通过
+`agent.getSession(sessionId)` 读取详情。标题在创建 Session 时写入 metadata，`displayHistory` 只在详情路由中
+从通用 ModelMessage 投影，不写入 CraftAgent Session 协议，也不维护第二份会话 ID Map。
 
 完整调试轨迹可立即通过 `onTrace` 观察；轨迹的持久化、脱敏和分页 HTTP 查询仍属于下一阶段。

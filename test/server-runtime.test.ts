@@ -83,6 +83,19 @@ describe('server runtime HTTP boundary', () => {
           id: 'http-session',
           name: '通过 HTTP 调用 Agent',
           createAt: '2026-09-08T09:00:00.000Z',
+        }],
+      })
+      expect(list.json().data[0]).not.toHaveProperty('history')
+
+      const detail = await app.inject({
+        method: 'GET',
+        url: '/api/conversation/http-session',
+      })
+      expect(detail.statusCode).toBe(200)
+      expect(detail.json()).toMatchObject({
+        data: {
+          id: 'http-session',
+          name: '通过 HTTP 调用 Agent',
           displayHistory: [
             { role: 'user', content: '通过 HTTP 调用 Agent' },
             {
@@ -91,7 +104,7 @@ describe('server runtime HTTP boundary', () => {
               reasoning_content: 'HTTP 思考',
             },
           ],
-        }],
+        },
       })
     }
     finally {

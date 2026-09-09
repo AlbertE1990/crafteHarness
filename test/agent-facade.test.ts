@@ -6,7 +6,7 @@ import type {
   ModelStreamChunk,
   SessionStore,
 } from '../src/craft-agent'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import Agent, { MemorySessionStore } from '../src/craft-agent'
 import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
 
@@ -84,11 +84,15 @@ describe('agent facade', () => {
     await agent.run({ sessionId: 'session-a', input: '第一条问题' })
     await agent.run({ sessionId: 'session-b', input: '第二条问题' })
 
+    const read = vi.spyOn(agent.store, 'read')
     const firstPage = await agent.listSessions({ limit: 1 })
     const secondPage = await agent.listSessions({
       limit: 1,
       afterSessionId: firstPage.nextAfterSessionId,
     })
+
+    // 目录查询只读取摘要，不能退化成每个会话一次完整 read() 的 N+1 查询。
+    expect(read).not.toHaveBeenCalled()
     const session = await agent.getSession('session-b')
 
     expect(firstPage).toMatchObject({
@@ -100,9 +104,15 @@ describe('agent facade', () => {
       hasMore: false,
       sessions: [{ sessionId: 'session-b' }],
     })
-    expect(session?.messages.at(-1)).toEqual({
-      role: 'assistant',
-      content: '第二条回答',
+    expect(session?.messages.at(-1)).toMatchObject({
+      sessionId: 'session-b',
+      turnId: expect.any(String),
+      sequence: expect.any(Number),
+      timestamp: expect.any(String),
+      message: {
+        role: 'assistant',
+        content: '第二条回答',
+      },
     })
   })
 

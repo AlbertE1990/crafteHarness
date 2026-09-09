@@ -66,6 +66,11 @@ const result = await agent.run({ input: '复述 hello' }, {
 
 const session = await agent.getSession(result.sessionId)
 const page = await agent.listSessions({ limit: 20 })
+
+// 列表只有摘要；选择某一项后再读取带事件上下文的消息详情。
+console.log(page.sessions[0]?.sessionId)
+console.log(session?.messages[0]?.message)
+console.log(session?.messages[0]?.turnId)
 ```
 
 环境变量写在这段 Runtime 组装代码中，而不是 CraftAgent 内部。这样 CLI、Fastify、Worker 和测试可以
@@ -89,7 +94,8 @@ flowchart TD
   Loop --> Trace[完整 AgentEvent / onTrace]
   Loop --> Project[精简事件投影]
   Project --> Output[onEvent / CLI / SSE]
-  Store --> Query[getSession / listSessions]
+  Store --> Catalog[listSessions: 摘要目录]
+  Store --> Detail[getSession: 按需详情]
 ```
 
 重点是两条输出路径互不替代：应用 UI 通常只需要 `onEvent`，调试器需要 `onTrace`。轨迹暂时是实时接口，
@@ -126,7 +132,8 @@ sequenceDiagram
 - 不配置 `tools` 不代表没有工具；Agent 会自动装载时间和计算器。
 - `tools.additional` 只追加应用工具；完全不使用内置工具时显式选择 `mode: 'replace'`。
 - `session.started` 表示本次 run 已确定 Session ID，不保证它此前不存在。
-- `listSessions()` 来自 Store 目录，不维护第二份 Server 内存索引。
+- `listSessions()` 来自 Store 目录，只返回摘要，不维护第二份 Server 内存索引，也不对每项调用 `read()`。
+- `getSession()` 返回的每条消息外层保留 Session Event 关联信息；真正的模型消息位于 `.message`。
 - `onEvent/onTrace` 是观察旁路，不能拿来修改控制流。
 - 自定义 Store 可以只实现 `append/read`；这时 Agent 能运行，但不能列会话。
 

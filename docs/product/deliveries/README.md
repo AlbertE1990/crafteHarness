@@ -13,5 +13,7 @@
 - [Delivery 008：阶段 4.2 Agent 内置工具自动装载](./delivery-008-default-builtin-tools.md)
 - [Delivery 009：阶段 4.3 SessionStore 持久化契约](./delivery-009-session-store-persistence-contract.md)
 - [Delivery 010：阶段 4.4 Agent API 归一化与预发布收口](./delivery-010-internal-tool-normalization.md)
+- [Delivery 011：阶段 4.5 PostgreSQL 持久化学习基座](./delivery-011-postgres-learning-scaffold.md)
+- [Delivery 012：阶段 4.6 会话读模型与 PostgreSQL Store](./delivery-012-session-query-and-postgres-store.md)
 
 交付记录不是当前协议的权威来源。后续阶段改变行为时更新规范并新增交付记录，不覆盖旧记录中的历史状态。

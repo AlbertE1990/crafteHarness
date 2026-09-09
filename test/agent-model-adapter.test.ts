@@ -78,7 +78,8 @@ describe('agent runtime model adapter boundary', () => {
     })
 
     const page = await agent.listSessions()
-    expect(page.sessions[0]?.messages.at(-1)).toEqual({
+    const detail = await agent.getSession('adapter-test-conversation')
+    expect(detail?.messages.at(-1)?.message).toEqual({
       role: 'assistant',
       content: '最终回答',
       reasoning_content: '正在分析',
@@ -175,7 +176,8 @@ describe('agent runtime model adapter boundary', () => {
     ])
     const page = await agent.listSessions()
     expect(page.sessions).toHaveLength(1)
-    expect(page.sessions[0]?.messages.filter(message => (
+    const detail = await agent.getSession('multi-turn')
+    expect(detail?.messages.map(item => item.message).filter(message => (
       message.role === 'user' || message.role === 'assistant'
     )).map(message => message.content)).toEqual([
       '第一轮问题',

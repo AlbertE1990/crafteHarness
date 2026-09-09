@@ -1,6 +1,8 @@
 import type {
   ListSessionsOptions,
   SessionCatalogStore,
+  SessionEvent,
+  SessionListPage,
   SessionStore,
 } from '../contracts'
 import type { AgentEvent, AgentRunResult } from '../core'
@@ -10,12 +12,12 @@ import type {
   AgentOutputEvent,
   AgentOutputEventListener,
   AgentRequest,
-  AgentSession,
-  AgentSessionPage,
+  AgentSessionDetail,
+  AgentSessionMessage,
   GetAgentSessionOptions,
 } from './types'
 import { AgentLoop } from '../core'
-import { deriveModelMessages, readSessionSnapshot } from '../sessions'
+import { readSessionSnapshot } from '../sessions'
 import { defineAgentConfig } from './config'
 
 /**
@@ -99,11 +101,11 @@ export class Agent {
     })
   }
 
-  /** 读取一个 Session 的一致快照并推导模型消息；不存在时返回 undefined。 */
+  /** 读取一个 Session 的一致快照并返回带事件上下文的消息详情。 */
   async getSession(
     sessionId: string,
     options: GetAgentSessionOptions = {},
-  ): Promise<AgentSession | undefined> {
+  ): Promise<AgentSessionDetail | undefined> {
     const normalizedId = typeof sessionId === 'string' ? sessionId.trim() : ''
     if (!normalizedId)
       throw new TypeError('sessionId 不能为空')
@@ -120,35 +122,45 @@ export class Agent {
       createdAt: created.timestamp,
       version: snapshot.version,
       ...(created.metadata ? { metadata: created.metadata } : {}),
-      messages: deriveModelMessages(snapshot.events),
+      messages: createSessionMessages(snapshot.events),
     })
   }
 
   /**
-   * 分页列出 Session 及其模型消息。
+   * 分页列出 Session 摘要，不读取完整事件和模型消息。
    *
    * 自定义 Store 若未实现 SessionCatalogStore，Agent 仍可运行，但本方法会明确拒绝调用。
    */
-  async listSessions(options: ListSessionsOptions = {}): Promise<AgentSessionPage> {
+  async listSessions(options: ListSessionsOptions = {}): Promise<SessionListPage> {
     if (!isSessionCatalogStore(this.store))
       throw new TypeError('当前 SessionStore 未实现 list() 会话目录能力')
 
-    const page = await this.store.list(options)
-    const sessions = await Promise.all(page.sessions.map(async (summary) => {
-      const session = await this.getSession(summary.sessionId)
-      if (!session)
-        throw new Error(`Session ${summary.sessionId} 在列表读取期间消失`)
-      return session
-    }))
-
-    return Object.freeze({
-      sessions: Object.freeze(sessions),
-      hasMore: page.hasMore,
-      ...(page.nextAfterSessionId
-        ? { nextAfterSessionId: page.nextAfterSessionId }
-        : {}),
-    })
+    return await this.store.list(options)
   }
+}
+
+/**
+ * 从 Session Log 中筛选模型消息，并保留调试和前端定位所需的事件关联字段。
+ *
+ * AgentLoop 仍会使用纯 ModelMessage 历史；这里仅服务于面向应用的详情查询。
+ */
+function createSessionMessages(
+  events: readonly SessionEvent[],
+): readonly AgentSessionMessage[] {
+  return Object.freeze(events.flatMap((event): AgentSessionMessage[] => {
+    if (event.type !== 'message.appended')
+      return []
+
+    return [Object.freeze({
+      eventId: event.eventId,
+      sessionId: event.sessionId,
+      sequence: event.sequence,
+      timestamp: event.timestamp,
+      ...(event.runId ? { runId: event.runId } : {}),
+      ...(event.turnId ? { turnId: event.turnId } : {}),
+      message: event.message,
+    })]
+  }))
 }
 
 /** 在不扩大基本 SessionStore 协议的前提下识别可查询会话目录的实现。 */

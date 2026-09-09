@@ -5,6 +5,9 @@
   "packageManager": "pnpm@10.30.3",
   "scripts": {
     "build": "vite build",
+    "db:check": "tsx src/server/database/check.ts",
+    "db:migrate": "tsx src/server/database/migrate.ts",
+    "db:test-store": "tsx src/server/stores/postgres-session-store.contract.ts",
     "dev": "concurrently -n server,web -c green,cyan \"pnpm dev:server\" \"pnpm dev:web\"",
     "dev:server": "tsx watch src/server/index.ts",
     "dev:web": "vite --open",
@@ -19,6 +22,7 @@
     "@vueuse/core": "catalog:frontend",
     "fastify": "catalog:",
     "openai": "catalog:",
+    "pg": "catalog:",
     "vue": "catalog:frontend",
     "vue-router": "catalog:frontend",
     "zod": "catalog:"
@@ -27,6 +31,7 @@
     "@antfu/eslint-config": "catalog:dev",
     "@iconify-json/carbon": "catalog:build",
     "@types/node": "catalog:dev",
+    "@types/pg": "catalog:",
     "@unocss/eslint-plugin": "catalog:dev",
     "@vitejs/plugin-vue": "catalog:build",
     "@vue-macros/volar": "catalog:dev",

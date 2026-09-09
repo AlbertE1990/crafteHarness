@@ -44,6 +44,9 @@ describe('chat page conversations', () => {
       id: 'chat-existing',
       name: '已有会话',
       createAt: String(Date.now()),
+    }
+    const existingConversationDetail = {
+      ...existingConversation,
       history: [
         { role: 'user', content: '历史问题' },
         { role: 'assistant', content: '历史回答', reasoning_content: '历史思考过程' },
@@ -52,6 +55,7 @@ describe('chat page conversations', () => {
     }
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ data: [existingConversation] }))
+      .mockResolvedValueOnce(jsonResponse({ data: existingConversationDetail }))
       .mockResolvedValueOnce(streamResponse([
         { type: 'conversation', conversationId: 'chat-existing' },
         { type: 'message.delta', channel: 'reasoning', delta: '先分析已有上下文' },
@@ -89,7 +93,7 @@ describe('chat page conversations', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    const existingRequest = JSON.parse(String(fetchMock.mock.calls[1][1]?.body))
+    const existingRequest = JSON.parse(String(fetchMock.mock.calls[2][1]?.body))
     expect(existingRequest).toEqual({
       message: '继续提问',
       conversationId: 'chat-existing',
@@ -105,7 +109,7 @@ describe('chat page conversations', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    const newRequest = JSON.parse(String(fetchMock.mock.calls[3][1]?.body))
+    const newRequest = JSON.parse(String(fetchMock.mock.calls[4][1]?.body))
     expect(newRequest).toEqual({ message: '创建新对话' })
     expect(wrapper.text()).toContain('新会话回答')
   })

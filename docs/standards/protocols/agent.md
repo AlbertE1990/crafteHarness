@@ -124,8 +124,9 @@ const result = await agent.run({
 
 ## 6. Session 查询
 
-- `getSession(sessionId)` 返回会话摘要和由事实日志推导的 `ModelMessage[]`。
-- `listSessions({ limit, afterSessionId })` 按创建顺序分页，并返回每个会话的模型消息。
+- `listSessions({ limit, afterSessionId })` 按创建顺序分页，只返回 `SessionSummary`，不得逐项加载完整事件。
+- `getSession(sessionId)` 按需读取一个一致快照，返回摘要和带 `eventId/sequence/timestamp/runId/turnId`
+  上下文的消息详情。
 - Agent 执行只要求 `SessionStore.append/read`；`listSessions()` 额外要求 Store 实现 `SessionCatalogStore`。
 - Core 不生成会话标题、展示消息或前端字段，这些属于 Runtime 投影。
 

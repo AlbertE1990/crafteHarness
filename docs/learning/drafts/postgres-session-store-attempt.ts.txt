@@ -1,0 +1,93 @@
+import type { Pool } from 'pg'
+import type {
+  AppendSessionEventsRequest,
+  AppendSessionEventsResult,
+  ListSessionsOptions,
+  ReadSessionEventsOptions,
+  SessionCatalogStore,
+  SessionEventPage,
+  SessionListPage,
+} from '../../craft-agent'
+import { createPostgresPool, readPostgresRuntimeConfig } from '../database/postgres'
+import { existsSync } from 'fs'
+import { loadEnvFile } from 'process'
+
+const data = []
+/**
+ * PostgreSQL SessionStore 学习骨架。
+ *
+ * 数据库、迁移和 Node 连接已经准备好；三个方法由学习者按照持久化教程完成。
+ * 在实现并通过契约测试前，不要把本类注入 Server Agent。
+ */
+export class PostgresSessionStore implements SessionCatalogStore {
+  constructor(readonly pool: Pool) {}
+
+  /** 学习任务一：在单个事务中完成版本比较、批量事件写入和版本推进。 */
+  async append(
+    _request: AppendSessionEventsRequest,
+  ): Promise<AppendSessionEventsResult> {
+    console.log('------------------append-----------------\n', _request)
+    const sessionData = {
+      sessionId: _request.sessionId,
+      version: _request.events.length + _request.expectedVersion,
+      events: _request.events,
+      catalog_order:'是否由数据库创建，类似ID',
+      // 是否可以自定义metadata，例如用户ID、应用ID等
+      metadata_json: JSON.stringify({useId:'wang'}),
+    }
+    const eventData = _request.events.map((event) => ({
+      sessionId: _request.sessionId,
+      event_type: event.type,
+      run_id: event.runId,
+      turnId: event.turnId,
+      event_id: '不传，由数据库自动生成，类似UUID',
+      sequence: '不传，由数据库自动累计',
+      payload_json: JSON.stringify({
+        metadata: event.metadata,
+        message: event.message,
+      }),
+    }))
+    const dataBaseSession = [save(sessionData),save(eventData)]
+    await executDbSession(dataBaseSession)
+    return {
+      sessionId: _request.sessionId,
+      version: sessionData.version,
+      events: eventData,
+    }
+  }
+
+  /** 学习任务二：按 throughVersion 从数据库读取一致的事件分页。 */
+  async read(
+    _sessionId: string,
+    _options: ReadSessionEventsOptions = {},
+  ): Promise<SessionEventPage> {
+    console.log('------------------read-----------------\n', _sessionId, _options)
+    return {
+      sessionId: _sessionId,
+      events: [],
+      snapshotVersion: 0,
+      latestVersion: 0,
+      hasMore: false,
+      nextAfterSequence: 0,
+    }
+  }
+
+  /** 学习任务三：通过 catalog_order 实现稳定的 Session 目录分页。 */
+  async list(_options: ListSessionsOptions = {}): Promise<SessionListPage> {
+    console.log('------------------list-----------------\n', _options)
+    return {
+      sessions: [],
+      hasMore: false,
+      nextAfterSessionId: undefined,
+    }
+  }
+}
+
+/** 为尚未完成的学习方法提供一致且容易定位的错误。 */
+function learningTaskNotImplemented(method: 'append' | 'read' | 'list'): Error {
+  return new Error(`学习任务尚未完成：PostgresSessionStore.${method}()`)
+}
+if (existsSync('.env.local'))
+  loadEnvFile('.env.local')
+const pool = createPostgresPool(readPostgresRuntimeConfig())
+export const postgresSessionStore = new PostgresSessionStore(pool)
