@@ -174,6 +174,10 @@ interface SessionCatalogStore extends SessionStore {
 - 实现不得把数据库连接、ORM 类型或供应商异常泄漏到 Core 协议。
 - 只支持 Agent 执行的 Store 实现 `SessionStore`；同时支持会话列表的 Store 实现 `SessionCatalogStore`。
 
+内置 `MemorySessionStore` 是无数据库开发、测试和协议验证实现，不是生产持久化层。它的数据随进程退出丢失，
+并且默认不执行 TTL 或容量驱逐。长期运行的 Runtime 应注入外部 Store；CraftAgent 不要求每个使用者为了首次
+运行而重复实现一份内存 Store，也不把缓存、数据库连接或用户权限加入通用协议。
+
 ## 10. 外部持久化适配
 
 SQL、ORM、文件、远程 API 和业务 Service 都通过实现 `SessionStore` 接入：
@@ -182,6 +186,9 @@ SQL、ORM、文件、远程 API 和业务 Service 都通过实现 `SessionStore`
 const store = new ApiSessionStore({ client })
 const agent = new Agent({ model, store })
 ```
+
+完整数据库表、事务、分页、用户 metadata 扩展和测试实践见
+[持久化 SessionStore 教程](../../learning/persistent-session-store.md)。
 
 `read()` 必须直接从该实现的权威外部数据源读取，`append()` 必须直接提交到该数据源。禁止先把外部历史完整
 装入 `MemorySessionStore` 再维护第二份日志，也禁止新增覆盖式 `saveSession()` 或 `updateSessionLog()`。

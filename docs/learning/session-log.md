@@ -325,4 +325,6 @@ await assertSessionStoreContract(store, {
 ```
 
 探针会写数据且 Session Log 没有删除接口，因此应使用临时数据库、测试 schema 或可整体销毁的测试容器。
-SQL 事务结构、远程重试和错误映射要求见[Session Log 协议](../standards/protocols/session-log.md)。
+SQL 事务结构、远程重试和错误映射要求见[Session Log 协议](../standards/protocols/session-log.md)。数据库表、
+固定快照查询、用户 metadata 扩展和无数据库调试步骤见
+[持久化 SessionStore 教程](./persistent-session-store.md)。

@@ -39,7 +39,8 @@ const app = createServerApp({ agent })
 ```
 
 - 环境变量只在 Runtime 启动边界读取，CraftAgent 不读取 `process.env`。
-- 一个进程复用一个 Agent，确保默认 MemorySessionStore 能跨请求保留 Session。
+- 一个进程复用一个 Agent，确保默认 MemorySessionStore 能跨开发请求保留 Session；长期运行和多实例部署应注入
+  持久化 Store。
 - `get_current_time` 和 `calculator` 由 Agent 自动装载，不进入 Server 工具注册表。
 - 应用工具使用 `defineTool()`，可直接组成普通只读数组并通过 `tools.additional` 追加；Agent 负责归一化。
 - 当前许可策略只适用于代码仓库内受信第一方工具，不代表第三方插件安全边界。

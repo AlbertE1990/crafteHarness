@@ -10,8 +10,9 @@
 3. [ModelAdapter：从供应商 chunk 到 Agent](./model-adapter.md)
 4. [自定义模型 Adapter 开发实践](./custom-model-adapter.md)
 5. [Session Log：从可变消息数组到事实日志](./session-log.md)
-6. [Agent Loop：从用户输入到确定终态](./agent-loop.md)
-7. [CraftAgent 统一入口：从配置到会话查询](./craft-agent-facade.md)
+6. [持久化 SessionStore：从内存调试到 PostgreSQL](./persistent-session-store.md)
+7. [Agent Loop：从用户输入到确定终态](./agent-loop.md)
+8. [CraftAgent 统一入口：从配置到会话查询](./craft-agent-facade.md)
 
 每篇学习文档都应给出前置知识、学习目标、源码入口、调试方法和练习，并通过链接引用规范，避免复制
 一份可能漂移的协议定义。

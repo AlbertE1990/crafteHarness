@@ -160,6 +160,7 @@ flowchart LR
 - 增加外部持久化操作错误及操作类型。
 - 增加可复用、无测试框架依赖的 SessionStore 契约探针。
 - 定义 SQL 原子事务、远程 API 幂等和 Runtime 生命周期边界。
+- 提供从 MemorySessionStore 调试到 PostgreSQL 实现的完整学习教程。
 - 明确 Session 持久化不是模型工具，不提供通用 SQL 内置工具。
 
 详细交付见[阶段 4.3 记录](./deliveries/delivery-009-session-store-persistence-contract.md)，设计依据见

@@ -129,7 +129,8 @@ const result = await agent.run({
 - Agent 执行只要求 `SessionStore.append/read`；`listSessions()` 额外要求 Store 实现 `SessionCatalogStore`。
 - Core 不生成会话标题、展示消息或前端字段，这些属于 Runtime 投影。
 
-默认 `MemorySessionStore` 支持列表，但进程退出后数据会丢失。生产环境应注入实现同一协议的持久化 Store。
+默认 `MemorySessionStore` 支持列表，但进程退出后数据会丢失，且不会执行 TTL 或容量驱逐。生产环境应注入实现
+同一协议的持久化 Store，具体实践见[持久化 SessionStore 教程](../../learning/persistent-session-store.md)。
 
 ## 7. 依赖规则
 

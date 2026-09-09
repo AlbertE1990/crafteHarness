@@ -17,7 +17,8 @@ Store 实现提供事务、错误和测试基线。
 - 新增独立 `sessions/testing` 入口和 `assertSessionStoreContract()`。
 - 契约探针覆盖空会话、初始化、序列化、原子写入、版本冲突、事件信封、固定快照和目录分页。
 - Session Log 规范新增外部 Adapter、SQL 事务、远程 API 幂等、生命周期边界和专项测试要求。
-- 学习文档新增 Service、ORM、API Store 接入示例，并明确不使用通用 SQL Agent Tool。
+- 学习文档新增 PostgreSQL 表结构、事务、分页、用户 metadata、契约测试及无数据库调试教程，并明确不使用
+  通用 SQL Agent Tool。
 
 ## 验证范围
 
