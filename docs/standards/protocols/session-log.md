@@ -17,19 +17,24 @@ Session Log 是 CraftAgent 的持久事实边界。它使用 append-only 事件�
 - Session `version` 等于当前已写入事件数量。
 - 追加必须携带 `expectedVersion`，版本不一致时整批拒绝。
 - 一批事件必须全成或全败，不能产生部分写入。
-- 事件 ID、sequence 和 timestamp 由 Store 分配，调用方不能伪造。
+- sequence 由 Store 分配，调用方不能伪造。
+- eventId 和 timestamp 表示事件的身份与发生时刻，由产生方在创建草稿时写入；未提供时由 Store 兜底生成。
 - 持久化事件必须可以安全转换为 JSON。
 - 模型历史只能从 Session Event 推导，不能维护第二份权威可变消息数组。
 
 ## 3. 事件结构
 
-调用方先创建 `SessionEventDraft`，Store 成功接受后附加 `SessionEventEnvelope`：
+调用方先创建 `SessionEventDraft`，Store 成功接受后附加 `SessionEventEnvelope`。事件草稿可以携带
+`eventId` 和 `timestamp` 分别表示事件身份与事实发生时刻；未提供时由 Store 兜底生成。
+`sequence` 仍由 Store 在追加时分配。
 
 ```ts
 interface SessionEventEnvelope {
+  /** 事件身份；由产生方写入，缺省时由 Store 生成。 */
   eventId: string
   sessionId: string
   sequence: number
+  /** 事实发生时刻；由产生方写入，缺省时由 Store 在接受时生成。 */
   timestamp: string
 }
 ```

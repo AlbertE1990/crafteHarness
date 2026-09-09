@@ -53,7 +53,7 @@ export class AgentLoop {
   private readonly config: AgentLoopConfig
   private readonly tools: ReadonlyMap<string, AgentTool>
   private readonly now: () => Date
-  private readonly createId: (kind: 'run' | 'turn') => string
+  private readonly createId: (kind: 'run' | 'turn' | 'event') => string
 
   constructor(config: AgentLoopConfig) {
     validateConfig(config)
@@ -344,25 +344,33 @@ export class AgentLoop {
     const snapshot = await readSessionSnapshot(state.sessionId, this.config.store)
     const events: SessionEventDraft[] = []
 
+    const occurredAt = this.getTimestamp()
+
     if (snapshot.version === 0) {
       events.push({
         type: 'session.created',
+        eventId: this.createId('event'),
+        timestamp: occurredAt,
         ...(request.sessionMetadata ? { metadata: request.sessionMetadata } : {}),
       })
       if (this.config.systemPrompt) {
         events.push({
           type: 'message.appended',
+          eventId: this.createId('event'),
+          timestamp: occurredAt,
           message: { role: 'system', content: this.config.systemPrompt },
         })
       }
     }
 
     events.push(
-      { type: 'turn.started', runId: state.runId, turnId: state.turnId },
+      { type: 'turn.started', runId: state.runId, turnId: state.turnId, eventId: this.createId('event'), timestamp: occurredAt },
       {
         type: 'message.appended',
         runId: state.runId,
         turnId: state.turnId,
+        eventId: this.createId('event'),
+        timestamp: occurredAt,
         message: { role: 'user', content: input },
       },
     )
@@ -524,6 +532,8 @@ export class AgentLoop {
         type: 'message.appended',
         runId: state.runId,
         turnId: state.turnId,
+        eventId: this.createId('event'),
+        timestamp: this.getTimestamp(),
         message,
       }],
     })
@@ -540,7 +550,13 @@ export class AgentLoop {
       const appended = await this.config.store.append({
         sessionId: state.sessionId,
         expectedVersion: state.sessionVersion,
-        events: [{ type: 'turn.completed', runId: state.runId, turnId: state.turnId }],
+        events: [{
+          type: 'turn.completed',
+          runId: state.runId,
+          turnId: state.turnId,
+          eventId: this.createId('event'),
+          timestamp: this.getTimestamp(),
+        }],
       })
       state.sessionVersion = appended.version
     }
@@ -573,17 +589,22 @@ export class AgentLoop {
     listener?: AgentRunOptions['onEvent'],
   ): Promise<AgentRunResult> {
     if (state.turnStarted) {
+      const occurredAt = this.getTimestamp()
       const event: SessionEventDraft = reason === 'cancelled'
         ? {
             type: 'turn.cancelled',
             runId: state.runId,
             turnId: state.turnId,
+            eventId: this.createId('event'),
+            timestamp: occurredAt,
             reason: error.message,
           }
         : {
             type: 'turn.failed',
             runId: state.runId,
             turnId: state.turnId,
+            eventId: this.createId('event'),
+            timestamp: occurredAt,
             error,
           }
       try {
@@ -637,6 +658,8 @@ export class AgentLoop {
             type: 'turn.failed',
             runId: state.runId,
             turnId: state.turnId,
+            eventId: this.createId('event'),
+            timestamp: this.getTimestamp(),
             error,
           }],
         })

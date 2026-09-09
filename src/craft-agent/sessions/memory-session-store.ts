@@ -66,10 +66,7 @@ export class MemorySessionStore implements SessionCatalogStore {
 
     const batchIds = new Set<string>()
     const appended = drafts.map((draft, index): SessionEvent => {
-      const eventId = this.createEventId().trim()
-      if (!eventId) {
-        throw invalidArgument(request.sessionId, 'createEventId() 返回了空事件 ID')
-      }
+      const eventId = resolveProducerEventId(draft, this.createEventId, request.sessionId)
       if (this.eventIds.has(eventId) || batchIds.has(eventId)) {
         throw new SessionStoreError({
           code: 'SESSION_EVENT_ID_CONFLICT',
@@ -79,17 +76,20 @@ export class MemorySessionStore implements SessionCatalogStore {
       }
       batchIds.add(eventId)
 
-      const timestamp = this.now()
-      if (!Number.isFinite(timestamp.getTime())) {
+      const acceptedAt = this.now()
+      if (!Number.isFinite(acceptedAt.getTime())) {
         throw invalidArgument(request.sessionId, 'now() 返回了无效日期')
       }
+      const timestamp = draft.timestamp === undefined
+        ? acceptedAt.toISOString()
+        : resolveProducerTimestamp(draft.timestamp, request.sessionId)
 
       return deepFreeze({
         ...draft,
         eventId,
         sessionId: request.sessionId,
         sequence: currentVersion + index + 1,
-        timestamp: timestamp.toISOString(),
+        timestamp,
       })
     })
 
@@ -247,6 +247,28 @@ function cloneSerializable<T>(value: T, sessionId: string): T {
       cause: error,
     })
   }
+}
+
+/** 事件身份与发生时刻由产生方写入；缺省时由 Store 兜底生成。 */
+function resolveProducerEventId(
+  draft: SessionEventDraft,
+  fallback: () => string,
+  sessionId: string,
+): string {
+  if (draft.eventId === undefined)
+    return fallback().trim()
+  if (typeof draft.eventId !== 'string' || !draft.eventId.trim())
+    throw invalidArgument(sessionId, '事件 eventId 必须是非空字符串')
+  return draft.eventId.trim()
+}
+
+function resolveProducerTimestamp(value: string, sessionId: string): string {
+  if (typeof value !== 'string' || !value)
+    throw invalidArgument(sessionId, '事件 timestamp 必须是非空字符串')
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime()))
+    throw invalidArgument(sessionId, '事件 timestamp 必须是可解析的时间')
+  return date.toISOString()
 }
 
 /** 深度冻结内存 Store 的输入副本和返回快照，阻止调用方篡改已追加事实。 */

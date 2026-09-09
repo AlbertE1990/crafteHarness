@@ -44,7 +44,7 @@ export interface AgentLoopConfig {
   /** 测试可注入的墙上时钟。 */
   readonly now?: () => Date
   /** 测试或部署侧可注入的关联 ID 生成器。 */
-  readonly createId?: (kind: 'run' | 'turn') => string
+  readonly createId?: (kind: 'run' | 'turn' | 'event') => string
 }
 
 /** 发起一次用户 Turn 的业务输入。 */
