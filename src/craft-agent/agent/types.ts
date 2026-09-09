@@ -3,7 +3,6 @@ import type {
   SessionSummary,
 } from '../contracts'
 import type {
-  AgentEvent,
   AgentEventListener,
   AgentRunResult,
 } from '../core'
@@ -70,9 +69,4 @@ export interface AgentSessionPage {
 export interface GetAgentSessionOptions {
   /** 读取完整快照时每页的事件数。 */
   readonly pageSize?: number
-}
-
-/** 从低层事件创建输出投影器时使用的内部结构。 */
-export interface AgentOutputProjector {
-  readonly project: (event: AgentEvent) => Promise<void>
 }

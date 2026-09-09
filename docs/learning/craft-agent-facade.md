@@ -5,7 +5,7 @@
 完成本篇后，你应该能解释：
 
 - 为什么日常应用使用 `Agent`，底层测试和扩展仍保留 `AgentLoop`。
-- `defineAgentConfig()`、`defineTools()` 分别解决什么问题。
+- `defineAgentConfig()` 如何把开发者输入归一化为内部协议。
 - 精简输出事件与完整轨迹事件为什么必须分层。
 - Session ID、事实日志和会话列表如何流转。
 
@@ -14,19 +14,19 @@
 ```text
 src/craft-agent/agent/
   config.ts        # 模型配置、依赖注入、预算和默认值归一化
-  define-tools.ts  # 异构 DefinedTool 的统一组装入口
+  normalize-tools.ts # 原始 DefinedTool 到 AgentTool 的内部归一化
   types.ts         # run 输入、精简输出和会话查询类型
   agent.ts         # AgentLoop 门面、事件投影和 Session 查询
   index.ts         # 本模块导出
 ```
 
-推荐阅读顺序：`types.ts` → `config.ts` → `define-tools.ts` → `Agent.run()` →
+推荐阅读顺序：`types.ts` → `config.ts` → `normalize-tools.ts` → `Agent.run()` →
 `createOutputProjector()` → `listSessions()`。
 
 ## 3. 完整使用示例
 
 ```ts
-import Agent, { defineTool, defineTools } from 'craft-agent'
+import Agent, { defineTool } from 'craft-agent'
 import { z } from 'zod'
 
 const echoTool = defineTool({
@@ -49,7 +49,7 @@ const agent = new Agent({
     model: 'example-model',
   },
   tools: {
-    additional: defineTools(echoTool),
+    additional: [echoTool],
   },
   limits: { maxModelSteps: 8, maxToolCalls: 16 },
 })
@@ -84,6 +84,7 @@ flowchart TD
   SessionId --> Loop[AgentLoop]
   Adapter --> Loop
   Store <--> Loop
+  RawTools[defineTool 结果] --> Normalize
   Tools --> Loop
   Loop --> Trace[完整 AgentEvent / onTrace]
   Loop --> Project[精简事件投影]
@@ -121,7 +122,7 @@ sequenceDiagram
 ## 6. 容易混淆的边界
 
 - `defineAgentConfig()` 不是环境变量加载器；它只处理已经交给它的数据。
-- `defineTools()` 不执行工具，也不绕过 `executeTool()`。
+- `tools` 只接受 `defineTool()` 结果，并由配置边界统一转换为内部执行结构。
 - 不配置 `tools` 不代表没有工具；Agent 会自动装载时间和计算器。
 - `tools.additional` 只追加应用工具；完全不使用内置工具时显式选择 `mode: 'replace'`。
 - `session.started` 表示本次 run 已确定 Session ID，不保证它此前不存在。
@@ -132,7 +133,7 @@ sequenceDiagram
 ## 7. 练习
 
 1. 使用 ScriptedModelAdapter 创建 Agent，并观察精简事件与完整轨迹数量差异。
-2. 定义两个不同输入 Schema 的工具，通过一次 `defineTools()` 注册。
+2. 定义两个不同输入 Schema 的工具，直接通过 `additional: [toolA, toolB]` 注册。
 3. 连续向同一个 sessionId 发起两次 run，检查第二次模型输入包含第一轮历史。
 4. 使用 `listSessions({ limit: 1 })` 和 `afterSessionId` 读取两页。
 

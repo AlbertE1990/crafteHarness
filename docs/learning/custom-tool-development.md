@@ -49,11 +49,11 @@ export const echoTool = defineTool({
 在 `src/server/agent-tools.ts` 中加入定义：
 
 ```ts
-export const serverTools = defineTools(
+export const serverTools = [
   getUserLocationTool,
   getWeatherTool,
   echoTool,
-)
+] as const
 ```
 
 然后只在 Runtime 中追加这个注册表：
@@ -70,6 +70,8 @@ const agent = new Agent({
 不需要把 `get_current_time`、`calculator` 加入 `serverTools`，它们由 Agent 自动装载；也不需要修改独立
 JSON Schema、工具名映射或 `agent.ts` 的 switch/case。Agent 会把最终集合的 `tool.model` 交给
 ModelAdapter，并在收到同名 Tool Call 时通过 Tool Harness 执行。
+
+工具数组可以直接传入 Agent；配置边界会完成内部转换，再检查重复名称并冻结集合。
 
 如果业务明确不需要某个内置工具，使用 `disabledBuiltins`；如果需要保持工具名和模型用法不变但替换实现，
 使用 `overrides`；测试隔离或严格白名单场景才使用 `mode: 'replace'`。不要把同名工具放进 `additional`，

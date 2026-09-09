@@ -12,7 +12,7 @@ AgentLoop 和事件投影，但不读取环境变量，也不依赖 HTTP 框架�
 ## 2. 最小创建方式
 
 ```ts
-import Agent, { defineTool, defineTools } from 'craft-agent'
+import Agent, { defineTool } from 'craft-agent'
 
 const agent = new Agent({
   model: {
@@ -20,7 +20,7 @@ const agent = new Agent({
     apiKey: process.env.DEEPSEEK_API_KEY!,
   },
   tools: {
-    additional: defineTools(myTool),
+    additional: [myTool],
   },
   systemPrompt: '你是一个可靠的助手。',
 })
@@ -32,7 +32,7 @@ const agent = new Agent({
 
 - `{ provider: 'deepseek', ... }`：创建内置 DeepSeek Adapter。
 - `{ provider: 'openai-compatible', ... }`：创建 OpenAI Chat Completions 兼容 Adapter。
-- 直接传入 `ModelAdapter`；早期 `{ provider: 'custom', adapter }` 写法也继续支持。
+- 直接传入开发者实现的 `ModelAdapter`。
 
 ## 3. 配置归一化
 
@@ -52,18 +52,17 @@ const agent = new Agent({
 
 ## 4. 工具组装
 
-`defineTools(...tools)` 接受多个不同 Zod Schema 的 `defineTool()` 结果，一次性转换为 AgentLoop 所需的
-`AgentTool[]`。已经由 `createAgentTool()` 转换的工具也可以混用。
+`additional`、`overrides` 和 `replace.tools` 只接受不同 Zod Schema 的 `defineTool()` 结果：
 
 ```ts
-const tools = defineTools(weatherTool, calculatorTool)
 const agent = new Agent({
   model,
-  tools: { additional: tools },
+  tools: { additional: [weatherTool, businessTool] },
 })
 ```
 
-这只是泛型擦除与不可变数组边界；执行仍然经过 Tool Harness 的输入输出校验、策略、超时和重试。
+配置内部先把每个原始定义转换为 `AgentTool`，再检查名称并冻结最终数组。执行仍经过 Tool Harness 的
+输入输出校验、策略、超时和重试。已经转换的 `AgentTool` 是 Core 执行结构，不属于 Agent 配置输入。
 
 `AgentConfigInput.tools` 使用两种互斥模式：
 
@@ -79,7 +78,7 @@ const agent = new Agent({
     overrides: {
       calculator: customCalculator,
     },
-    additional: defineTools(weatherTool),
+    additional: [weatherTool],
   },
 })
 
@@ -87,7 +86,7 @@ const isolatedAgent = new Agent({
   model,
   tools: {
     mode: 'replace',
-    tools: defineTools(weatherTool),
+    tools: [weatherTool],
   },
 })
 ```
@@ -127,7 +126,7 @@ const result = await agent.run({
 
 - `getSession(sessionId)` 返回会话摘要和由事实日志推导的 `ModelMessage[]`。
 - `listSessions({ limit, afterSessionId })` 按创建顺序分页，并返回每个会话的模型消息。
-- `SessionStore.list()` 是可选能力：Agent 执行只要求 `append/read`；缺少列表能力时仅列表调用失败。
+- Agent 执行只要求 `SessionStore.append/read`；`listSessions()` 额外要求 Store 实现 `SessionCatalogStore`。
 - Core 不生成会话标题、展示消息或前端字段，这些属于 Runtime 投影。
 
 默认 `MemorySessionStore` 支持列表，但进程退出后数据会丢失。生产环境应注入实现同一协议的持久化 Store。

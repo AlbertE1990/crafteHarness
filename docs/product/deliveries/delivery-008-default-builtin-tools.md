@@ -15,8 +15,9 @@
 - `defineAgentConfig()` 默认创建 `get_current_time` 与 `calculator`。
 - 新增 `extend` 工具配置，支持 `disabledBuiltins`、`overrides` 和 `additional`。
 - 新增互斥的 `replace` 模式，支持严格工具白名单。
+- 三种工具输入都可直接接收 `defineTool()` 结果，由 Agent 配置边界先转换再去重和冻结。
 - 配置阶段拒绝未知内置名称、禁用与覆盖冲突、覆盖名称不一致和最终集合重名。
-- Server 注册表只保留 IP 定位与天气工具，并通过 `additional` 接入 Agent。
+- Server 注册表只保留 IP 定位与天气定义，不再调用额外组装函数，通过 `additional` 直接接入 Agent。
 - 同步更新 Agent、Tool、Server 规范和两篇学习文档。
 
 ## 验证范围

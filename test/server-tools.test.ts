@@ -1,12 +1,19 @@
 import type { ExecuteToolOptions } from '../src/craft-agent'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { defineTool, defineTools } from '../src/craft-agent'
+import { defineAgentConfig, defineTool } from '../src/craft-agent'
+import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
 import {
   serverTools,
   trustedServerToolPolicy,
 } from '../src/server/agent-tools'
 import { getTime, getUserLocation, getWeather } from '../src/server/func'
+
+/** 通过真实 Agent 配置边界把服务端原始 DefinedTool 归一化为 Harness 注册项。 */
+const registeredServerTools = defineAgentConfig({
+  model: new ScriptedModelAdapter({ script: [] }),
+  tools: { mode: 'replace', tools: serverTools },
+}).tools
 
 function jsonResponse(body: unknown): Response {
   return {
@@ -22,7 +29,7 @@ async function invokeServerTool(
   rawInput: unknown,
   options: Partial<ExecuteToolOptions> = {},
 ) {
-  const tool = serverTools.find(item => item.name === name)
+  const tool = registeredServerTools.find(item => item.name === name)
   if (!tool)
     throw new Error(`测试工具 ${name} 未注册`)
 
@@ -39,12 +46,12 @@ describe('server tools through CraftAgent', () => {
   })
 
   it('derives every model tool schema from its registered definition', () => {
-    expect(serverTools.map(tool => tool.model.name)).toEqual([
+    expect(registeredServerTools.map(tool => tool.model.name)).toEqual([
       'get_user_location',
       'get_weather',
     ])
 
-    for (const tool of serverTools) {
+    for (const tool of registeredServerTools) {
       expect(tool.model.inputSchema).toMatchObject({
         type: 'object',
         additionalProperties: false,
@@ -54,14 +61,18 @@ describe('server tools through CraftAgent', () => {
   })
 
   it('wraps a custom defineTool definition without changing Agent branches', async () => {
-    const [customTool] = defineTools(defineTool({
+    const definition = defineTool({
       name: 'echo_for_test',
       description: '返回测试文本。',
       inputSchema: z.strictObject({ text: z.string() }),
       outputSchema: z.strictObject({ text: z.string() }),
       security: { risk: 'safe', capabilities: [], idempotent: true },
       execute: input => input,
-    }))
+    })
+    const [customTool] = defineAgentConfig({
+      model: new ScriptedModelAdapter({ script: [] }),
+      tools: { mode: 'replace', tools: [definition] },
+    }).tools
     if (!customTool)
       throw new Error('测试工具注册失败')
 

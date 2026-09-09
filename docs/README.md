@@ -47,7 +47,7 @@
 - OpenAI SDK 仅存在于官方 Adapter；Core 不依赖 SDK，DeepSeek 只维护供应商差异。
 - `new Agent(config)` 可直接组装内置模型、自定义 Adapter、Store、预算和事件观察器，并自动装载安全内置工具。
 - 工具配置支持禁用或覆盖指定内置工具、整体替换内置集合，以及只追加应用工具。
-- `defineAgentConfig()` 可显式提前校验配置，`defineTools()` 可一次组装异构工具。
+- `defineAgentConfig()` 可显式提前校验配置；`defineTool()` 结果可直接传入 Agent，由内部统一归一化。
 - Scripted Adapter 与契约探针为应用和 Adapter 开发提供无网络测试入口。
 - Session 使用 append-only 事件、乐观并发和一致性分页，并可确定性推导模型历史。
 - 外部 SessionStore 通过统一持久化语义和独立契约探针接入 SQL、ORM、Service 或 API。

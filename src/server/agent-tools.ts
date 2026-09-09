@@ -2,10 +2,7 @@ import type {
   ToolPolicy,
 } from '../craft-agent'
 import { z } from 'zod'
-import {
-  defineTool,
-  defineTools,
-} from '../craft-agent'
+import { defineTool } from '../craft-agent'
 import { getUserLocation, getWeather } from './func'
 
 /** 只读网络工具共用的自动重试策略。 */
@@ -87,13 +84,13 @@ export const getWeatherTool = defineTool({
 /**
  * 当前服务明确注册的第一方工具。
  *
- * 开发自定义工具时先使用 defineTool() 创建定义，再把定义加入此列表；AgentLoop 会自动把
- * `tool.model` 发送给模型，并通过 CraftAgent Harness 执行对应实现。
+ * 开发自定义工具时先使用 defineTool() 创建定义，再把定义加入此列表；Agent 配置会自动完成
+ * AgentTool 转换，AgentLoop 最终仍通过 CraftAgent Harness 执行对应实现。
  */
-export const serverTools = defineTools(
+export const serverTools = [
   getUserLocationTool,
   getWeatherTool,
-)
+] as const
 
 /**
  * 当前 Runtime 对静态注册第一方工具使用的许可策略。

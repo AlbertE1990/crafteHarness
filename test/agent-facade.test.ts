@@ -1,8 +1,13 @@
 // @vitest-environment node
 
-import type { AgentEvent, AgentOutputEvent, ModelStreamChunk } from '../src/craft-agent'
+import type {
+  AgentEvent,
+  AgentOutputEvent,
+  ModelStreamChunk,
+  SessionStore,
+} from '../src/craft-agent'
 import { describe, expect, it } from 'vitest'
-import Agent from '../src/craft-agent'
+import Agent, { MemorySessionStore } from '../src/craft-agent'
 import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
 
 /** 构造门面测试使用的单候选标准流块。 */
@@ -99,5 +104,21 @@ describe('agent facade', () => {
       role: 'assistant',
       content: '第二条回答',
     })
+  })
+
+  it('requires the explicit SessionCatalogStore capability only when listing sessions', async () => {
+    const memory = new MemorySessionStore()
+    const executionStore: SessionStore = {
+      append: request => memory.append(request),
+      read: (sessionId, options) => memory.read(sessionId, options),
+    }
+    const agent = new Agent({
+      model: new ScriptedModelAdapter({ script: [] }),
+      store: executionStore,
+    })
+
+    await expect(agent.listSessions()).rejects.toThrow(
+      '当前 SessionStore 未实现 list() 会话目录能力',
+    )
   })
 })

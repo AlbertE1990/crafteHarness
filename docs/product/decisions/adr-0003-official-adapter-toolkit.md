@@ -23,7 +23,8 @@
 - `ScriptedModelAdapter` 使用确定性脚本替代网络，支持调用快照、取消和流迭代错误。
 - `assertModelAdapterContract()` 同时检查 `complete()` 与 `stream()` 的最小运行时协议，测试时必须配合
   SDK 客户端替身或 Scripted Adapter，不能访问生产模型。
-- `defineAgentConfig()` 作为唯一归一化入口，使用判别联合支持 DeepSeek、OpenAI Compatible 和自定义 Adapter。
+- `defineAgentConfig()` 作为唯一归一化入口，使用判别联合创建 DeepSeek 和 OpenAI Compatible Adapter；
+  自定义实现直接传入 `ModelAdapter`。
 - 协议差异明显的供应商应新增独立 Adapter，不能向通用兼容层不断加入厂商条件分支。
 
 ## 后果

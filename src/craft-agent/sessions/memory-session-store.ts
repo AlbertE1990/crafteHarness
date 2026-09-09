@@ -3,11 +3,11 @@ import type {
   AppendSessionEventsResult,
   ListSessionsOptions,
   ReadSessionEventsOptions,
+  SessionCatalogStore,
   SessionEvent,
   SessionEventDraft,
   SessionEventPage,
   SessionListPage,
-  SessionStore,
 } from '../contracts'
 import { randomUUID } from 'node:crypto'
 import { SessionStoreError } from './errors'
@@ -27,7 +27,7 @@ export interface MemorySessionStoreOptions {
  * 该实现用于开发、测试和协议验证；进程退出后数据会丢失。每次 append 在同步临界区内完成，
  * 并通过 expectedVersion 阻止两个调用方基于同一旧版本同时提交。
  */
-export class MemorySessionStore implements SessionStore {
+export class MemorySessionStore implements SessionCatalogStore {
   private readonly logs = new Map<string, SessionEvent[]>()
   private readonly eventIds = new Set<string>()
   private readonly now: () => Date

@@ -1,4 +1,8 @@
-import type { ListSessionsOptions, SessionStore } from '../contracts'
+import type {
+  ListSessionsOptions,
+  SessionCatalogStore,
+  SessionStore,
+} from '../contracts'
 import type { AgentEvent, AgentRunResult } from '../core'
 import type { AgentConfigInput, DefinedAgentConfig } from './config'
 import type {
@@ -123,10 +127,10 @@ export class Agent {
   /**
    * 分页列出 Session 及其模型消息。
    *
-   * 自定义 Store 若未实现可选 list() 能力，Agent 仍可运行，但本方法会明确拒绝调用。
+   * 自定义 Store 若未实现 SessionCatalogStore，Agent 仍可运行，但本方法会明确拒绝调用。
    */
   async listSessions(options: ListSessionsOptions = {}): Promise<AgentSessionPage> {
-    if (!this.store.list)
+    if (!isSessionCatalogStore(this.store))
       throw new TypeError('当前 SessionStore 未实现 list() 会话目录能力')
 
     const page = await this.store.list(options)
@@ -145,6 +149,11 @@ export class Agent {
         : {}),
     })
   }
+}
+
+/** 在不扩大基本 SessionStore 协议的前提下识别可查询会话目录的实现。 */
+function isSessionCatalogStore(store: SessionStore): store is SessionCatalogStore {
+  return 'list' in store && typeof store.list === 'function'
 }
 
 /** 把 AgentEvent 投影为供应商、网络和 UI 无关的精简输出事件。 */

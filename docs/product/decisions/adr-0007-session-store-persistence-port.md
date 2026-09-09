@@ -15,12 +15,12 @@ Service。若为每种方式向 Agent 增加初始化、保存、更新或连接
 
 ## 决定
 
-- `SessionStore.append/read/list` 是外部持久化的唯一运行时端口。
+- `SessionStore.append/read` 是 Agent 执行所需的外部持久化端口；`SessionCatalogStore.list` 提供额外目录能力。
 - 外部 Store 直接读写权威数据源，不先同步到 MemorySessionStore，也不提供覆盖式更新。
 - 数据库连接、迁移、关闭、备份和历史导入属于 Runtime 或独立管理端口。
 - SQL、ORM 和 API 类型及异常不能进入 Core；基础设施错误包装为带 operation 的
   `SESSION_OPERATION_FAILED`。
-- `SessionCatalogStore` 表示明确提供 `list()` 的实现，同时保留 `SessionStore.list?` 兼容现有执行型 Store。
+- `SessionCatalogStore` 扩展 `SessionStore` 并要求实现 `list()`，基本接口不重复声明可选目录方法。
 - 提供独立的 `sessions/testing` 入口和无测试框架契约探针，所有持久化实现必须运行。
 - CraftAgent Core 不内置数据库 Store，也不提供可由模型调用的通用 SQL 工具。
 

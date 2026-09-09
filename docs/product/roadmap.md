@@ -23,7 +23,8 @@ flowchart LR
   P4 --> P41[阶段 4.1<br/>CraftAgent 门面<br/>已完成]
   P41 --> P42[阶段 4.2<br/>内置工具自动装载<br/>已完成]
   P42 --> P43[阶段 4.3<br/>SessionStore 持久化契约<br/>已完成]
-  P43 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
+  P43 --> P44[阶段 4.4<br/>Agent API 归一化与收口<br/>已完成]
+  P44 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -47,7 +48,7 @@ flowchart LR
 
 当前完成：
 
-- Server 的工具通过 `defineTools()` 注册，模型参数仍只来自 `DefinedTool.model`。
+- Server 的工具通过 `defineTool()` 定义并直接传给 Agent，模型参数仍只来自 `DefinedTool.model`。
 - 模型 Tool Call 由 CraftAgent AgentLoop 通过 `executeTool()` 执行。
 - 时间、IP 定位和天气工具使用 `defineTool()` 统一 Schema 与实现。
 - 移除旧的手写 `tools.json` 和旧 Tool Harness，避免双协议漂移。
@@ -131,7 +132,7 @@ flowchart LR
 已完成范围：
 
 - 产品名、源码目录、导入和文档统一迁移为 CraftAgent。
-- 默认导出 `Agent`，并提供 `defineAgentConfig()` 与 `defineTools()`。
+- 默认导出 `Agent`，并提供 `defineAgentConfig()`；原始 DefinedTool 由配置边界自动归一化。
 - 声明式创建内置 DeepSeek/OpenAI Compatible Adapter，或直接注入自定义 Adapter。
 - 自动 Session ID、精简输出事件、完整 `onTrace` 和 Session 查询。
 - SessionStore 增加可选会话目录能力，MemorySessionStore 支持创建顺序分页。
@@ -164,7 +165,23 @@ flowchart LR
 详细交付见[阶段 4.3 记录](./deliveries/delivery-009-session-store-persistence-contract.md)，设计依据见
 [ADR-0007](./decisions/adr-0007-session-store-persistence-port.md)。
 
-## 12. 阶段 5：轨迹持久化与查询（下一阶段）
+## 12. 阶段 4.4：Agent API 归一化与预发布收口（已完成）
+
+已完成范围：
+
+- Agent 工具配置直接接受 `defineTool()` 结果，不要求调用方预先转换。
+- 追加、覆盖和整体替换统一执行“归一化 → 去重 → 冻结”。
+- 工具配置只保留 `defineTool()` 产物这一种输入，不接受内部 `AgentTool` 执行结构。
+- 删除额外的工具组装入口和双形态兼容分支。
+- 自定义模型只直接接受 `ModelAdapter`，删除无使用者的包装配置。
+- `SessionStore` 与 `SessionCatalogStore` 分别表达执行和目录能力，不在基本接口重复声明可选 `list()`。
+- 删除未被实现或使用的输出投影器类型草案。
+- Server 和普通文档示例移除额外工具组装步骤。
+- 开发规范沉淀“降低使用者心智负担”的公共 API 原则。
+
+详细交付见[阶段 4.4 记录](./deliveries/delivery-010-internal-tool-normalization.md)。
+
+## 13. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -174,7 +191,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 CraftAgent 核心协议。
 
-## 13. 阶段 6：异常诊断
+## 14. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -187,7 +204,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 14. 阶段 7：长期安全与扩展（最低优先级）
+## 15. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

@@ -19,12 +19,14 @@ import type {
   ToolEventListener,
   ToolPolicy,
 } from '../tools'
+import type { AgentToolDefinitionInput } from './normalize-tools'
 import { randomUUID } from 'node:crypto'
 import { DeepSeekModelAdapter } from '../adapters/deepseek'
 import { OpenAICompatibleModelAdapter } from '../adapters/openai-compatible'
 import { builtinToolNames, createBuiltinTools } from '../builtins/registry'
 import { createLimits } from '../core/stop-policy'
 import { MemorySessionStore } from '../sessions'
+import { normalizeAgentToolDefinitions } from './normalize-tools'
 
 /** 使用内置 DeepSeek Adapter 时需要的声明式配置。 */
 export interface DeepSeekAgentModelConfig extends DeepSeekModelAdapterConfig {
@@ -40,31 +42,24 @@ export interface OpenAICompatibleAgentModelConfig
   readonly providerName?: string
 }
 
-/** 兼容早期配置写法的自定义 Adapter 包装。 */
-export interface CustomAgentModelConfig {
-  readonly provider: 'custom'
-  readonly adapter: ModelAdapter
-}
-
 /** Agent 支持内置模型配置，也允许直接传入自定义 ModelAdapter。 */
 export type AgentModelInput
   = | DeepSeekAgentModelConfig
     | OpenAICompatibleAgentModelConfig
-    | CustomAgentModelConfig
     | ModelAdapter
 
 /** 保留默认内置工具，并允许对它们进行显式调整和追加。 */
 export interface ExtendAgentToolsConfig {
   readonly mode?: 'extend'
   readonly disabledBuiltins?: readonly BuiltinToolName[]
-  readonly overrides?: Readonly<Partial<Record<BuiltinToolName, AgentTool>>>
-  readonly additional?: readonly AgentTool[]
+  readonly overrides?: Readonly<Partial<Record<BuiltinToolName, AgentToolDefinitionInput>>>
+  readonly additional?: readonly AgentToolDefinitionInput[]
 }
 
 /** 完全跳过默认内置工具，仅注册调用方给出的工具集合。 */
 export interface ReplaceAgentToolsConfig {
   readonly mode: 'replace'
-  readonly tools: readonly AgentTool[]
+  readonly tools: readonly AgentToolDefinitionInput[]
 }
 
 /** Agent 工具配置：默认扩展内置集合，也可以显式整体替换。 */
@@ -166,7 +161,7 @@ function createTools(input: AgentToolsInput | undefined): readonly AgentTool[] {
     rejectReplaceOnlyFields(input)
     if (!Array.isArray(input.tools))
       throw new TypeError('Agent config.tools.tools 必须是数组')
-    return freezeUniqueTools(input.tools)
+    return freezeUniqueTools(normalizeAgentToolDefinitions(input.tools))
   }
   if (input.mode !== undefined && input.mode !== 'extend')
     throw new TypeError('Agent config.tools.mode 必须是 extend 或 replace')
@@ -194,14 +189,18 @@ function createTools(input: AgentToolsInput | undefined): readonly AgentTool[] {
   }
 
   const overrides = extend.overrides ?? {}
+  const normalizedOverrides: Partial<Record<BuiltinToolName, AgentTool>> = {}
   for (const name of Object.keys(overrides)) {
     if (!builtinNames.has(name))
       throw new TypeError(`不能覆盖未知的内置工具：${name}`)
     if (disabled.has(name))
       throw new TypeError(`内置工具不能同时禁用和覆盖：${name}`)
-    const tool = overrides[name as BuiltinToolName]
+    const builtinName = name as BuiltinToolName
+    const source = overrides[builtinName]
+    const tool = source ? normalizeAgentToolDefinitions([source])[0] : undefined
     if (!tool || tool.name !== name)
       throw new TypeError(`内置工具 ${name} 的覆盖实现必须使用相同名称`)
+    normalizedOverrides[builtinName] = tool
   }
 
   const builtins = createBuiltinTools()
@@ -209,11 +208,13 @@ function createTools(input: AgentToolsInput | undefined): readonly AgentTool[] {
     if (disabled.has(tool.name))
       return []
     const name = tool.name as BuiltinToolName
-    const override = Object.hasOwn(overrides, name) ? overrides[name] : undefined
+    const override = Object.hasOwn(normalizedOverrides, name)
+      ? normalizedOverrides[name]
+      : undefined
     return [override ?? tool]
   })
-  resolved.push(...(extend.additional ?? []))
-  return freezeUniqueTools(resolved)
+  const additional = normalizeAgentToolDefinitions(extend.additional ?? [])
+  return freezeUniqueTools([...resolved, ...additional])
 }
 
 /** replace 是互斥模式，运行时也拒绝混入 extend 专属字段。 */
@@ -252,10 +253,6 @@ function createModelAdapter(input: AgentModelInput): ModelAdapter {
     return input
   }
 
-  if (input.provider === 'custom') {
-    validateModelAdapter(input.adapter)
-    return input.adapter
-  }
   if (input.provider === 'deepseek')
     return new DeepSeekModelAdapter(input)
   if (input.provider === 'openai-compatible') {

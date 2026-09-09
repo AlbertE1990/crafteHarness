@@ -29,7 +29,7 @@ src/
     agent/
       agent.ts                  # 统一门面、输出投影、Session 查询
       config.ts                 # defineAgentConfig 与内置模型配置
-      define-tools.ts           # 异构工具组装
+      normalize-tools.ts        # 工具定义的内部归一化边界
       types.ts                  # 门面输入、输出与会话投影
     adapters/
       openai-compatible/        # OpenAI SDK 隔离边界

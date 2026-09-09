@@ -191,6 +191,7 @@ const agent = new Agent({ model })
 - `calculator`：使用结构化运算，不使用 `eval()` 或动态代码执行。
 
 应用可以通过 `AgentConfigInput.tools` 禁用、覆盖或整体替换内置集合，也可以使用 `additional` 只追加工具。
+这些字段只接受 `defineTool()` 结果，工具数组可以直接传入 Agent。
 `createCurrentTimeTool()` 和 `createCalculatorTool()` 继续导出，用于直接使用 Tool Harness、编写测试或构造
 同名覆盖实现，但应用 Runtime 不需要为了启用默认能力而手动导入它们。具体配置见
 [Agent 门面协议](./agent.md#4-工具组装)。

@@ -155,10 +155,6 @@ interface SessionStore {
     sessionId: string,
     options?: ReadSessionEventsOptions,
   ) => Promise<SessionEventPage>
-
-  list?: (
-    options?: ListSessionsOptions,
-  ) => Promise<SessionListPage>
 }
 
 interface SessionCatalogStore extends SessionStore {
@@ -173,10 +169,10 @@ interface SessionCatalogStore extends SessionStore {
 - 相同 Session 的事件按 sequence 返回。
 - `throughVersion` 不能读取超过指定版本的事件。
 - 未找到的 Session 读取为空快照，version 为 0；创建仍必须显式追加 `session.created`。
-- `list()` 是可选目录能力，按首次创建顺序使用 `afterSessionId` 和 `limit` 分页。
+- `list()` 属于 `SessionCatalogStore` 目录能力，按首次创建顺序使用 `afterSessionId` 和 `limit` 分页。
 - 列表只返回 sessionId、createdAt、version 和 metadata；完整消息仍由事件快照推导。
 - 实现不得把数据库连接、ORM 类型或供应商异常泄漏到 Core 协议。
-- 明确支持目录的实现可以声明为 `SessionCatalogStore`；`SessionStore.list?` 暂时保留以兼容执行型 Store。
+- 只支持 Agent 执行的 Store 实现 `SessionStore`；同时支持会话列表的 Store 实现 `SessionCatalogStore`。
 
 ## 10. 外部持久化适配
 

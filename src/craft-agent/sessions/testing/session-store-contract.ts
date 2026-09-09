@@ -1,4 +1,5 @@
 import type {
+  SessionCatalogStore,
   SessionEvent,
   SessionEventPage,
   SessionStore,
@@ -155,7 +156,7 @@ async function assertCatalogContract(
   secondaryId: string,
   required: boolean,
 ): Promise<boolean> {
-  if (!store.list) {
+  if (!isSessionCatalogStore(store)) {
     assert(!required, 'SessionStore 必须实现 list() 目录能力')
     return false
   }
@@ -171,6 +172,11 @@ async function assertCatalogContract(
   assert(second.sessions.length === 1 && second.sessions[0]?.sessionId === secondaryId, '目录下一页必须从 afterSessionId 之后继续')
   assert(!second.hasMore, '读完目录后 hasMore 必须为 false')
   return true
+}
+
+/** 识别接受探针的 Store 是否额外实现了会话目录协议。 */
+function isSessionCatalogStore(store: SessionStore): store is SessionCatalogStore {
+  return 'list' in store && typeof store.list === 'function'
 }
 
 /** 验证不存在 Session 的统一零版本返回。 */

@@ -15,10 +15,10 @@
 - 根入口默认导出 `Agent`，保留全部底层协议的命名导出。
 - 新增 `defineAgentConfig()`，统一模型 Adapter、工具、Store、预算和测试注入点。
 - 内置 DeepSeek、OpenAI Compatible 配置，同时接受直接传入的自定义 ModelAdapter。
-- 新增 `defineTools()`，一次组装不同 Zod Schema 的工具。
+- 新增异构工具归一化边界；后续已进一步收进 Agent 配置，普通调用方无需显式组装。
 - `Agent.run()` 自动生成可注入的 Session ID，并分离精简应用事件与完整轨迹事件。
 - 新增 `getSession()` 和分页 `listSessions()`。
-- SessionStore 增加可选 list 能力，MemorySessionStore 实现稳定创建顺序分页。
+- 新增会话目录能力，MemorySessionStore 实现稳定创建顺序分页；后续由 `SessionCatalogStore` 独立表达该能力。
 - 官方 Adapter 改为直接依赖 contracts，避免根入口默认导出 Agent 后形成循环依赖。
 - 删除过渡 `src/server/agent.ts` 和 `src/server/agent-config.ts`。
 - Fastify 只读取环境变量、构造 Agent、映射 SSE 与前端展示字段。

@@ -6,23 +6,19 @@ import {
   Agent,
   defineAgentConfig,
   defineTool,
-  defineTools,
 } from '../src/craft-agent'
 import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
 
 /** 创建配置测试使用的最小安全工具。 */
 function createTestTool(name: string) {
-  const [tool] = defineTools(defineTool({
+  return defineTool({
     name,
     description: `${name} 测试工具`,
     inputSchema: z.strictObject({}),
     outputSchema: z.strictObject({ name: z.string() }),
     security: { risk: 'safe', capabilities: [], idempotent: true },
     execute: () => ({ name }),
-  }))
-  if (!tool)
-    throw new Error(`测试工具 ${name} 创建失败`)
-  return tool
+  })
 }
 
 describe('agent config', () => {
@@ -124,6 +120,7 @@ describe('agent config', () => {
       'get_current_time',
       'get_weather',
     ])
+    expect(config.tools.at(-1)).not.toBe(weather)
   })
 
   it('can explicitly override one built-in tool', () => {
@@ -139,7 +136,8 @@ describe('agent config', () => {
       'get_current_time',
       'calculator',
     ])
-    expect(config.tools[1]).toBe(calculator)
+    expect(config.tools[1]).not.toBe(calculator)
+    expect(config.tools[1]?.model).toBe(calculator.model)
   })
 
   it('can replace the complete built-in tool collection', () => {
@@ -152,7 +150,8 @@ describe('agent config', () => {
       },
     })
 
-    expect(config.tools).toEqual([custom])
+    expect(config.tools.map(tool => tool.name)).toEqual(['only_custom_tool'])
+    expect(config.tools[0]).not.toBe(custom)
   })
 
   it('rejects ambiguous or duplicate tool configuration', () => {

@@ -179,7 +179,7 @@ reasoning、供应商请求扩展和错误映射等专项测试。
 
 - `provider: 'deepseek'` 使用官方 DeepSeek 差异层。
 - `provider: 'openai-compatible'` 使用通用兼容 Adapter，并以 `providerName` 保存真实来源。
-- 直接传入开发者实现的 `ModelAdapter`；早期 `provider: 'custom'` 包装也兼容。
+- 自定义实现直接以 `ModelAdapter` 传入，不增加包装配置。
 
 环境变量只在外部 Runtime 中读取，再作为显式配置传入。`defineAgentConfig()` 不访问 `process.env`。
 Session Store、审批、预算和观察器位于同一配置根，而不是增加平行的全局配置入口。

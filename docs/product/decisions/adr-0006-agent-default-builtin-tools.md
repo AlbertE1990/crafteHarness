@@ -22,6 +22,7 @@
 - `overrides` 只覆盖已知内置工具，且覆盖实现必须保持相同工具名。
 - `additional` 只用于新名称；任何名称冲突都在配置阶段报错。
 - `replace` 完全跳过内置集合，只使用调用方给出的 `tools`。
+- `additional`、`overrides` 和 `replace.tools` 直接接受 `defineTool()` 结果，Agent 先归一化再检查重名并冻结。
 - 内置工具工厂继续公开，支持直接 Harness 测试和定制实现，但默认启用不再要求 Runtime 导入。
 - 当前仅自动装载不依赖外部服务、文件或进程权限的时间与计算器；天气和定位仍属于应用工具。
 
@@ -51,6 +52,6 @@
 
 代价与限制：
 
-- 原 `tools: AgentTool[]` 写法需要迁移为 `tools.additional` 或 `mode: 'replace'`。
+- 原 `tools: AgentTool[]` 写法需要迁移为 `tools.additional` 或 `mode: 'replace'`，但不需要额外转换工具。
 - 新增默认内置工具属于可观察行为，必须经过协议评审并同步更新 `BuiltinToolName`、测试和文档。
 - 自动注册不是安全沙箱；Runtime 的 ToolPolicy 仍决定工具是否获准执行。

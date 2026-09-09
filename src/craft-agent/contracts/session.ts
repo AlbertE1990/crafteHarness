@@ -161,13 +161,9 @@ export interface SessionStore {
     sessionId: string,
     options?: ReadSessionEventsOptions,
   ) => Promise<SessionEventPage>
-  /**
-   * 可选的会话目录能力。Agent 执行只需要 append/read；列表 API 会在缺少该能力时明确报错。
-   */
-  list?: (options?: ListSessionsOptions) => Promise<SessionListPage>
 }
 
-/** 明确提供会话目录分页能力的 SessionStore。 */
+/** 在基本读写能力之上明确提供会话目录分页的 SessionStore。 */
 export interface SessionCatalogStore extends SessionStore {
   list: (options?: ListSessionsOptions) => Promise<SessionListPage>
 }
