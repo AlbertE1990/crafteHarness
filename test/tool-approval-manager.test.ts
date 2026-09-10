@@ -124,4 +124,37 @@ describe('agent tool approval manager', () => {
     )).resolves.toBe('unavailable')
     expect(manager.hasPending('approval-undeliverable')).toBe(false)
   })
+
+  it('keeps approval pending indefinitely when approvalTimeoutMs is -1', async () => {
+    vi.useFakeTimers()
+    try {
+      const events: unknown[] = []
+      const manager = new ToolApprovalManager({
+        createApprovalId: () => 'approval-no-expiry',
+        now: () => new Date('2026-09-10T02:00:00.000Z'),
+      })
+      manager.observeRun('run-approval', event => events.push(event))
+
+      const outcomePromise = manager.requestApproval({
+        ...createApprovalRequest(new AbortController().signal),
+        approvalTimeoutMs: -1,
+      })
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1_000)
+
+      expect(manager.hasPending('approval-no-expiry')).toBe(true)
+      expect(events[0]).toMatchObject({
+        type: 'tool.approval.requested',
+        approvalTimeoutMs: -1,
+        expiresAt: null,
+      })
+      expect(manager.resolve({
+        approvalId: 'approval-no-expiry',
+        decision: 'deny',
+      })).toEqual({ accepted: true })
+      await expect(outcomePromise).resolves.toBe('rejected')
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
 })

@@ -13,10 +13,11 @@
 
 - 新增供应商和传输无关的 `ToolGuardRequest/ToolGuardDecision/ToolGuardConfig`。
 - `evaluate()` 可根据工具名称、描述、输入 Schema、安全声明和已校验参数返回 `allow/deny/ask`。
-- `ask.approvalTimeoutMs` 覆盖通用超时；Agent 事件同时提供 `requestedAt/expiresAt`。
+- `ask.approvalTimeoutMs` 覆盖通用超时；`-1` 表示永久等待，并标准化为 `expiresAt: null`。
 - Agent 内置 ApprovalManager，统一处理 pending Promise、Run 取消、超时和首个终态。
 - `Agent.resolveToolApproval()` 接收公开的 `allow/deny`，重复、未知和已结束 ID 不会再次生效。
 - Agent 输出新增审批请求、审批终态和自动拒绝事件。
+- Server 默认直接输出标准 `AgentOutputEvent`，不再维护重复的聊天事件投影。
 - `deny`、用户拒绝和超时只阻止当前工具，失败结果写入 Session 后 AgentLoop 继续下一 Model Step。
 - 删除未发布的双配置入口和外部 Broker，底层 AgentLoop/Harness 协议仍作为高级入口保留。
 

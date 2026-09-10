@@ -10,20 +10,6 @@ import type {
 } from '../craft-agent'
 import Fastify from 'fastify'
 
-/** Agent 审批事件去掉内部 run/session 关联后形成页面 SSE。 */
-type ToolApprovalRequestedStreamEvent = Omit<
-  Extract<AgentOutputEvent, { type: 'tool.approval.requested' }>,
-  'runId' | 'sessionId'
->
-type ToolApprovalResolvedStreamEvent = Omit<
-  Extract<AgentOutputEvent, { type: 'tool.approval.resolved' }>,
-  'runId' | 'sessionId'
->
-type ToolGuardDeniedStreamEvent = Omit<
-  Extract<AgentOutputEvent, { type: 'tool.guard.denied' }>,
-  'runId' | 'sessionId'
->
-
 /** 前端会话列表需要的展示消息；工具和系统消息不会进入该投影。 */
 export interface DisplayMessage {
   readonly role: 'user' | 'assistant'
@@ -44,29 +30,15 @@ export interface ConversationDetail extends ConversationSummary {
   readonly displayHistory: readonly DisplayMessage[]
 }
 
-/** 当前页面消费的 SSE 事件。 */
-export type AgentStreamEvent
-  = ToolApprovalRequestedStreamEvent
-    | ToolApprovalResolvedStreamEvent
-    | ToolGuardDeniedStreamEvent
-    | { readonly type: 'conversation', readonly conversationId: string }
-    | {
-      readonly type: 'message.delta'
-      readonly channel: 'reasoning' | 'content'
-      readonly delta: string
-    }
-    | {
-      readonly type: 'message.completed'
-      readonly conversationId: string
-      readonly content: string
-      readonly reasoning: string
-    }
-    | {
-      readonly type: 'error'
-      readonly message: string
-      readonly code?: string
-      readonly stopReason?: string
-    }
+/** Server 自身在 Agent 外部失败时使用的传输错误，不伪装成 AgentOutputEvent。 */
+export interface ServerStreamErrorEvent {
+  readonly type: 'server.error'
+  readonly message: string
+}
+
+/** 默认 SSE 直接输出 CraftAgent 标准事件；仅额外保留 Server 自身的传输错误。 */
+export type ServerStreamEvent
+  = AgentOutputEvent | ServerStreamErrorEvent
 
 /** 创建 Fastify 应用时注入的 Runtime 和日志配置。 */
 export interface CreateServerAppOptions {
@@ -194,17 +166,15 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
       }, {
         signal: abortController.signal,
         onEvent: async (event) => {
-          // 审批、拒绝、模型增量和最终结果现在都由 AgentOutputEvent 统一提供。
-          const projected = projectAgentEvent(event)
-          if (projected)
-            await writeSseEvent(reply.raw, projected)
+          // AgentOutputEvent 已是 CraftAgent 的标准应用协议，默认原样写出即可。
+          await writeSseEvent(reply.raw, event)
         },
       })
     }
     catch (error) {
       if (!abortController.signal.aborted) {
         await writeSseEvent(reply.raw, {
-          type: 'error',
+          type: 'server.error',
           message: error instanceof Error ? error.message : '流式响应失败',
         })
       }
@@ -216,67 +186,6 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
   })
 
   return fastify
-}
-
-/** 将通用 CraftAgent 输出映射为现有页面字段。 */
-function projectAgentEvent(event: AgentOutputEvent): AgentStreamEvent | undefined {
-  if (event.type === 'session.started')
-    return { type: 'conversation', conversationId: event.sessionId }
-  if (event.type === 'tool.approval.requested') {
-    return {
-      type: event.type,
-      approvalId: event.approvalId,
-      callId: event.callId,
-      toolName: event.toolName,
-      reason: event.reason,
-      ...(event.title ? { title: event.title } : {}),
-      ...(event.details ? { details: event.details } : {}),
-      input: event.input,
-      risk: event.risk,
-      approvalTimeoutMs: event.approvalTimeoutMs,
-      requestedAt: event.requestedAt,
-      expiresAt: event.expiresAt,
-    }
-  }
-  if (event.type === 'tool.approval.resolved') {
-    return {
-      type: event.type,
-      approvalId: event.approvalId,
-      callId: event.callId,
-      toolName: event.toolName,
-      outcome: event.outcome,
-      resolvedAt: event.resolvedAt,
-    }
-  }
-  if (event.type === 'tool.guard.denied') {
-    return {
-      type: event.type,
-      callId: event.callId,
-      toolName: event.toolName,
-      reason: event.reason,
-    }
-  }
-  if (event.type === 'message.delta') {
-    return {
-      type: event.type,
-      channel: event.channel,
-      delta: event.delta,
-    }
-  }
-  if (event.type === 'message.completed') {
-    return {
-      type: event.type,
-      conversationId: event.sessionId,
-      content: event.content,
-      reasoning: event.reasoning,
-    }
-  }
-  return {
-    type: 'error',
-    message: event.message,
-    code: event.code,
-    stopReason: event.stopReason,
-  }
 }
 
 /** 把最小 Session 摘要投影为会话目录项。 */
@@ -380,7 +289,7 @@ function getOrCreateReasoningParts(
 /** 使用标准双换行帧写入一个 JSON SSE 事件。 */
 async function writeSseEvent(
   response: ServerResponse,
-  event: AgentStreamEvent,
+  event: ServerStreamEvent,
 ): Promise<void> {
   response.write(`data: ${JSON.stringify(event)}\n\n`)
 }

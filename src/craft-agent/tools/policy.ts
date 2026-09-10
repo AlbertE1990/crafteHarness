@@ -23,7 +23,7 @@ export type ToolPolicyDecision
       readonly title?: string
       /** 已确认可安全发送给交互层的结构化详情。 */
       readonly details?: JsonObject
-      /** 当前调用的审批时限，优先于 Agent 的通用配置。 */
+      /** 当前调用的审批时限，优先于 Agent 通用配置；-1 表示不自动过期。 */
       readonly approvalTimeoutMs?: number
     } & ToolPolicyDecisionMetadata)
 
@@ -60,7 +60,7 @@ export interface ToolApprovalRequest extends ToolPolicyRequest {
   readonly reason: string
   readonly title?: string
   readonly details?: JsonObject
-  /** Tool Guard 计算出的最终时限；Agent 门面调用时始终存在。 */
+  /** Tool Guard 计算出的最终时限；Agent 门面调用时始终存在，-1 表示永久等待。 */
   readonly approvalTimeoutMs?: number
 }
 

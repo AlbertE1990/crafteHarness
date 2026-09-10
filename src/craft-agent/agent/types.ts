@@ -16,7 +16,7 @@ export interface AgentRequest {
   readonly sessionMetadata?: JsonObject
 }
 
-/** 面向应用层的精简实时输出；完整执行轨迹由 onTrace 暴露。 */
+/** 面向应用层的标准实时输出；可直接传输，完整执行轨迹由 onTrace 暴露。 */
 export type AgentOutputEvent
   = ToolGuardOutputEvent
     | { readonly type: 'session.started', readonly sessionId: string }
@@ -49,7 +49,7 @@ export interface AgentExecutionOptions {
   readonly signal?: AbortSignal
   readonly runId?: string
   readonly turnId?: string
-  /** 适合 CLI、SSE 和业务界面的精简输出。 */
+  /** 适合 CLI、SSE 和业务界面直接消费的标准输出。 */
   readonly onEvent?: AgentOutputEventListener
   /** 适合调试器和轨迹存储的完整 AgentEvent。 */
   readonly onTrace?: AgentEventListener

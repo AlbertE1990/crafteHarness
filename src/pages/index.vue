@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { AgentOutputEvent } from '../craft-agent'
 import MarkdownIt from 'markdown-it'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
@@ -31,53 +32,14 @@ interface ConversationDetail extends ConversationSummary {
 }
 
 /**
- * Server 投影给聊天页面的封闭 SSE 协议。
+ * 聊天页面消费 CraftAgent 标准 AgentOutputEvent，以及 Server 自身的传输错误。
  *
- * 审批请求、终态和自动拒绝都来自 AgentOutputEvent 的 Server 投影；页面不直接消费完整
- * AgentEvent，避免与调试轨迹和 Agent 内部 ApprovalManager 耦合。
+ * Server 默认直接输出这些事件；页面不消费完整 AgentEvent，避免与调试轨迹和 Agent 内部
+ * ApprovalManager 耦合。
  */
 type ChatStreamEvent
-  = | { type: 'conversation', conversationId: string }
-    | {
-      type: 'message.delta'
-      channel: 'reasoning' | 'content'
-      delta: string
-    }
-    | {
-      type: 'message.completed'
-      conversationId: string
-      content: string
-      reasoning?: string
-    }
-    | {
-      type: 'tool.approval.requested'
-      approvalId: string
-      callId: string
-      toolName: string
-      reason: string
-      title?: string
-      details?: Record<string, unknown>
-      input: unknown
-      risk: 'safe' | 'read' | 'write' | 'destructive'
-      approvalTimeoutMs: number
-      requestedAt: string
-      expiresAt: string
-    }
-    | {
-      type: 'tool.approval.resolved'
-      approvalId: string
-      callId: string
-      toolName: string
-      outcome: 'allowed' | 'denied' | 'expired' | 'aborted'
-      resolvedAt: string
-    }
-    | {
-      type: 'tool.guard.denied'
-      callId: string
-      toolName: string
-      reason: string
-    }
-    | { type: 'error', message: string }
+  = AgentOutputEvent
+    | { type: 'server.error', message: string }
 
 /** 当前 Composer 展示的工具权限交互；每个 Agent Run 同一时间只会等待一个工具。 */
 interface ToolInteraction {
@@ -90,7 +52,7 @@ interface ToolInteraction {
   details?: Record<string, unknown>
   input?: unknown
   risk?: 'safe' | 'read' | 'write' | 'destructive'
-  expiresAt?: string
+  expiresAt?: string | null
   status: 'pending' | 'submitting' | 'allowed' | 'denied' | 'expired' | 'aborted' | 'policy-denied'
 }
 
@@ -301,20 +263,28 @@ function isChatStreamEvent(value: unknown): value is ChatStreamEvent {
     return false
 
   const event = value as Record<string, unknown>
-  if (event.type === 'conversation')
-    return typeof event.conversationId === 'string'
+  if (event.type === 'session.started')
+    return typeof event.sessionId === 'string'
   if (event.type === 'message.delta') {
-    return (event.channel === 'reasoning' || event.channel === 'content')
+    return typeof event.sessionId === 'string'
+      && (event.channel === 'reasoning' || event.channel === 'content')
       && typeof event.delta === 'string'
   }
   if (event.type === 'message.completed') {
-    return typeof event.conversationId === 'string'
+    return typeof event.sessionId === 'string'
       && typeof event.content === 'string'
-      && (event.reasoning === undefined || typeof event.reasoning === 'string')
+      && typeof event.reasoning === 'string'
   }
   if (event.type === 'tool.approval.requested') {
     // input 本身允许任意 JSON 形状，其余关联字段必须完整，避免渲染无法提交的卡片。
-    return typeof event.approvalId === 'string'
+    const validTimeout = event.approvalTimeoutMs === -1
+      ? event.expiresAt === null
+      : Number.isSafeInteger(event.approvalTimeoutMs)
+        && Number(event.approvalTimeoutMs) > 0
+        && typeof event.expiresAt === 'string'
+    return typeof event.sessionId === 'string'
+      && typeof event.runId === 'string'
+      && typeof event.approvalId === 'string'
       && typeof event.callId === 'string'
       && typeof event.toolName === 'string'
       && typeof event.reason === 'string'
@@ -323,17 +293,17 @@ function isChatStreamEvent(value: unknown): value is ChatStreamEvent {
         || (typeof event.details === 'object'
           && event.details !== null
           && !Array.isArray(event.details)))
-        && Number.isSafeInteger(event.approvalTimeoutMs)
-        && Number(event.approvalTimeoutMs) > 0
+        && validTimeout
         && typeof event.requestedAt === 'string'
-        && typeof event.expiresAt === 'string'
         && (event.risk === 'safe'
           || event.risk === 'read'
           || event.risk === 'write'
           || event.risk === 'destructive')
   }
   if (event.type === 'tool.approval.resolved') {
-    return typeof event.approvalId === 'string'
+    return typeof event.sessionId === 'string'
+      && typeof event.runId === 'string'
+      && typeof event.approvalId === 'string'
       && typeof event.callId === 'string'
       && typeof event.toolName === 'string'
       && typeof event.resolvedAt === 'string'
@@ -343,11 +313,19 @@ function isChatStreamEvent(value: unknown): value is ChatStreamEvent {
         || event.outcome === 'aborted')
   }
   if (event.type === 'tool.guard.denied') {
-    return typeof event.callId === 'string'
+    return typeof event.sessionId === 'string'
+      && typeof event.runId === 'string'
+      && typeof event.callId === 'string'
       && typeof event.toolName === 'string'
       && typeof event.reason === 'string'
   }
-  if (event.type === 'error')
+  if (event.type === 'error') {
+    return typeof event.sessionId === 'string'
+      && typeof event.message === 'string'
+      && typeof event.code === 'string'
+      && typeof event.stopReason === 'string'
+  }
+  if (event.type === 'server.error')
     return typeof event.message === 'string'
   return false
 }
@@ -374,6 +352,10 @@ function getToolInteractionStatus(status: ToolInteraction['status']): string {
     'policy-denied': '安全策略已自动拒绝，Agent 正在调整回答…',
   }
   const remaining = approvalRemainingSeconds.value
+  if ((status === 'pending' || status === 'submitting')
+    && toolInteraction.value?.expiresAt === null) {
+    return `${labels[status]} · 无过期时间`
+  }
   if ((status === 'pending' || status === 'submitting') && remaining !== undefined)
     return `${labels[status]} · 剩余 ${formatRemainingTime(remaining)}`
   return labels[status]
@@ -408,8 +390,10 @@ async function decideToolApproval(decision: 'allow' | 'deny'): Promise<void> {
 }
 
 /** 根据 Agent 给出的绝对过期时间启动倒计时，避免网络延迟导致本地计时偏晚。 */
-function startApprovalCountdown(expiresAt: string): void {
+function startApprovalCountdown(expiresAt: string | null): void {
   stopApprovalCountdown()
+  if (expiresAt === null)
+    return
   const expiresAtMs = Date.parse(expiresAt)
   if (!Number.isFinite(expiresAtMs))
     return
@@ -500,7 +484,7 @@ async function readEventStream(
 
 /**
  * 发送消息并把不同频道的增量追加到同一条助手消息；重试时可选择不重复插入用户消息。
- * 新会话请求刻意省略 conversationId，收到 conversation 事件后再保存后端生成的 ID。
+ * 新会话请求刻意省略 conversationId，收到 session.started 后再保存 Agent 生成的 ID。
  */
 async function send(prompt = input.value, appendUserMessage = true) {
   const message = prompt.trim()
@@ -558,12 +542,12 @@ async function send(prompt = input.value, appendUserMessage = true) {
       throw new Error(`请求失败（${response.status}）`)
 
     await readEventStream(response, (event) => {
-      if (event.type === 'conversation') {
-        conversationId.value = event.conversationId
+      if (event.type === 'session.started') {
+        conversationId.value = event.sessionId
         return
       }
 
-      if (event.type === 'error')
+      if (event.type === 'error' || event.type === 'server.error')
         throw new Error(event.message)
 
       if (event.type === 'tool.approval.requested') {
@@ -624,7 +608,7 @@ async function send(prompt = input.value, appendUserMessage = true) {
         return
       }
 
-      conversationId.value = event.conversationId
+      conversationId.value = event.sessionId
       receivedDone = true
       if (assistantMessageId === undefined && (event.content || event.reasoning)) {
         const assistantMessage = ensureAssistantMessage()

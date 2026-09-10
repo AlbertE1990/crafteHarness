@@ -174,6 +174,7 @@ ApprovalManager 把公开 `allow/deny` 决定转换成 Harness 的一次性结�
 审批是执行前的暂停点，不是新的 Session 状态，也不是可复用权限。Agent 为每次 ask 生成一次性
 `approvalId`，管理等待中的 Promise、超时、取消和重复提交；交互层只通过 Agent 事件与
 `resolveToolApproval()` 桥接 UI、CLI 或外部系统。拒绝、超时、断连或进程重启必须 fail-closed。
+审批时限可使用正整数毫秒，或使用 `-1` 明确永久等待；永久等待仍响应 Run 取消，不能理解成不可中止。
 
 `safeToolPolicy` 不是 JavaScript 沙箱。恶意同进程工具可以谎报 `risk`，也可以直接使用 Node.js
 文件和进程 API。未审查第三方工具必须通过部署侧可信注册、受控能力及独立进程或容器隔离，不能依赖

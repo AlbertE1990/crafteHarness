@@ -30,7 +30,7 @@ import { createToolGuardPolicy } from './tool-guard'
 /**
  * CraftAgent 的开发者门面。
  *
- * 本类统一包装模型配置、工具、Session Store、AgentLoop 和事件投影；它不读取环境变量，
+ * 本类统一包装模型配置、工具、Session Store、AgentLoop 和标准应用事件；它不读取环境变量，
  * 也不依赖 Fastify、数据库驱动或前端协议。
  */
 export class Agent {
@@ -227,7 +227,7 @@ function isSessionCatalogStore(store: SessionStore): store is SessionCatalogStor
   return 'list' in store && typeof store.list === 'function'
 }
 
-/** 把 AgentEvent 投影为供应商、网络和 UI 无关的精简输出事件。 */
+/** 把完整 AgentEvent 投影为供应商、网络和 UI 无关的标准应用事件。 */
 function createOutputProjector(
   sessionId: string,
   listener: AgentOutputEventListener | undefined,

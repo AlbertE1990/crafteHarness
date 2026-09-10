@@ -50,7 +50,7 @@ export type ToolGuardDecision
       readonly title?: string
       /** 已脱敏、可安全发送给 UI 的结构化补充信息。 */
       readonly details?: JsonObject
-      /** 仅覆盖当前审批，优先级高于 ToolGuardConfig.approvalTimeoutMs。 */
+      /** 仅覆盖当前审批，优先级高于通用配置；-1 表示不自动过期，但仍响应 Run 取消。 */
       readonly approvalTimeoutMs?: number
     } & ToolGuardDecisionMetadata)
 
@@ -62,7 +62,7 @@ export type ToolGuardEvaluator = (
 /** Agent 对外唯一的工具风险与审批配置入口。 */
 export interface ToolGuardConfig {
   readonly evaluate: ToolGuardEvaluator
-  /** ask 未单独指定时使用的通用审批时限。 */
+  /** ask 未单独指定时使用的通用审批时限；-1 表示不自动过期，但仍响应 Run 取消。 */
   readonly approvalTimeoutMs?: number
 }
 
@@ -97,9 +97,11 @@ export type ToolGuardOutputEvent
     readonly details?: JsonObject
     readonly input: unknown
     readonly risk: ToolRisk
+    /** -1 表示本次审批没有自动过期时间。 */
     readonly approvalTimeoutMs: number
     readonly requestedAt: string
-    readonly expiresAt: string
+    /** 永久等待时为 null，否则是服务端计算出的绝对 ISO 时间。 */
+    readonly expiresAt: string | null
   }
   | {
     readonly type: 'tool.approval.resolved'
@@ -263,10 +265,15 @@ function normalizeToolGuardDecision(
   })
 }
 
-/** 审批时限必须可安全交给 setTimeout，且不能为零或无限。 */
+/** 审批时限接受 -1（永久等待）或 Node.js setTimeout 可稳定表达的正整数。 */
 function validateApprovalTimeout(value: number, field: string): void {
-  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_TOOL_APPROVAL_TIMEOUT_MS)
-    throw new TypeError(`${field} 必须是 1 到 ${MAX_TOOL_APPROVAL_TIMEOUT_MS} 的整数`)
+  if (value === -1)
+    return
+  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_TOOL_APPROVAL_TIMEOUT_MS) {
+    throw new TypeError(
+      `${field} 必须是 -1，或 1 到 ${MAX_TOOL_APPROVAL_TIMEOUT_MS} 的整数`,
+    )
+  }
 }
 
 /** 读取必填非空文本，避免 UI 收到无法解释的 ask/deny。 */

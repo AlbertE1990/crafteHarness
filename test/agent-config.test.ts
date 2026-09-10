@@ -103,6 +103,12 @@ describe('agent config', () => {
 
     expect(config.toolGuard).toEqual({ evaluate, approvalTimeoutMs: 90_000 })
     expect(Object.isFrozen(config.toolGuard)).toBe(true)
+
+    const neverExpires = defineAgentConfig({
+      model: new ScriptedModelAdapter({ script: [] }),
+      toolGuard: { evaluate, approvalTimeoutMs: -1 },
+    })
+    expect(neverExpires.toolGuard.approvalTimeoutMs).toBe(-1)
   })
 
   it('rejects invalid Tool Guard configuration before a Run starts', () => {
@@ -110,7 +116,7 @@ describe('agent config', () => {
     expect(() => defineAgentConfig({
       model,
       toolGuard: { evaluate: () => ({ decision: 'allow' }), approvalTimeoutMs: 0 },
-    })).toThrow('approvalTimeoutMs 必须是 1 到 2147483647 的整数')
+    })).toThrow('approvalTimeoutMs 必须是 -1，或 1 到 2147483647 的整数')
 
     expect(() => defineAgentConfig({
       model,

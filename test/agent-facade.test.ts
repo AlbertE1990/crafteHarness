@@ -177,7 +177,8 @@ describe('agent facade', () => {
         evaluate: () => ({
           decision: 'ask',
           reason: '需要写入数据',
-          approvalTimeoutMs: 45_000,
+          // 单次 -1 覆盖通用 120 秒，Agent 不创建过期定时器。
+          approvalTimeoutMs: -1,
         }),
       },
       createId: kind => kind === 'event' ? `event-${++eventId}` : `${kind}-facade`,
@@ -202,8 +203,8 @@ describe('agent facade', () => {
       expect.objectContaining({
         type: 'tool.approval.requested',
         approvalId: 'approval-facade',
-        approvalTimeoutMs: 45_000,
-        expiresAt: '2026-09-10T02:00:45.000Z',
+        approvalTimeoutMs: -1,
+        expiresAt: null,
       }),
       expect.objectContaining({
         type: 'tool.approval.resolved',

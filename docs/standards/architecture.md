@@ -107,7 +107,7 @@ flowchart TD
 
 - `SessionEvent`：append-only 持久事实，负责恢复模型历史。
 - `AgentEvent`：完整实时执行轨迹，包含 Run、Step、模型 chunk 和工具过程。
-- `AgentOutputEvent`：Agent 门面提供的精简应用输出，适合 CLI 和 SSE。
+- `AgentOutputEvent`：Agent 门面提供的标准应用输出，适合被 CLI、SSE 或 WebSocket 直接消费。
 - Diagnostic：未来记录原始 stack、cause、Node 错误字段和 errorId，不进入模型或公开错误。
 
 观察器都是旁路，异常不能改写业务结果。当前已能通过 `onTrace` 暴露完整轨迹，但尚未提供持久化分页查询。

@@ -106,6 +106,7 @@ type ToolGuardDecision
       reason: string
       title?: string
       details?: JsonObject
+      // -1 表示不自动过期
       approvalTimeoutMs?: number
       metadata?: JsonObject
     }
@@ -170,6 +171,7 @@ const toolGuard = {
 ```
 
 因此上例的读操作直接执行，受保护删除直接失败，普通写入/删除等待 45 秒，而不是通用的 120 秒。
+如果任一生效配置为 `-1`，Agent 会一直等待明确决定或 Run 取消。
 
 ## 4. Agent 内部发生了什么
 
@@ -187,7 +189,7 @@ Agent 内部 ApprovalManager.requestApproval
 
 1. 生成唯一 `approvalId`。
 2. 先登记 pending，再发送 requested 事件，避免极快提交先于登记到达。
-3. 计算 `requestedAt`、`expiresAt` 并启动定时器。
+3. 计算 `requestedAt/expiresAt`；时限不是 `-1` 时才启动定时器。
 4. 等待首个 `allow`、`deny`、超时或 Run 取消。
 5. 删除 pending、发送 resolved 事件，并恢复等待中的 Harness Promise。
 
@@ -197,6 +199,7 @@ stateDiagram-v2
   Pending --> Allowed: 首次 allow
   Pending --> Denied: 首次 deny
   Pending --> Expired: 到达 expiresAt
+  Pending --> Pending: timeout=-1 时不自动过期
   Pending --> Aborted: Run 取消或事件出口失效
   Allowed --> [*]
   Denied --> [*]
@@ -241,6 +244,17 @@ const duplicateResult = {
 前端应以 `expiresAt` 为准显示倒计时。`approvalTimeoutMs` 方便诊断，但客户端本地计时误差不应改变
 服务端终态。
 
+永久等待事件使用固定组合：
+
+```json
+{
+  "approvalTimeoutMs": -1,
+  "expiresAt": null
+}
+```
+
+前端对此显示“无过期时间”，不要尝试构造一个很远的虚假日期。
+
 ### 5.2 审批终态
 
 ```json
@@ -284,7 +298,8 @@ const duplicateResult = {
 
 ## 6. 前后端交互
 
-CraftAgent 不规定 HTTP URL。当前 Fastify Runtime 使用两个方向的通道：
+CraftAgent 不规定 HTTP URL。`AgentOutputEvent` 已经是标准应用事件，当前 Fastify Runtime 默认原样写入
+SSE；只有使用者要兼容自己的既有协议时才增加投影。交互仍使用两个方向的通道：
 
 - Agent → 前端：聊天 SSE 中发送 `tool.approval.requested/resolved` 和 `tool.guard.denied`。
 - 前端 → Agent：HTTP POST 把用户决定提交给 Server，Server 调用 `agent.resolveToolApproval()`。
@@ -343,7 +358,9 @@ function onAgentEvent(event: AgentOutputEvent) {
     approvalCard.value = {
       ...event,
       status: 'pending',
-      remainingMs: Math.max(0, Date.parse(event.expiresAt) - Date.now()),
+      remainingMs: event.expiresAt === null
+        ? undefined
+        : Math.max(0, Date.parse(event.expiresAt) - Date.now()),
     }
   }
 
@@ -397,6 +414,9 @@ deny / 用户拒绝 / 审批超时
 ## 8. 超时、断连与进程重启
 
 - 超时由 Agent 的服务端定时器裁决；前端倒计时只是展示。
+- `approvalTimeoutMs: -1` 不创建审批定时器，但 pending 仍会被用户决定、调用方取消、
+  `limits.maxDurationMs` 和进程退出收口；真正无限等待还需要不配置 Run 时限。
+- 永久等待会持续占用当前 Run 和一个内存 pending 项，应由宿主保证最终决定或主动取消。
 - 浏览器断开聊天 SSE 时，Server 应取消同一个 Run 的 `AbortSignal`。
 - Run 清理会把仍 pending 的审批收口为 `aborted`，避免遗留 Promise。
 - pending 审批目前只存在于 Agent 实例内；进程重启后不会恢复，旧 approvalId 必须视为失效。
@@ -436,6 +456,7 @@ deny / 用户拒绝 / 审批超时
 
 1. 为 `read/write/delete` 分别返回 `allow/ask/deny`，观察工具实现是否执行。
 2. 把通用超时设为 60 秒、某次 ask 设为 5 秒，确认事件中的 `expiresAt` 使用 5 秒。
-3. 连续两次提交同一 approvalId，确认只有第一次 `accepted=true`。
-4. 用户拒绝后检查下一次模型请求，确认包含对应的失败 `role=tool` 消息。
-5. 在 pending 时断开 SSE，确认工具不执行且审批终态为 `aborted`。
+3. 把超时设为 `-1`，确认一天后仍 pending 且事件 `expiresAt` 为 `null`。
+4. 连续两次提交同一 approvalId，确认只有第一次 `accepted=true`。
+5. 用户拒绝后检查下一次模型请求，确认包含对应的失败 `role=tool` 消息。
+6. 在 pending 时断开 SSE，确认工具不执行且审批终态为 `aborted`。

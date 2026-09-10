@@ -125,7 +125,10 @@ export class ToolApprovalManager {
     const approvalId = this.allocateApprovalId()
     const requestedAtDate = this.now()
     const requestedAt = requestedAtDate.toISOString()
-    const expiresAt = new Date(requestedAtDate.getTime() + approvalTimeoutMs).toISOString()
+    // -1 是公共协议约定的永久等待值，因此不计算伪造的远期时间。
+    const expiresAt = approvalTimeoutMs === -1
+      ? null
+      : new Date(requestedAtDate.getTime() + approvalTimeoutMs).toISOString()
 
     return await new Promise<ToolApprovalOutcome>((resolve) => {
       let settled = false
@@ -160,10 +163,12 @@ export class ToolApprovalManager {
       }
 
       onAbort = () => decide('aborted', 'aborted')
-      timeout = setTimeout(
-        () => decide('unavailable', 'expired'),
-        approvalTimeoutMs,
-      )
+      if (approvalTimeoutMs !== -1) {
+        timeout = setTimeout(
+          () => decide('unavailable', 'expired'),
+          approvalTimeoutMs,
+        )
+      }
       // 先登记再发 requested，避免极快的 UI 决定在 pending 建立前到达。
       this.pending.set(approvalId, { runId, decide })
       request.signal.addEventListener('abort', onAbort, { once: true })
@@ -253,8 +258,13 @@ function validateIdentifier(value: string, field: string): void {
     throw new TypeError(`${field} 必须是非空字符串`)
 }
 
-/** setTimeout 只接受有限正整数审批时限。 */
+/** 审批时限接受 -1（永久等待）或 setTimeout 可稳定表达的正整数。 */
 function validateTimeout(value: number): void {
-  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_TOOL_APPROVAL_TIMEOUT_MS)
-    throw new TypeError(`approvalTimeoutMs 必须是 1 到 ${MAX_TOOL_APPROVAL_TIMEOUT_MS} 的整数`)
+  if (value === -1)
+    return
+  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_TOOL_APPROVAL_TIMEOUT_MS) {
+    throw new TypeError(
+      `approvalTimeoutMs 必须是 -1，或 1 到 ${MAX_TOOL_APPROVAL_TIMEOUT_MS} 的整数`,
+    )
+  }
 }

@@ -216,7 +216,8 @@ flowchart LR
 - Agent 公共配置将风险决策收口为单一 `toolGuard.evaluate()`。
 - 评估器按工具静态信息和已校验参数返回 `allow/deny/ask`。
 - Agent 内部管理一次性审批 ID、pending Promise、超时、取消和重复提交。
-- 单次 ask 超时优先于 ToolGuard 通用超时，并通过事件暴露绝对过期时间。
+- 单次 ask 超时优先于 ToolGuard 通用超时；`-1` 表示永久等待，其余情况通过事件暴露绝对过期时间。
+- `AgentOutputEvent` 成为 Runtime 可直接输出的标准应用事件，避免默认维护第二套字段投影。
 - 自动拒绝和用户拒绝都只产生当前工具失败，由 AgentLoop 写入 `role=tool` 后继续模型循环。
 - 删除未发布的 Agent `toolPolicy/requestToolApproval` 双入口和 Runtime ApprovalBroker 接线。
 

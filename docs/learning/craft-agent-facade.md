@@ -19,7 +19,7 @@ src/craft-agent/agent/
   tool-guard.ts    # 风险评估输入、决定和应用审批事件
   tool-approval-manager.ts # 内部 pending、超时、取消和一次性决定
   types.ts         # run 输入、精简输出和会话查询类型
-  agent.ts         # AgentLoop 门面、事件投影和 Session 查询
+  agent.ts         # AgentLoop 门面、标准应用事件和 Session 查询
   index.ts         # 本模块导出
 ```
 
@@ -98,7 +98,7 @@ flowchart TD
   Loop --> Approval[Agent 内部 ApprovalManager]
   Approval --> Output
   Loop --> Trace[完整 AgentEvent / onTrace]
-  Loop --> Project[精简事件投影]
+  Loop --> Project[标准应用事件投影]
   Project --> Output[onEvent / CLI / SSE]
   Store --> Catalog[listSessions: 摘要目录]
   Store --> Detail[getSession: 按需详情]
@@ -106,6 +106,10 @@ flowchart TD
 
 重点是两条输出路径互不替代：应用 UI 通常只需要 `onEvent`，调试器需要 `onTrace`。轨迹暂时是实时接口，
 可分页持久化轨迹仍在后续阶段。
+
+`onEvent` 的 `AgentOutputEvent` 已是标准应用协议，Server 可以直接写入 SSE 或 WebSocket。默认不需要再将
+`session.started` 改成 `conversation`，也不需要把 `sessionId` 改成 `conversationId`；兼容既有接口时再由
+Runtime 编写自己的投影函数。
 
 ## 5. 一次调用时序
 
@@ -147,7 +151,7 @@ sequenceDiagram
 
 ## 7. 练习
 
-1. 使用 ScriptedModelAdapter 创建 Agent，并观察精简事件与完整轨迹数量差异。
+1. 使用 ScriptedModelAdapter 创建 Agent，并观察标准应用事件与完整轨迹数量差异。
 2. 定义两个不同输入 Schema 的工具，直接通过 `additional: [toolA, toolB]` 注册。
 3. 连续向同一个 sessionId 发起两次 run，检查第二次模型输入包含第一轮历史。
 4. 使用 `listSessions({ limit: 1 })` 和 `afterSessionId` 读取两页。

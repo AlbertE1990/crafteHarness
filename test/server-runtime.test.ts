@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import type { AgentConfigInput, ModelStreamChunk } from '../src/craft-agent'
-import type { AgentStreamEvent } from '../src/server/app'
+import type { ServerStreamEvent } from '../src/server/app'
 import { describe, expect, it } from 'vitest'
 import Agent, { MemorySessionStore } from '../src/craft-agent'
 import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
@@ -25,8 +25,8 @@ function chunk(
   }
 }
 
-/** 解析当前前端使用的 JSON SSE 帧。 */
-function parseSse(body: string): AgentStreamEvent[] {
+/** 解析 Server 默认直出的 CraftAgent 标准 JSON SSE 帧。 */
+function parseSse(body: string): ServerStreamEvent[] {
   return body
     .trim()
     .split(/\r?\n\r?\n/)
@@ -36,7 +36,7 @@ function parseSse(body: string): AgentStreamEvent[] {
         .filter(line => line.startsWith('data:'))
         .map(line => line.slice(5).trimStart())
         .join('\n')
-      return JSON.parse(data) as AgentStreamEvent
+      return JSON.parse(data) as ServerStreamEvent
     })
 }
 
@@ -102,12 +102,22 @@ describe('server runtime HTTP boundary', () => {
       expect(chat.statusCode).toBe(200)
       expect(chat.headers['content-type']).toContain('text/event-stream')
       expect(parseSse(chat.body)).toEqual([
-        { type: 'conversation', conversationId: 'http-session' },
-        { type: 'message.delta', channel: 'reasoning', delta: 'HTTP 思考' },
-        { type: 'message.delta', channel: 'content', delta: 'HTTP 回答' },
+        { type: 'session.started', sessionId: 'http-session' },
+        {
+          type: 'message.delta',
+          sessionId: 'http-session',
+          channel: 'reasoning',
+          delta: 'HTTP 思考',
+        },
+        {
+          type: 'message.delta',
+          sessionId: 'http-session',
+          channel: 'content',
+          delta: 'HTTP 回答',
+        },
         {
           type: 'message.completed',
-          conversationId: 'http-session',
+          sessionId: 'http-session',
           content: 'HTTP 回答',
           reasoning: 'HTTP 思考',
         },
@@ -301,6 +311,8 @@ describe('server runtime HTTP boundary', () => {
       expect(parseSse(chatBody)).toEqual(expect.arrayContaining([
         expect.objectContaining({
           type: 'tool.approval.requested',
+          sessionId: 'approval-session',
+          runId: 'run-http',
           approvalId: 'approval-http',
           toolName: 'manage_runtime_resource',
           approvalTimeoutMs: 45_000,
@@ -308,6 +320,8 @@ describe('server runtime HTTP boundary', () => {
         }),
         expect.objectContaining({
           type: 'tool.approval.resolved',
+          sessionId: 'approval-session',
+          runId: 'run-http',
           approvalId: 'approval-http',
           outcome: 'allowed',
         }),
@@ -370,6 +384,8 @@ describe('server runtime HTTP boundary', () => {
       expect(parseSse(chatBody)).toEqual(expect.arrayContaining([
         expect.objectContaining({
           type: 'tool.approval.resolved',
+          sessionId: 'rejection-session',
+          runId: 'run-http',
           approvalId: 'approval-reject',
           outcome: 'denied',
         }),
@@ -426,12 +442,13 @@ describe('server runtime HTTP boundary', () => {
       const events = parseSse(chat.body)
 
       expect(events).toEqual(expect.arrayContaining([
-        {
+        expect.objectContaining({
           type: 'tool.guard.denied',
+          sessionId: 'denial-session',
           callId: 'call-denied-delete',
           toolName: 'manage_runtime_resource',
           reason: '受保护资源 protected/system 禁止删除',
-        },
+        }),
         expect.objectContaining({
           type: 'message.completed',
           content: '策略阻止了删除操作',

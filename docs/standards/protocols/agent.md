@@ -5,7 +5,7 @@
 ## 1. 目标与边界
 
 `Agent` 是 CraftAgent 面向应用开发者的默认入口。它统一组装模型 Adapter、工具、SessionStore、
-AgentLoop 和事件投影，但不读取环境变量，也不依赖 HTTP 框架、数据库驱动或前端类型。
+AgentLoop 和标准应用事件，但不读取环境变量，也不依赖 HTTP 框架、数据库驱动或前端类型。
 
 `AgentLoop` 仍是可直接使用的高级执行内核；应用通常只需要 `Agent`。
 
@@ -104,7 +104,7 @@ const result = await agent.run({
 }, {
   signal,
   onEvent(event) {
-    // 应用层精简事件
+    // 可被 Runtime 直接输出的标准应用事件
   },
   onTrace(event) {
     // 完整 AgentEvent 轨迹
@@ -121,6 +121,10 @@ const result = await agent.run({
 - `tool.approval.resolved`
 - `tool.guard.denied`
 - `error`
+
+`AgentOutputEvent` 是 CraftAgent 面向 CLI、SSE、WebSocket 等应用出口的标准协议。Runtime 默认应原样
+序列化这些事件，不再把 `sessionId` 改名为 `conversationId`，也不删除 `runId` 等关联字段。只有宿主已有
+外部协议或确实需要裁剪字段时，才自行增加 Adapter；该 Adapter 不属于 CraftAgent 核心。
 
 `onTrace` 输出完整 `AgentEvent`，包括 Run、Step、模型 chunk、工具调用、Tool Harness 子事件和终态。
 配置根和单次 run 都可设置 `onTrace`。所有观察器异常都会隔离；阶段 6 再通过 DiagnosticSink 记录。
@@ -149,7 +153,10 @@ const agent = new Agent({
 })
 ```
 
-单次 `ask.approvalTimeoutMs` 优先于通用 `toolGuard.approvalTimeoutMs`，均未提供时默认 120 秒。
+单次 `ask.approvalTimeoutMs` 优先于通用 `toolGuard.approvalTimeoutMs`，均未提供时默认 120 秒。正整数表示
+等待毫秒数；`-1` 表示永久等待用户决定。永久等待不会创建超时定时器，并在标准事件中输出
+`approvalTimeoutMs: -1` 和 `expiresAt: null`。其他值无效。
+
 `tool.approval.requested` 必须包含 Agent 生成的 `approvalId`、`requestedAt`、`expiresAt` 和最终采用的时限。
 交互层通过以下方法提交决定：
 
@@ -164,6 +171,10 @@ agent.resolveToolApproval({ approvalId, decision: 'deny' })
 
 Agent 实例只在当前进程中保存 pending 审批。没有 `onEvent` 交互出口、出口失效、Run 取消或进程重启时
 必须 fail-closed。完整交互见[工具审批全链路](../../learning/tool-approval-flow.md)。
+
+`-1` 只关闭审批自己的定时器，不会覆盖调用方 AbortSignal 或 `limits.maxDurationMs`。若要求在没有人为
+取消时真正无限等待，还必须不配置 Run 时限。永久等待会持续占用一个 pending 项和当前 Run，因此只适合
+宿主能够保证最终提交或取消的场景。
 
 ## 7. Session 查询
 

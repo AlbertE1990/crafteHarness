@@ -86,23 +86,23 @@ describe('chat page conversations', () => {
       .mockResolvedValueOnce(jsonResponse({ data: [existingConversation] }))
       .mockResolvedValueOnce(jsonResponse({ data: existingConversationDetail }))
       .mockResolvedValueOnce(streamResponse([
-        { type: 'conversation', conversationId: 'chat-existing' },
-        { type: 'message.delta', channel: 'reasoning', delta: '先分析已有上下文' },
-        { type: 'message.delta', channel: 'content', delta: '继续' },
-        { type: 'message.delta', channel: 'content', delta: '回答' },
+        { type: 'session.started', sessionId: 'chat-existing' },
+        { type: 'message.delta', sessionId: 'chat-existing', channel: 'reasoning', delta: '先分析已有上下文' },
+        { type: 'message.delta', sessionId: 'chat-existing', channel: 'content', delta: '继续' },
+        { type: 'message.delta', sessionId: 'chat-existing', channel: 'content', delta: '回答' },
         {
           type: 'message.completed',
           content: '继续回答',
           reasoning: '先分析已有上下文',
-          conversationId: 'chat-existing',
+          sessionId: 'chat-existing',
         },
       ]))
       .mockResolvedValueOnce(jsonResponse({ data: [existingConversation] }))
       .mockResolvedValueOnce(streamResponse([
-        { type: 'conversation', conversationId: 'chat-new' },
-        { type: 'message.delta', channel: 'content', delta: '新会话' },
-        { type: 'message.delta', channel: 'content', delta: '回答' },
-        { type: 'message.completed', content: '新会话回答', conversationId: 'chat-new' },
+        { type: 'session.started', sessionId: 'chat-new' },
+        { type: 'message.delta', sessionId: 'chat-new', channel: 'content', delta: '新会话' },
+        { type: 'message.delta', sessionId: 'chat-new', channel: 'content', delta: '回答' },
+        { type: 'message.completed', sessionId: 'chat-new', content: '新会话回答', reasoning: '' },
       ]))
       .mockResolvedValueOnce(jsonResponse({ data: [existingConversation] }))
 
@@ -147,9 +147,11 @@ describe('chat page conversations', () => {
 
   it('replaces the composer with a confirmation card while a tool awaits approval', async () => {
     const stream = controlledStreamResponse([
-      { type: 'conversation', conversationId: 'chat-approval' },
+      { type: 'session.started', sessionId: 'chat-approval' },
       {
         type: 'tool.approval.requested',
+        sessionId: 'chat-approval',
+        runId: 'run-approval-ui',
         approvalId: 'approval-ui',
         callId: 'call-ui',
         toolName: 'manage_runtime_resource',
@@ -189,6 +191,8 @@ describe('chat page conversations', () => {
 
     stream.push({
       type: 'tool.approval.resolved',
+      sessionId: 'chat-approval',
+      runId: 'run-approval-ui',
       approvalId: 'approval-ui',
       callId: 'call-ui',
       toolName: 'manage_runtime_resource',
@@ -197,7 +201,7 @@ describe('chat page conversations', () => {
     })
     stream.push({
       type: 'message.completed',
-      conversationId: 'chat-approval',
+      sessionId: 'chat-approval',
       content: '已完成写入',
       reasoning: '',
     })
@@ -210,9 +214,11 @@ describe('chat page conversations', () => {
 
   it('shows an automatic ToolPolicy denial without asking for a decision', async () => {
     const stream = controlledStreamResponse([
-      { type: 'conversation', conversationId: 'chat-denied' },
+      { type: 'session.started', sessionId: 'chat-denied' },
       {
         type: 'tool.guard.denied',
+        sessionId: 'chat-denied',
+        runId: 'run-denied',
         callId: 'call-denied',
         toolName: 'manage_runtime_resource',
         reason: '受保护资源 protected/system 禁止删除',
@@ -237,7 +243,7 @@ describe('chat page conversations', () => {
 
     stream.push({
       type: 'message.completed',
-      conversationId: 'chat-denied',
+      sessionId: 'chat-denied',
       content: '该操作不能执行',
       reasoning: '',
     })
@@ -245,5 +251,57 @@ describe('chat page conversations', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('该操作不能执行')
+  })
+
+  it('shows a no-expiry label when Agent standard event uses timeout -1', async () => {
+    const stream = controlledStreamResponse([
+      { type: 'session.started', sessionId: 'chat-no-expiry' },
+      {
+        type: 'tool.approval.requested',
+        sessionId: 'chat-no-expiry',
+        runId: 'run-no-expiry',
+        approvalId: 'approval-no-expiry',
+        callId: 'call-no-expiry',
+        toolName: 'wait_for_confirmation',
+        reason: '等待用户稍后确认',
+        input: {},
+        risk: 'write',
+        approvalTimeoutMs: -1,
+        requestedAt: new Date().toISOString(),
+        expiresAt: null,
+      },
+    ])
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: [] }))
+      .mockResolvedValueOnce(stream.response)
+      .mockResolvedValueOnce(jsonResponse({ data: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(ChatPage)
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('等待确认')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.get('.tool-confirm-card').text()).toContain('无过期时间')
+
+    stream.push({
+      type: 'tool.approval.resolved',
+      sessionId: 'chat-no-expiry',
+      runId: 'run-no-expiry',
+      approvalId: 'approval-no-expiry',
+      callId: 'call-no-expiry',
+      toolName: 'wait_for_confirmation',
+      outcome: 'denied',
+      resolvedAt: new Date().toISOString(),
+    })
+    stream.push({
+      type: 'message.completed',
+      sessionId: 'chat-no-expiry',
+      content: '用户尚未允许',
+      reasoning: '',
+    })
+    stream.close()
+    await flushPromises()
   })
 })
