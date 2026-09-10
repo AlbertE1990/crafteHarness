@@ -19,5 +19,7 @@
 - [Delivery 014：阶段 4.8 配置分组与公共 API 收口](./delivery-014-config-and-public-api.md)
 - [Delivery 015：阶段 4.9 单次模型设置与非流式 JSON](./delivery-015-run-model-options-and-json.md)
 - [Delivery 016：阶段 4.10 分层 Tool Guard 与运行上下文](./delivery-016-layered-tool-guards.md)
+- [Delivery 017：阶段 4.11 意图优先的 Agent 调用 API](./delivery-017-intent-first-agent-api.md)
+- [Delivery 018：阶段 4.12 配置减负与统一 Guard 协议](./delivery-018-agent-config-and-guard-context.md)
 
 交付记录不是当前协议的权威来源。后续阶段改变行为时更新规范并新增交付记录，不覆盖旧记录中的历史状态。

@@ -1,6 +1,6 @@
 import type {
-  ToolGuardConfig,
   ToolGuardDecision,
+  ToolGuardEvaluator,
   ToolGuardRequest,
 } from '../craft-agent'
 import { z } from 'zod'
@@ -98,7 +98,7 @@ export const getWeatherTool = defineTool({
 /**
  * 一个真实产生进程内副作用、但影响范围受控的审批演示工具。
  *
- * metadata 只为观察和全局策略提供业务标签；工具自己的 toolGuard 依据 operation/resource
+ * metadata 只为观察和全局策略提供业务标签；工具自己的 guard 依据 operation/resource
  * 对单次调用作 allow、ask 或 deny 决定，从而覆盖审批链路的三种分支。
  */
 export const manageRuntimeResourceTool = defineTool({
@@ -116,7 +116,7 @@ export const manageRuntimeResourceTool = defineTool({
     capabilities: ['runtime-resource:manage'],
   },
   // 工具级 Guard 只负责该工具固有、且依赖实际参数的规则。
-  toolGuard: request => evaluateRuntimeResourcePolicy(request.input),
+  guard: request => evaluateRuntimeResourcePolicy(request.input),
   execute(input) {
     // 能进入此函数，说明 Harness 已经得到 allow 或本 callId 的 allowed-once。
     const previous = runtimeResources.get(input.resource)
@@ -174,24 +174,23 @@ export const serverTools = [
  *
  * 该策略只服务当前开发验证，不代表第三方插件安全模型；工具注册来源由服务端代码控制。
  */
-export const serverToolGuard: ToolGuardConfig = Object.freeze({
-  approvalTimeoutMs: 120_000,
-  evaluate: (request: ToolGuardRequest): ToolGuardDecision => {
-    // 全局 Guard 只表达当前部署允许注册哪些工具；参数级风险留给工具自己的 Guard。
-    if (request.tool.name === 'calculator'
-      || request.tool.name === 'get_current_time'
-      || request.tool.name === manageRuntimeResourceTool.name
-      || request.tool.name === getUserLocationTool.name
-      || request.tool.name === getWeatherTool.name) {
-      return { decision: 'allow' }
-    }
+export const serverToolGuard: ToolGuardEvaluator = (
+  request: ToolGuardRequest,
+): ToolGuardDecision => {
+  // 全局 Guard 只表达当前部署允许注册哪些工具；参数级风险留给工具自己的 Guard。
+  if (request.tool.name === 'calculator'
+    || request.tool.name === 'get_current_time'
+    || request.tool.name === manageRuntimeResourceTool.name
+    || request.tool.name === getUserLocationTool.name
+    || request.tool.name === getWeatherTool.name) {
+    return { decision: 'allow' }
+  }
 
-    return {
-      decision: 'deny',
-      reason: `服务端策略未授权工具 ${request.tool.name}`,
-    }
-  },
-})
+  return {
+    decision: 'deny',
+    reason: `服务端策略未授权工具 ${request.tool.name}`,
+  }
+}
 
 /** 根据已经通过 Harness 校验的业务参数，决定单次资源操作的实际权限。 */
 function evaluateRuntimeResourcePolicy(input: unknown): ToolGuardDecision {

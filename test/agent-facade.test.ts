@@ -43,8 +43,18 @@ function completion(content: string): ModelCompletion {
   }
 }
 
+/** 完整消费一次 Agent 标准事件流。 */
+async function collectEvents(
+  stream: AsyncIterable<AgentOutputEvent>,
+): Promise<AgentOutputEvent[]> {
+  const events: AgentOutputEvent[] = []
+  for await (const event of stream)
+    events.push(event)
+  return events
+}
+
 describe('agent facade', () => {
-  it('applies construction defaults and lets one Run override model execution', async () => {
+  it('lets the method choose streaming and the request override flat model defaults', async () => {
     const adapter = new ScriptedModelAdapter({
       script: [
         { method: 'complete', result: completion('默认非流式') },
@@ -55,16 +65,18 @@ describe('agent facade', () => {
       model: adapter,
       execution: {
         model: {
-          stream: false,
-          reasoning: { enabled: true, effort: 'high' },
+          reasoningEnabled: true,
+          reasoningEffort: 'high',
         },
       },
     })
 
-    await agent.run({ sessionId: 'facade-default-model', input: '默认设置' })
-    await agent.run({ sessionId: 'facade-run-model', input: '覆盖设置' }, {
-      model: { stream: true, reasoning: { effort: 'max' } },
-    })
+    await agent.invoke({ sessionId: 'facade-default-model', input: '默认设置' })
+    await collectEvents(agent.stream({
+      sessionId: 'facade-run-model',
+      input: '覆盖设置',
+      model: { reasoningEffort: 'max' },
+    }))
 
     expect(adapter.calls.map(call => ({
       method: call.method,
@@ -77,52 +89,62 @@ describe('agent facade', () => {
 
   it('creates session IDs, emits simplified output and preserves complete traces', async () => {
     const configuredTraces: AgentEvent[] = []
-    const runTraces: AgentEvent[] = []
-    const output: AgentOutputEvent[] = []
     const agent = new Agent({
       model: new ScriptedModelAdapter({
         script: [{ method: 'stream', chunks: [chunk('门面回答')] }],
       }),
-      session: {
-        createSessionId: () => 'facade-session',
-      },
       observability: {
         onTrace: event => configuredTraces.push(event),
       },
     })
 
-    const result = await agent.run({ input: '使用统一入口' }, {
-      onEvent: event => output.push(event),
-      onTrace: event => runTraces.push(event),
-    })
-
-    expect(result).toMatchObject({
-      status: 'completed',
-      sessionId: 'facade-session',
-      content: '门面回答',
-    })
+    const output = await collectEvents(agent.stream({ input: '使用统一入口' }))
+    const sessionId = output[0]?.sessionId
+    expect(sessionId).toMatch(/^session-[0-9a-f-]{36}$/)
     expect(output).toEqual([
-      { type: 'session.started', sessionId: 'facade-session' },
+      { type: 'session.started', sessionId },
       {
         type: 'message.delta',
-        sessionId: 'facade-session',
+        sessionId,
         channel: 'content',
         delta: '门面回答',
       },
       {
         type: 'message.completed',
-        sessionId: 'facade-session',
+        sessionId,
         content: '门面回答',
         reasoning: '',
       },
     ])
-    expect(configuredTraces.map(event => event.type)).toEqual(
-      runTraces.map(event => event.type),
-    )
-    expect(runTraces).toEqual(expect.arrayContaining([
+    expect(configuredTraces).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'agent.run.started' }),
       expect.objectContaining({ type: 'agent.run.completed' }),
     ]))
+  })
+
+  it('accepts AbortSignal directly and cancels when a stream consumer stops', async () => {
+    const invokeAgent = new Agent({
+      model: new ScriptedModelAdapter({ script: [] }),
+    })
+    const controller = new AbortController()
+    controller.abort('caller-cancelled')
+
+    const invoke = invokeAgent.invoke({ input: '取消完整调用' }, controller.signal)
+    await expect(invoke).resolves.toMatchObject({
+      status: 'stopped',
+      stopReason: 'cancelled',
+    })
+
+    const streamAdapter = new ScriptedModelAdapter({ script: [] })
+    const streamAgent = new Agent({ model: streamAdapter })
+    const stream = streamAgent.stream({ input: '停止读取事件' })
+    expect(streamAdapter.calls).toHaveLength(0)
+
+    const iterator = stream[Symbol.asyncIterator]()
+    const first = await iterator.next()
+    expect(first.value?.type).toBe('session.started')
+    await iterator.return?.()
+    expect(streamAdapter.calls).toHaveLength(0)
   })
 
   it('lists and reads sessions without maintaining a second in-memory index', async () => {
@@ -134,8 +156,8 @@ describe('agent facade', () => {
     })
     const agent = new Agent({ model: adapter })
 
-    await agent.run({ sessionId: 'session-a', input: '第一条问题' })
-    await agent.run({ sessionId: 'session-b', input: '第二条问题' })
+    await collectEvents(agent.stream({ sessionId: 'session-a', input: '第一条问题' }))
+    await collectEvents(agent.stream({ sessionId: 'session-b', input: '第二条问题' }))
 
     const read = vi.spyOn(agent.store, 'read')
     const firstPage = await agent.listSessions({ limit: 1 })
@@ -177,7 +199,7 @@ describe('agent facade', () => {
     }
     const agent = new Agent({
       model: new ScriptedModelAdapter({ script: [] }),
-      session: { store: executionStore },
+      sessionStore: executionStore,
     })
 
     await expect(agent.listSessions()).rejects.toThrow(
@@ -219,13 +241,13 @@ describe('agent facade', () => {
         { method: 'stream', chunks: [chunk('审批后完成')] },
       ],
     })
-    let eventId = 0
     const agent = new Agent({
       model: adapter,
-      tools: { mode: 'replace', tools: [tool] },
-      toolGuard: {
+      tools: {
+        mode: 'replace',
+        tools: [tool],
         approvalTimeoutMs: 120_000,
-        evaluate: () => ({
+        guard: () => ({
           decision: 'ask',
           reason: '需要写入数据',
           // 单次 -1 覆盖通用 120 秒，Agent 不创建过期定时器。
@@ -233,29 +255,34 @@ describe('agent facade', () => {
         }),
       },
       execution: {
-        createId: kind => kind === 'event' ? `event-${++eventId}` : `${kind}-facade`,
         now: () => new Date('2026-09-10T02:00:00.000Z'),
       },
     })
     const output: AgentOutputEvent[] = []
+    let approvalId: string | undefined
 
-    const result = await agent.run({ sessionId: 'approval-facade', input: '写入' }, {
-      onEvent(event) {
-        output.push(event)
-        if (event.type === 'tool.approval.requested') {
-          expect(agent.resolveToolApproval({
-            approvalId: event.approvalId,
-            decision: 'allow',
-          })).toEqual({ accepted: true })
-        }
-      },
+    for await (const event of agent.stream({
+      sessionId: 'approval-facade',
+      input: '写入',
+    })) {
+      output.push(event)
+      if (event.type === 'tool.approval.requested') {
+        approvalId = event.approvalId
+        expect(agent.resolveToolApproval({
+          approvalId: event.approvalId,
+          decision: 'allow',
+        })).toEqual({ accepted: true })
+      }
+    }
+
+    expect(output.at(-1)).toMatchObject({
+      type: 'message.completed',
+      content: '审批后完成',
     })
-
-    expect(result).toMatchObject({ status: 'completed', content: '审批后完成' })
     expect(output).toEqual(expect.arrayContaining([
       expect.objectContaining({
         type: 'tool.approval.requested',
-        approvalId: 'approval-facade',
+        approvalId: expect.stringMatching(/^approval-[0-9a-f-]{36}$/),
         approvalTimeoutMs: -1,
         expiresAt: null,
       }),
@@ -264,13 +291,14 @@ describe('agent facade', () => {
         outcome: 'allowed',
       }),
     ]))
+    expect(approvalId).toBeDefined()
     expect(agent.resolveToolApproval({
-      approvalId: 'approval-facade',
+      approvalId: approvalId!,
       decision: 'deny',
     })).toEqual({ accepted: false, reason: 'not-found-or-settled' })
   })
 
-  it('passes one trusted run context through the global Guard and tool execution', async () => {
+  it('passes one trusted context and request object through both Guards and tool execution', async () => {
     interface AppContext {
       readonly tenantId: string
       readonly user: { readonly id: string }
@@ -278,7 +306,8 @@ describe('agent facade', () => {
     }
     const inputSchema = z.strictObject({ key: z.string() })
     const outputSchema = z.strictObject({ owner: z.string() })
-    const guardedContexts: AppContext[] = []
+    let localGuardRequest: unknown
+    let globalGuardRequest: unknown
     const executedContexts: AppContext[] = []
     const tool = defineTool<typeof inputSchema, typeof outputSchema, AppContext>({
       name: 'read_tenant_record',
@@ -286,6 +315,10 @@ describe('agent facade', () => {
       inputSchema,
       outputSchema,
       metadata: { domain: 'tenant-records' },
+      guard(request) {
+        localGuardRequest = request
+        return { decision: 'allow' }
+      },
       execute(_input, context) {
         executedContexts.push(context.context)
         return { owner: context.context.user.id }
@@ -319,10 +352,11 @@ describe('agent facade', () => {
     })
     const agent = new Agent<AppContext>({
       model: adapter,
-      tools: { mode: 'replace', tools: [tool] },
-      toolGuard: {
-        evaluate(request) {
-          guardedContexts.push(request.context)
+      tools: {
+        mode: 'replace',
+        tools: [tool],
+        guard(request) {
+          globalGuardRequest = request
           return request.context.tenantId === 'tenant-a'
             ? { decision: 'allow' }
             : { decision: 'deny', reason: '租户不匹配' }
@@ -335,14 +369,20 @@ describe('agent facade', () => {
       environment: 'test',
     }
 
-    const result = await agent.run({
+    const events = await collectEvents(agent.stream({
       sessionId: 'context-facade',
       input: '读取记录',
       context,
-    })
+    }))
 
-    expect(result).toMatchObject({ status: 'completed', content: '上下文调用完成' })
-    expect(guardedContexts).toEqual([context])
-    expect(executedContexts).toEqual([context])
+    expect(events.at(-1)).toMatchObject({
+      type: 'message.completed',
+      content: '上下文调用完成',
+    })
+    expect(globalGuardRequest).toBe(localGuardRequest)
+    expect(globalGuardRequest).toMatchObject({ context })
+    expect((globalGuardRequest as { context: AppContext }).context).toBe(context)
+    expect(executedContexts).toHaveLength(1)
+    expect(executedContexts[0]).toBe(context)
   })
 })

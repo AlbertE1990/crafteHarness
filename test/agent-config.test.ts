@@ -26,7 +26,7 @@ describe('agent config', () => {
     const config = defineAgentConfig({
       systemPrompt: '  你是测试助手  ',
       execution: {
-        model: { stream: false, reasoning: { enabled: true, effort: 'max' } },
+        model: { reasoningEnabled: true, reasoningEffort: 'max' },
         limits: { maxModelSteps: 8 },
       },
       model: {
@@ -40,7 +40,7 @@ describe('agent config', () => {
     expect(config).toMatchObject({
       systemPrompt: '你是测试助手',
       execution: {
-        model: { stream: false, reasoning: { enabled: true, effort: 'max' } },
+        model: { reasoningEnabled: true, reasoningEffort: 'max' },
         limits: { maxModelSteps: 8, maxToolCalls: 32 },
       },
       model: {
@@ -51,7 +51,9 @@ describe('agent config', () => {
     expect(Object.isFrozen(config)).toBe(true)
     expect(Object.isFrozen(config.execution)).toBe(true)
     expect(Object.isFrozen(config.execution.limits)).toBe(true)
-    expect(Object.isFrozen(config.session)).toBe(true)
+    expect(config.sessionStore).toBeInstanceOf(MemorySessionStore)
+    expect(Object.isFrozen(config.tools)).toBe(true)
+    expect(Object.isFrozen(config.tools.registered)).toBe(true)
     expect(Object.isFrozen(config.observability)).toBe(true)
   })
 
@@ -72,18 +74,36 @@ describe('agent config', () => {
     const config = defineAgentConfig({
       model,
       execution: {
-        model: { reasoning: { enabled: true, effort: 'provider-future-level' } },
+        model: { reasoningEnabled: true, reasoningEffort: 'provider-future-level' },
       },
     })
 
     expect(config.execution.model).toEqual({
-      stream: true,
-      reasoning: { enabled: true, effort: 'provider-future-level' },
+      reasoningEnabled: true,
+      reasoningEffort: 'provider-future-level',
     })
     expect(() => defineAgentConfig({
       model,
-      execution: { model: { reasoning: { effort: ' ' } } },
-    })).toThrow('reasoning.effort 必须是非空字符串')
+      execution: { model: { reasoningEffort: ' ' } },
+    })).toThrow('reasoningEffort 必须是非空字符串')
+
+    expect(defineAgentConfig({
+      model,
+      execution: { model: { reasoningEffort: 'future-level' } },
+    }).execution.model).toEqual({
+      reasoningEnabled: true,
+      reasoningEffort: 'future-level',
+    })
+
+    expect(() => defineAgentConfig({
+      model,
+      execution: {
+        model: {
+          reasoningEnabled: false,
+          reasoningEffort: 'high',
+        } as unknown as NonNullable<Parameters<typeof defineAgentConfig>[0]['execution']>['model'],
+      },
+    })).toThrow('reasoningEnabled=false 时不能同时提供 reasoningEffort')
   })
 
   it('rejects removed flat fields and unknown grouped fields', () => {
@@ -101,6 +121,27 @@ describe('agent config', () => {
       execution: { timeout: 1_000 },
     } as unknown as Parameters<typeof defineAgentConfig>[0])).toThrow(
       'Agent config.execution 包含未知字段：timeout',
+    )
+
+    expect(() => defineAgentConfig({
+      model,
+      session: { store: new MemorySessionStore() },
+    } as unknown as Parameters<typeof defineAgentConfig>[0])).toThrow(
+      'Agent config 包含未知字段：session',
+    )
+
+    expect(() => defineAgentConfig({
+      model,
+      toolGuard: { evaluate: () => ({ decision: 'allow' }) },
+    } as unknown as Parameters<typeof defineAgentConfig>[0])).toThrow(
+      'Agent config 包含未知字段：toolGuard',
+    )
+
+    expect(() => defineAgentConfig({
+      model,
+      execution: { createId: () => 'legacy-id' },
+    } as unknown as Parameters<typeof defineAgentConfig>[0])).toThrow(
+      'Agent config.execution 包含未知字段：createId',
     )
   })
 
@@ -178,7 +219,7 @@ describe('agent config', () => {
     const adapter = new ScriptedModelAdapter({ script: [] })
     const agent = new Agent({ model: adapter })
 
-    expect(agent.store).toBe(agent.config.session.store)
+    expect(agent.store).toBe(agent.config.sessionStore)
     expect(agent.limits).toEqual({ maxModelSteps: 8, maxToolCalls: 32 })
   })
 
@@ -186,37 +227,37 @@ describe('agent config', () => {
     const evaluate = () => ({ decision: 'allow' as const })
     const config = defineAgentConfig({
       model: new ScriptedModelAdapter({ script: [] }),
-      toolGuard: { evaluate, approvalTimeoutMs: 90_000 },
+      tools: { guard: evaluate, approvalTimeoutMs: 90_000 },
     })
 
-    expect(config.toolGuard).toEqual({ evaluate, approvalTimeoutMs: 90_000 })
-    expect(Object.isFrozen(config.toolGuard)).toBe(true)
+    expect(config.tools).toMatchObject({ guard: evaluate, approvalTimeoutMs: 90_000 })
+    expect(Object.isFrozen(config.tools)).toBe(true)
 
     const neverExpires = defineAgentConfig({
       model: new ScriptedModelAdapter({ script: [] }),
-      toolGuard: { evaluate, approvalTimeoutMs: -1 },
+      tools: { guard: evaluate, approvalTimeoutMs: -1 },
     })
-    expect(neverExpires.toolGuard.approvalTimeoutMs).toBe(-1)
+    expect(neverExpires.tools.approvalTimeoutMs).toBe(-1)
 
     const unguarded = defineAgentConfig({
       model: new ScriptedModelAdapter({ script: [] }),
     })
-    expect(unguarded.toolGuard).toEqual({ approvalTimeoutMs: 120_000 })
-    expect(unguarded.toolGuard).not.toHaveProperty('evaluate')
+    expect(unguarded.tools.approvalTimeoutMs).toBe(120_000)
+    expect(unguarded.tools).not.toHaveProperty('guard')
   })
 
   it('rejects invalid Tool Guard configuration before a Run starts', () => {
     const model = new ScriptedModelAdapter({ script: [] })
     expect(() => defineAgentConfig({
       model,
-      toolGuard: { evaluate: () => ({ decision: 'allow' }), approvalTimeoutMs: 0 },
+      tools: { guard: () => ({ decision: 'allow' }), approvalTimeoutMs: 0 },
     })).toThrow('approvalTimeoutMs 必须是 -1，或 1 到 2147483647 的整数')
 
     expect(() => defineAgentConfig({
       model,
       // 验证运行时边界，而不依赖 TypeScript 编译期检查。
-      toolGuard: { evaluate: 'invalid' },
-    } as unknown as Parameters<typeof defineAgentConfig>[0])).toThrow('evaluate 必须是函数')
+      tools: { guard: 'invalid' },
+    } as unknown as Parameters<typeof defineAgentConfig>[0])).toThrow('tools.guard 必须是函数')
   })
 
   it('automatically registers all built-in tools by default', () => {
@@ -224,11 +265,11 @@ describe('agent config', () => {
       model: new ScriptedModelAdapter({ script: [] }),
     })
 
-    expect(config.tools.map(tool => tool.name)).toEqual([
+    expect(config.tools.registered.map(tool => tool.name)).toEqual([
       'get_current_time',
       'calculator',
     ])
-    expect(Object.isFrozen(config.tools)).toBe(true)
+    expect(Object.isFrozen(config.tools.registered)).toBe(true)
   })
 
   it('can disable a built-in tool and append application tools', () => {
@@ -241,11 +282,11 @@ describe('agent config', () => {
       },
     })
 
-    expect(config.tools.map(tool => tool.name)).toEqual([
+    expect(config.tools.registered.map(tool => tool.name)).toEqual([
       'get_current_time',
       'get_weather',
     ])
-    expect(config.tools.at(-1)).not.toBe(weather)
+    expect(config.tools.registered.at(-1)).not.toBe(weather)
   })
 
   it('can explicitly override one built-in tool', () => {
@@ -257,12 +298,12 @@ describe('agent config', () => {
       },
     })
 
-    expect(config.tools.map(tool => tool.name)).toEqual([
+    expect(config.tools.registered.map(tool => tool.name)).toEqual([
       'get_current_time',
       'calculator',
     ])
-    expect(config.tools[1]).not.toBe(calculator)
-    expect(config.tools[1]?.model).toBe(calculator.model)
+    expect(config.tools.registered[1]).not.toBe(calculator)
+    expect(config.tools.registered[1]?.model).toBe(calculator.model)
   })
 
   it('can replace a built-in tool Guard without replacing its implementation', async () => {
@@ -274,7 +315,7 @@ describe('agent config', () => {
         },
       },
     })
-    const calculator = config.tools.find(tool => tool.name === 'calculator')!
+    const calculator = config.tools.registered.find(tool => tool.name === 'calculator')!
 
     await expect(calculator.execute({ operation: 'add', values: [1, 2] }, {
       callId: 'call-overridden-builtin',
@@ -295,8 +336,8 @@ describe('agent config', () => {
       },
     })
 
-    expect(config.tools.map(tool => tool.name)).toEqual(['only_custom_tool'])
-    expect(config.tools[0]).not.toBe(custom)
+    expect(config.tools.registered.map(tool => tool.name)).toEqual(['only_custom_tool'])
+    expect(config.tools.registered[0]).not.toBe(custom)
   })
 
   it('rejects ambiguous or duplicate tool configuration', () => {

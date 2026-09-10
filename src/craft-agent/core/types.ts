@@ -41,7 +41,7 @@ export interface AgentLoopConfig<TContext = undefined> {
   readonly systemPrompt?: string
   readonly limits?: Partial<AgentLoopLimits>
   /** 部署、租户、用户和环境级 Guard；缺省表示该层 allow。 */
-  readonly toolGuard?: ToolGuardEvaluator<TContext>
+  readonly globalGuard?: ToolGuardEvaluator<TContext>
   readonly requestToolApproval?: ToolApprovalHandler<TContext>
   readonly onToolEvent?: ToolEventListener
   /** 测试可注入的墙上时钟。 */
@@ -61,7 +61,7 @@ export interface AgentRunRequest<TContext = undefined> {
 }
 
 /** 单次 Agent Run 的模型调用方式；同一 Run 的所有 Step 使用同一份解析结果。 */
-export interface AgentModelExecutionOptions {
+export interface AgentLoopModelExecutionOptions {
   /** true 使用增量流，false 使用 ModelAdapter.complete()；默认 true。 */
   readonly stream?: boolean
   /** 通用推理意图；具体供应商字段和合法 effort 由 ModelAdapter 决定。 */
@@ -69,7 +69,7 @@ export interface AgentModelExecutionOptions {
 }
 
 /** 经过边界校验和默认值合并后的模型调用方式。 */
-export interface DefinedAgentModelExecutionOptions {
+export interface DefinedAgentLoopModelExecutionOptions {
   readonly stream: boolean
   readonly reasoning?: Readonly<ModelReasoningOptions>
 }
@@ -80,7 +80,7 @@ export interface AgentRunOptions {
   readonly runId?: string
   readonly turnId?: string
   /** 覆盖本次 Run 的流式与推理设置。 */
-  readonly model?: AgentModelExecutionOptions
+  readonly model?: AgentLoopModelExecutionOptions
   /** 观察器异常会被隔离，不能改变 Agent 的执行结果。 */
   readonly onEvent?: AgentEventListener
 }
@@ -90,7 +90,7 @@ export interface AgentTool<TContext = undefined> {
   readonly name: string
   readonly model: ToolModelDefinition
   /** Agent 配置可以替换或移除内置工具的局部 Guard。 */
-  readonly toolGuard?: ToolGuardEvaluator<TContext> | null
+  readonly guard?: ToolGuardEvaluator<TContext> | null
   /** 始终通过 Tool Harness 执行，而不是直接调用业务工具的 execute。 */
   execute: (
     rawInput: unknown,
@@ -186,7 +186,7 @@ export type AgentEvent = AgentEventBase & (
     readonly type: 'agent.run.started'
     readonly provider: string
     readonly model: string
-    readonly modelExecution: DefinedAgentModelExecutionOptions
+    readonly modelExecution: DefinedAgentLoopModelExecutionOptions
     readonly limits: AgentLoopLimits
   }
   | { readonly type: 'agent.turn.started' }

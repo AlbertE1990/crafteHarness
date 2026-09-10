@@ -25,9 +25,9 @@ export interface ExecuteToolOptions<TContext = undefined> {
   readonly context?: TContext
   readonly signal?: AbortSignal
   /** 部署级 Guard；未提供时该层直接 allow。 */
-  readonly globalToolGuard?: ToolGuardEvaluator<TContext>
+  readonly globalGuard?: ToolGuardEvaluator<TContext>
   /** Agent 工具注册表覆盖内置 Guard 时使用；普通 executeTool() 调用方不应配置。 */
-  readonly toolGuardOverride?: ToolGuardEvaluator<TContext> | null
+  readonly guardOverride?: ToolGuardEvaluator<TContext> | null
   /** Guard 返回 ask 时调用；缺失处理器会按 unavailable 拒绝。 */
   readonly requestApproval?: ToolApprovalHandler<TContext>
   /** 接收有序实时轨迹；监听器异常不会改变工具结果。 */
@@ -134,10 +134,10 @@ export async function executeTool<
   try {
     guardDecision = await evaluateToolGuards(
       guardRequest,
-      options.toolGuardOverride === undefined
-        ? tool.toolGuard
-        : options.toolGuardOverride ?? undefined,
-      options.globalToolGuard,
+      options.guardOverride === undefined
+        ? tool.guard
+        : options.guardOverride ?? undefined,
+      options.globalGuard,
     )
   }
   catch (error) {
@@ -335,14 +335,14 @@ async function evaluateToolGuards<
   TMetadata extends JsonObject,
 >(
   request: ToolGuardRequest<TContext, TInput, TMetadata>,
-  toolGuard: ToolGuardEvaluator<TContext, TInput, TMetadata> | undefined,
+  localGuard: ToolGuardEvaluator<TContext, TInput, TMetadata> | undefined,
   globalGuard: ToolGuardEvaluator<TContext> | undefined,
 ): Promise<ToolGuardDecision> {
   const decisions: SourcedGuardDecision[] = []
-  if (toolGuard) {
+  if (localGuard) {
     decisions.push({
       source: 'tool',
-      value: normalizeToolGuardDecision(await toolGuard(request)),
+      value: normalizeToolGuardDecision(await localGuard(request)),
     })
   }
   if (globalGuard) {

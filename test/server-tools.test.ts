@@ -14,7 +14,7 @@ import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 const registeredServerTools = defineAgentConfig({
   model: new ScriptedModelAdapter({ script: [] }),
   tools: { mode: 'replace', tools: serverTools },
-}).tools
+}).tools.registered
 
 function jsonResponse(body: unknown): Response {
   return {
@@ -37,7 +37,7 @@ async function invokeServerTool(
   return await tool.execute(rawInput, {
     callId: `test-${name}`,
     // 本辅助函数只测试工具业务边界；参数级 Guard 决定由下面的独立测试覆盖。
-    globalToolGuard: () => ({ decision: 'allow' }),
+    globalGuard: () => ({ decision: 'allow' }),
     ...options,
   })
 }
@@ -74,13 +74,13 @@ describe('server tools through CraftAgent', () => {
     const [customTool] = defineAgentConfig({
       model: new ScriptedModelAdapter({ script: [] }),
       tools: { mode: 'replace', tools: [definition] },
-    }).tools
+    }).tools.registered
     if (!customTool)
       throw new Error('测试工具注册失败')
 
     const result = await customTool.execute({ text: 'hello' }, {
       callId: 'custom-tool-call',
-      globalToolGuard: () => ({ decision: 'allow' }),
+      globalGuard: () => ({ decision: 'allow' }),
     })
 
     expect(customTool.model.name).toBe('echo_for_test')
@@ -202,7 +202,7 @@ describe('server tools through CraftAgent', () => {
 
   it('uses validated arguments to allow reads, ask for writes and deny protected deletes', async () => {
     /** 直接调用工具自己的参数级 Guard，并补齐 Agent 正常提供的关联上下文。 */
-    const evaluate = async (input: unknown) => await manageRuntimeResourceTool.toolGuard!({
+    const evaluate = async (input: unknown) => await manageRuntimeResourceTool.guard!({
       runId: 'run-server-tool',
       sessionId: 'session-server-tool',
       callId: 'call-server-tool',
@@ -241,7 +241,7 @@ describe('server tools through CraftAgent', () => {
     })
 
     // 当前服务的全局 Guard 只约束部署允许的工具集合，不重复实现参数级规则。
-    expect(serverToolGuard.evaluate!({
+    expect(serverToolGuard({
       runId: 'run-server-tool',
       sessionId: 'session-server-tool',
       callId: 'call-server-tool',

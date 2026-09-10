@@ -21,7 +21,7 @@ export function createAgentTool<
   return Object.freeze({
     name: tool.name,
     model: tool.model,
-    ...(tool.toolGuard ? { toolGuard: tool.toolGuard as AgentTool<TContext>['toolGuard'] } : {}),
+    ...(tool.guard ? { guard: tool.guard as AgentTool<TContext>['guard'] } : {}),
     execute,
   })
 }

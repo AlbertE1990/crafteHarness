@@ -216,7 +216,7 @@ flowchart LR
 
 已完成范围：
 
-- Agent 公共配置将风险决策收口为单一 `toolGuard.evaluate()`。
+- Agent 公共配置将风险决策收口为单一评估函数；阶段 4.12 已将其归入 `tools.guard` 并与局部 Guard 统一协议。
 - 评估器按工具静态信息和已校验参数返回 `allow/deny/ask`。
 - Agent 内部管理一次性审批 ID、pending Promise、超时、取消和重复提交。
 - 单次 ask 超时优先于 ToolGuard 通用超时；`-1` 表示永久等待，其余情况通过事件暴露绝对过期时间。
@@ -230,7 +230,7 @@ flowchart LR
 
 已完成范围：
 
-- `AgentConfigInput` 按 `session`、`execution`、`observability` 分组，同时保留模型、工具和 ToolGuard 的短路径。
+- 本阶段建立配置分组；阶段 4.12 进一步将单字段 `session` 收口为根 `sessionStore`，并将全局 Guard 归入 `tools`。
 - 默认提供 OpenAI Compatible 声明式模型配置，只有供应商协议差异才要求显式选择或实现 Adapter。
 - 输入配置和 `agent.config` 使用相同分组，不保留旧扁平配置兼容层。
 - 新增可公开命名的 `AgentToolInput`，内部工具归一化实现继续隐藏。
@@ -244,7 +244,7 @@ flowchart LR
 
 已完成范围：
 
-- `execution.model` 定义流式与推理默认值，`Agent.run()` 支持按次覆盖。
+- 本阶段曾由 `execution.model` 同时定义流式与推理默认值；阶段 4.11 已用意图优先 API 替代该调用形态。
 - 通用推理等级使用开放字符串，由具体 Adapter 维护合法集合和字段映射。
 - AgentLoop 同时执行 `stream()` 与 `complete()`，并为完整响应提供独立轨迹事件。
 - 当前联调 Runtime 在流式时使用 SSE，非流式时返回普通 JSON。
@@ -259,13 +259,38 @@ flowchart LR
 - 删除无法由框架证明且与 retry 重复的 `security/idempotent`，工具改用任意 JSON 安全 `metadata`。
 - 超时与重试收进 `execution`；配置 retry 本身表示工具作者允许重复调用。
 - 工具级 Guard 和 Agent 全局 Guard 固定执行，按 `deny > ask > allow` 合并；缺省 Guard 直接允许。
-- `new Agent<TContext>()` 与 `run({ context })` 将租户、用户和环境数据只传给当前 Guard 与工具执行。
+- `new Agent<TContext>()` 的请求 context 将租户、用户和环境数据只传给当前 Guard 与工具执行。
 - 内置工具可通过 `tools.guardOverrides` 替换或移除局部 Guard，全局 Guard 始终执行。
 - 审批标准事件使用通用 `toolMetadata`，不再固化 risk 枚举。
 
 详细交付见[阶段 4.10 记录](./deliveries/delivery-016-layered-tool-guards.md)。
 
-## 19. 阶段 5：轨迹持久化与查询（下一阶段）
+## 19. 阶段 4.11：意图优先的 Agent 调用 API（已完成）
+
+已完成范围：
+
+- `invoke()` 与 `stream()` 分别表达完整结果和实时事件，不保留可矛盾的公共 `model.stream`。
+- 请求级模型设置进入 `AgentRequest.model`，公开为 `reasoningEnabled/reasoningEffort` 扁平字段。
+- 唯一控制参数直接使用 AbortSignal；关联 ID 与轨迹接线由 Agent 配置统一管理。
+- `stream()` 提供带背压和消费者取消的 `AsyncIterable<AgentOutputEvent>`。
+- AgentLoop 与 Adapter 继续使用内部嵌套协议，由门面承担转换复杂度。
+
+详细交付见[阶段 4.11 记录](./deliveries/delivery-017-intent-first-agent-api.md)。
+
+## 20. 阶段 4.12：配置减负与统一 Guard 协议（已完成）
+
+已完成范围：
+
+- 公共 `AgentConfigInput` 删除 `createId/createSessionId`，内部统一使用语义前缀加 UUID。
+- 单字段 `session.store` 改为根 `sessionStore`。
+- 全局风险策略改为直接函数 `tools.guard`，审批默认值为同组的 `tools.approvalTimeoutMs`。
+- 工具定义的局部入口统一命名为 `guard`；局部和全局 Guard 共用请求与决定协议。
+- `AgentRequest.context` 原样进入同一个 Guard 请求对象，并继续传给工具执行上下文。
+- 不保留未发布旧配置的兼容别名，避免形成双入口。
+
+详细交付见[阶段 4.12 记录](./deliveries/delivery-018-agent-config-and-guard-context.md)。
+
+## 21. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -275,7 +300,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 CraftAgent 核心协议。
 
-## 20. 阶段 6：异常诊断
+## 22. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -288,7 +313,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 21. 阶段 7：长期安全与扩展（最低优先级）
+## 23. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

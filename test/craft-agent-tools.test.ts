@@ -235,7 +235,7 @@ describe('executeTool', () => {
       inputSchema,
       outputSchema,
       metadata: { risk: 'write' },
-      toolGuard(request) {
+      guard(request) {
         order.push(`tool:${request.context.tenantId}`)
         return { decision: 'ask', reason: '工具需要确认' }
       },
@@ -245,7 +245,7 @@ describe('executeTool', () => {
     const result = await executeTool(tool, { resource: 'record/1' }, {
       callId: 'call-context-guard',
       context: { tenantId: 'tenant-a', environment: 'test' },
-      globalToolGuard(request) {
+      globalGuard(request) {
         order.push(`global:${request.context.tenantId}`)
         return { decision: 'deny', reason: '测试环境禁止写入' }
       },
@@ -290,7 +290,7 @@ describe('executeTool', () => {
 
     const result = await executeTool(tool, { value: 'hello' }, {
       callId: 'call-5',
-      globalToolGuard: () => ({ decision: 'ask', reason: '该操作会写入数据' }),
+      globalGuard: () => ({ decision: 'ask', reason: '该操作会写入数据' }),
       onEvent: event => events.push(event),
     })
 

@@ -1,6 +1,6 @@
 import type {
-  AgentModelExecutionOptions,
-  DefinedAgentModelExecutionOptions,
+  AgentLoopModelExecutionOptions,
+  DefinedAgentLoopModelExecutionOptions,
 } from './types'
 
 /**
@@ -9,10 +9,10 @@ import type {
  * 参数顺序遵循“本次输入优先、基础默认值其次”：调用方最常提供的是 input，base 只在
  * Agent 门面把构造配置与单次 Run 配置合并时使用。
  */
-export function defineAgentModelExecutionOptions(
-  input: AgentModelExecutionOptions | undefined,
-  base?: DefinedAgentModelExecutionOptions,
-): DefinedAgentModelExecutionOptions {
+export function defineAgentLoopModelExecutionOptions(
+  input: AgentLoopModelExecutionOptions | undefined,
+  base?: DefinedAgentLoopModelExecutionOptions,
+): DefinedAgentLoopModelExecutionOptions {
   assertOptionsObject(input, 'Agent model execution options')
   assertKnownFields(input, ['stream', 'reasoning'], 'Agent model execution options')
 
@@ -43,9 +43,9 @@ export function defineAgentModelExecutionOptions(
 
 /** 合并嵌套推理配置；显式关闭时不会继承基础 effort，避免产生自相矛盾的请求。 */
 function mergeReasoning(
-  input: AgentModelExecutionOptions['reasoning'],
-  base: DefinedAgentModelExecutionOptions['reasoning'],
-): DefinedAgentModelExecutionOptions['reasoning'] {
+  input: AgentLoopModelExecutionOptions['reasoning'],
+  base: DefinedAgentLoopModelExecutionOptions['reasoning'],
+): DefinedAgentLoopModelExecutionOptions['reasoning'] {
   if (input === undefined)
     return base
 

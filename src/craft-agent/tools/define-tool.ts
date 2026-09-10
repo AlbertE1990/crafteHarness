@@ -16,7 +16,7 @@ const TOOL_DEFINITION_FIELDS = new Set([
   'inputSchema',
   'outputSchema',
   'metadata',
-  'toolGuard',
+  'guard',
   'execution',
   'renderOutput',
   'execute',
@@ -97,8 +97,8 @@ function validateDefinition<
   if (!definition.description.trim())
     throw new TypeError(`工具 ${definition.name} 缺少有效 description`)
 
-  if (definition.toolGuard !== undefined && typeof definition.toolGuard !== 'function')
-    throw new TypeError(`工具 ${definition.name} 的 toolGuard 必须是函数`)
+  if (definition.guard !== undefined && typeof definition.guard !== 'function')
+    throw new TypeError(`工具 ${definition.name} 的 guard 必须是函数`)
 
   if (definition.execution !== undefined) {
     if (typeof definition.execution !== 'object'

@@ -27,15 +27,14 @@ const agent = new Agent({
   },
   systemPrompt: '你是一个AI助手',
   execution: {
-    model: {
-      stream: true,
-      reasoning: {
-        enabled: process.env.DEEPSEEK_THINKING !== 'disabled',
-        ...(process.env.DEEPSEEK_REASONING_EFFORT?.trim()
-          ? { effort: process.env.DEEPSEEK_REASONING_EFFORT.trim() }
-          : {}),
-      },
-    },
+    model: process.env.DEEPSEEK_THINKING === 'disabled'
+      ? { reasoningEnabled: false }
+      : {
+          reasoningEnabled: true,
+          ...(process.env.DEEPSEEK_REASONING_EFFORT?.trim()
+            ? { reasoningEffort: process.env.DEEPSEEK_REASONING_EFFORT.trim() }
+            : {}),
+        },
     limits: {
       maxModelSteps: 5,
       maxToolCalls: 16,
@@ -44,12 +43,11 @@ const agent = new Agent({
   },
   tools: {
     additional: serverTools,
+    guard: serverToolGuard,
+    approvalTimeoutMs: 120_000,
   },
-  // 应用只实现风险评估规则；等待、超时、取消和防重复提交都由 Agent 内部完成。
-  toolGuard: serverToolGuard,
-  session: {
-    store: postgresSessionStore,
-  },
+  // 应用只注入持久化 Port；Session ID 由 Agent 使用固定前缀和 UUID 生成。
+  sessionStore: postgresSessionStore,
 })
 const fastify = createServerApp({ agent })
 fastify.addHook('onClose', async () => {

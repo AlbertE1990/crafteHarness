@@ -415,7 +415,7 @@ describe('agent loop', () => {
       model: adapter,
       store: createStore(),
       tools: [mutatingTool],
-      toolGuard: () => scenario.guardDecision,
+      globalGuard: () => scenario.guardDecision,
       requestToolApproval,
     })
 

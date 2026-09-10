@@ -5,14 +5,13 @@ import type {
   AgentExecutionConfig,
   AgentModelExecutionOptions,
   AgentObservabilityConfig,
-  AgentSessionConfig,
   AgentToolInput,
+  AgentToolsCommonConfig,
   DefinedAgentModelExecutionOptions,
   ModelAdapter,
   ModelReasoningOptions,
   SessionStore,
   ToolExecutionConfig,
-  ToolGuardConfig,
   ToolGuardDecision,
   ToolGuardEvaluator,
   ToolGuardRequest,
@@ -41,11 +40,10 @@ function acceptsPublicTypes(_value: {
   definedModelExecution?: DefinedAgentModelExecutionOptions
   reasoning?: ModelReasoningOptions
   observability?: AgentObservabilityConfig
-  session?: AgentSessionConfig
+  tools?: AgentToolsCommonConfig
   tool?: AgentToolInput
   model?: ModelAdapter
   store?: SessionStore
-  guard?: ToolGuardConfig
   toolExecution?: ToolExecutionConfig
   guardDecision?: ToolGuardDecision
   guardEvaluator?: ToolGuardEvaluator
@@ -59,7 +57,7 @@ describe('craft-agent public API', () => {
     const model = new ScriptedModelAdapter({ script: [] })
     const config: AgentConfigInput = {
       model,
-      session: { store: new MemorySessionStore() },
+      sessionStore: new MemorySessionStore(),
       execution: { limits: { maxModelSteps: 2 } },
       observability: {},
     }
@@ -67,6 +65,9 @@ describe('craft-agent public API', () => {
     acceptsPublicTypes({ config })
     expect(defineAgentConfig(config).model).toBe(model)
     expect(Agent).toBe(publicApi.Agent)
+    expect(new Agent(config).invoke).toBeTypeOf('function')
+    expect(new Agent(config).stream).toBeTypeOf('function')
+    expect('run' in new Agent(config)).toBe(false)
     expect(defineTool).toBeTypeOf('function')
     expect(DEFAULT_TOOL_APPROVAL_TIMEOUT_MS).toBeGreaterThan(0)
     expect('normalizeAgentToolDefinitions' in publicApi).toBe(false)
@@ -88,7 +89,7 @@ describe('craft-agent public API', () => {
         apiKey: 'test-key',
         model: 'deepseek-flash',
       },
-      execution: { model: { reasoning: { enabled: true, effort: 'high' } } },
+      execution: { model: { reasoningEnabled: true, reasoningEffort: 'high' } },
     }
 
     expect(defineAgentConfig(kimiConfig).model.provider).toBe('moonshot')
@@ -108,14 +109,14 @@ describe('craft-agent public API', () => {
     }
     const config: AgentConfigInput<AppContext> = {
       model: new ScriptedModelAdapter({ script: [] }),
-      toolGuard: {
-        evaluate: request => request.context.tenantId
+      tools: {
+        guard: request => request.context.tenantId
           ? { decision: 'allow' }
           : { decision: 'deny', reason: '缺少租户' },
       },
     }
     const agent = new Agent<AppContext>(config)
-    const request: Parameters<typeof agent.run>[0] = {
+    const request: Parameters<typeof agent.invoke>[0] = {
       input: '测试上下文类型',
       context: { tenantId: 'tenant-a', environment: 'test' },
     }

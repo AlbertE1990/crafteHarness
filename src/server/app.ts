@@ -125,6 +125,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     Body: {
       conversationId?: string
       message: string
+      stream?: boolean
       model?: AgentModelExecutionOptions
     }
   }>('/api/chat', {
@@ -134,18 +135,12 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
         properties: {
           conversationId: { type: 'string' },
           message: { type: 'string', minLength: 1 },
+          stream: { type: 'boolean' },
           model: {
             type: 'object',
             properties: {
-              stream: { type: 'boolean' },
-              reasoning: {
-                type: 'object',
-                properties: {
-                  enabled: { type: 'boolean' },
-                  effort: { type: 'string', minLength: 1 },
-                },
-                additionalProperties: false,
-              },
+              reasoningEnabled: { type: 'boolean' },
+              reasoningEffort: { type: 'string', minLength: 1 },
             },
             additionalProperties: false,
           },
@@ -156,9 +151,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     },
   }, async (request, reply) => {
     const abortController = new AbortController()
-    const modelExecution = request.body.model
-    const useStream = modelExecution?.stream
-      ?? options.agent.config.execution.model.stream
+    const useStream = request.body.stream ?? true
     const agentRequest = {
       input: request.body.message,
       ...(request.body.conversationId
@@ -172,6 +165,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
             },
           }
         : {}),
+      ...(request.body.model ? { model: request.body.model } : {}),
     }
 
     // 浏览器断开连接时取消同一个 Agent Run，模型和工具会收到组合后的 AbortSignal。
@@ -183,13 +177,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     if (!useStream) {
       // 普通 JSON 请求没有实时事件通道，因此不会注册交互式工具审批观察器。
       // ToolGuard 的 ask 会得到 unavailable 并作为工具失败交回 AgentLoop，而不会永久等待。
-      const result = await options.agent.run(agentRequest, {
-        signal: abortController.signal,
-        model: {
-          ...modelExecution,
-          stream: false,
-        },
-      })
+      const result = await options.agent.invoke(agentRequest, abortController.signal)
       const response: ServerChatJsonResponse = { data: result }
       return response
     }
@@ -204,17 +192,10 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     reply.raw.flushHeaders()
 
     try {
-      await options.agent.run(agentRequest, {
-        signal: abortController.signal,
-        model: {
-          ...modelExecution,
-          stream: true,
-        },
-        onEvent: async (event) => {
-          // AgentOutputEvent 已是 CraftAgent 的标准应用协议，默认原样写出即可。
-          await writeSseEvent(reply.raw, event)
-        },
-      })
+      for await (const event of options.agent.stream(agentRequest, abortController.signal)) {
+        // AgentOutputEvent 已是 CraftAgent 的标准应用协议，默认原样写出即可。
+        await writeSseEvent(reply.raw, event)
+      }
     }
     catch (error) {
       if (!abortController.signal.aborted) {
@@ -336,5 +317,29 @@ async function writeSseEvent(
   response: ServerResponse,
   event: ServerStreamEvent,
 ): Promise<void> {
-  response.write(`data: ${JSON.stringify(event)}\n\n`)
+  if (response.write(`data: ${JSON.stringify(event)}\n\n`))
+    return
+
+  await new Promise<void>((resolve, reject) => {
+    function cleanup() {
+      response.off('drain', onDrain)
+      response.off('close', onClose)
+      response.off('error', onError)
+    }
+    function onDrain() {
+      cleanup()
+      resolve()
+    }
+    function onClose() {
+      cleanup()
+      reject(new Error('SSE 客户端已断开'))
+    }
+    function onError(error: Error) {
+      cleanup()
+      reject(error)
+    }
+    response.once('drain', onDrain)
+    response.once('close', onClose)
+    response.once('error', onError)
+  })
 }

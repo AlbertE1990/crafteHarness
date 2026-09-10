@@ -29,8 +29,8 @@ CraftAgent 把“判断风险”和“等待用户”拆开：
 flowchart TD
   Model[模型产生 Tool Call] --> Validate[inputSchema 校验]
   Validate -->|失败| ToolResult[失败结果写回 AgentLoop]
-  Validate --> Local{工具级 toolGuard}
-  Local --> Global{全局 toolGuard.evaluate}
+  Validate --> Local{工具级 guard}
+  Local --> Global{全局 tools.guard}
   Context[run context: 租户/用户/环境] --> Local
   Context --> Global
   Metadata[工具 metadata] --> Local
@@ -70,7 +70,7 @@ const resourceTool = defineTool({
     risk: 'destructive',
     capabilities: ['resource:manage'],
   },
-  toolGuard(request) {
+  guard(request) {
     const { operation, resource } = request.input
     if (operation === 'read')
       return { decision: 'allow' }
@@ -119,10 +119,10 @@ interface AppRunContext {
 ```ts
 const agent = new Agent<AppRunContext>({
   model,
-  tools: { additional: [resourceTool] },
-  toolGuard: {
+  tools: {
+    additional: [resourceTool],
     approvalTimeoutMs: 120_000,
-    evaluate(request) {
+    guard(request) {
       // 工具信息、已校验参数和当前可信请求上下文都在同一个输入中。
       if (!request.context.tenantId || !request.context.user.id) {
         return { decision: 'deny', reason: '缺少可信身份上下文' }
@@ -137,13 +137,17 @@ const agent = new Agent<AppRunContext>({
 })
 ```
 
+局部与全局 Guard 共用完全相同的 `ToolGuardRequest`/`ToolGuardDecision` 协议。局部 Guard 能获得自身 Schema
+推导出的精确 input 类型；全局 Guard 需要覆盖所有工具，所以 input 默认为 `unknown`。运行时二者收到的是
+同一个请求对象和同一份 context 引用。
+
 每次请求从认证结果构造 context：
 
 ```ts
 fastify.post('/api/chat', async (request, reply) => {
   const identity = await authenticate(request) // 服务端验证 Token/Session
 
-  return await agent.run({
+  const agentRequest = {
     input: request.body.message,
     sessionId: request.body.sessionId,
     context: {
@@ -154,9 +158,9 @@ fastify.post('/api/chat', async (request, reply) => {
         ? 'production'
         : 'development',
     },
-  }, {
-    onEvent: event => sendToClient(event),
-  })
+  }
+  for await (const event of agent.stream(agentRequest, request.signal))
+    await sendToClient(event)
 })
 ```
 
@@ -167,7 +171,7 @@ fastify.post('/api/chat', async (request, reply) => {
 
 ```text
 认证结果
-  -> agent.run({ context })
+  -> agent.invoke()/stream() 请求的 context
      -> AgentLoop 当前 Run
         -> 工具级 Guard
         -> 全局 Guard
@@ -255,7 +259,7 @@ const event = {
 
 ```text
 两层 ask 合并后的最严格单次值
-  > Agent toolGuard.approvalTimeoutMs
+  > Agent tools.approvalTimeoutMs
   > 默认 120 秒
 ```
 
@@ -266,7 +270,7 @@ const event = {
 ## 8. 前后端接口
 
 流式聊天可直接把每个 `AgentOutputEvent` 序列化为 SSE。收到 requested 后，前端用确认卡片替换输入框，
-但继续读取原 SSE，因为同一个 `agent.run()` 仍在等待。
+但继续读取原 SSE，因为同一个 `agent.stream()` 仍在等待。
 
 提交接口只需要：
 
@@ -323,8 +327,8 @@ const agent = new Agent<AppRunContext>({
           : { decision: 'allow' },
       get_current_time: null,
     },
+    guard: globalGuard,
   },
-  toolGuard: globalGuard,
 })
 ```
 
@@ -344,6 +348,6 @@ const agent = new Agent<AppRunContext>({
 配套测试：
 
 - `test/craft-agent-tools.test.ts`：两层优先级和 context。
-- `test/agent-facade.test.ts`：从 Agent.run 到 Guard/execute 的 context。
+- `test/agent-facade.test.ts`：从 Agent 请求到 Guard/execute 的 context。
 - `test/tool-approval-manager.test.ts`：重复提交、超时和取消。
 - `test/server-runtime.test.ts`、`test/chat-page.test.ts`：接口与 UI。

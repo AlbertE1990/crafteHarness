@@ -47,7 +47,7 @@ const echoTool = defineTool({
   inputSchema: z.strictObject({ text: z.string() }),
   outputSchema: z.strictObject({ text: z.string() }),
   metadata: { domain: 'demo', risk: 'safe' },
-  toolGuard: request => ({ decision: 'allow' }),
+  guard: request => ({ decision: 'allow' }),
   execution: {
     timeoutMs: 1_000,
     retry: {
@@ -68,7 +68,7 @@ const echoTool = defineTool({
 | ---------- | ------------------------------ | ------------ |
 | 模型协议   | name、description、inputSchema | ModelAdapter |
 | 成功值协议 | outputSchema、renderOutput     | Harness      |
-| 调用控制   | toolGuard、execution           | Harness      |
+| 调用控制   | guard、execution               | Harness      |
 | 业务实现   | metadata、execute              | Guard 与工具 |
 
 `outputSchema` 虽然不发给模型，仍能发现实现错误和上游协议漂移。
@@ -158,7 +158,7 @@ flowchart TD
 工具级 Guard 与工具一起定义：
 
 ```ts
-function toolGuard(request: { input: { operation: string } }) {
+function guard(request: { input: { operation: string } }) {
   if (request.input.operation === 'read')
     return { decision: 'allow' }
   return { decision: 'ask', reason: '该操作会改变数据' }
@@ -170,8 +170,8 @@ function toolGuard(request: { input: { operation: string } }) {
 ```ts
 const agent = new Agent<AppContext>({
   model,
-  toolGuard: {
-    evaluate(request) {
+  tools: {
+    guard(request) {
       return request.context.permissions.includes('tools:execute')
         ? { decision: 'allow' }
         : { decision: 'deny', reason: '当前用户没有工具权限' }
@@ -182,6 +182,9 @@ const agent = new Agent<AppContext>({
 
 缺省 Guard 直接 allow。两层都存在时顺序执行，最终优先级为 `deny > ask > allow`。Guard 异常或非法返回
 产生 `TOOL_GUARD_FAILED`，不会执行工具。
+
+两层使用相同的请求和返回协议，Harness 会把同一个请求对象先后交给它们。工具级 Guard 的 input 保留 Zod
+推导类型；全局 Guard 的 input 为 `unknown`，但二者读取的是同一份请求级 context。
 
 完整审批与前后端交互见[工具审批全链路](./tool-approval-flow.md)。
 

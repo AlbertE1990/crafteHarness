@@ -7,12 +7,10 @@ export type { AgentToolInput } from './normalize-tools'
 export { DEFAULT_TOOL_APPROVAL_TIMEOUT_MS } from './tool-guard'
 
 export type {
-  DefinedToolGuardConfig,
   ResolveToolApprovalRequest,
   ResolveToolApprovalResult,
   ToolApprovalDecision,
   ToolApprovalResolvedOutcome,
-  ToolGuardConfig,
   ToolGuardDecision,
   ToolGuardDecisionMetadata,
   ToolGuardEvaluator,

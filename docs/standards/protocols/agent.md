@@ -24,8 +24,8 @@ const agent = new Agent({
   },
   execution: {
     model: {
-      stream: true,
-      reasoning: { enabled: true, effort: 'high' },
+      reasoningEnabled: true,
+      reasoningEffort: 'high',
     },
   },
   systemPrompt: '你是一个可靠的助手。',
@@ -66,25 +66,27 @@ const kimiAgent = new Agent({
 归一化规则：
 
 - 模型声明转换为 `ModelAdapter`。
-- `execution.model` 补齐为一次 Run 的默认流式与推理设置，`stream` 默认为 `true`。
+- `execution.model` 校验为所有请求默认采用的扁平推理设置。
 - `execution.limits` 由 AgentLoop 的同一规则补齐并校验。
 - 工具配置解析为包含内置、覆盖和应用追加工具的最终只读数组。
 - 未传 Store 时创建 `MemorySessionStore`。
-- 未传 Session ID 生成器时使用 Node.js `randomUUID()`。
+- Session、Run、Turn、Event 和 Approval ID 由内部使用语义前缀加 Node.js `randomUUID()` 生成。
 - 不读取 `process.env`，不替调用方决定密钥来源。
 
 配置对象只冻结组装结构，不冻结开发者注入的 Adapter、Store、ToolGuard 或回调实例。
 
-配置按职责分为三组，同时让高频且已经自成体系的 `model`、`tools`、`toolGuard` 保持短路径：
+配置按业务意图组织：
 
-| 配置组          | 字段                                 | 职责                               |
-| --------------- | ------------------------------------ | ---------------------------------- |
-| `session`       | `store`、`createSessionId`           | 持久化端口和会话标识               |
-| `execution`     | `model`、`limits`、`now`、`createId` | 模型调用方式、预算及确定性运行依赖 |
-| `observability` | `onTrace`、`onToolEvent`             | 不参与控制流的全局观察器           |
+| 位置            | 字段                                       | 职责                         |
+| --------------- | ------------------------------------------ | ---------------------------- |
+| 根配置          | `model`、`systemPrompt`、`sessionStore`    | 核心依赖与 Agent 行为        |
+| `tools`         | 工具集合操作、`guard`、`approvalTimeoutMs` | 工具注册、风险决策与审批默认 |
+| `execution`     | `model`、`limits`、`now`                   | 模型默认值、预算和时钟       |
+| `observability` | `onTrace`、`onToolEvent`                   | 不参与控制流的全局观察器     |
 
-`systemPrompt` 描述 Agent 行为，因此不放入模型供应商连接配置。`toolGuard` 本身已经是完整的风险评估组，
-不会再套一层容易暗示沙箱或身份认证能力的 `security`。项目尚未发布，旧的扁平字段不属于兼容输入。
+`systemPrompt` 描述 Agent 行为，因此不放入模型供应商连接配置。全局 Guard 与工具集合和局部 Guard 紧密协作，
+因此配置为 `tools.guard`，不放入容易暗示沙箱或身份认证能力的 `security`。`sessionStore` 已经完整表达依赖，
+不再套只有一个字段的 `session`。项目尚未发布，旧配置形态不属于兼容输入。
 
 ## 4. 工具组装
 
@@ -138,34 +140,38 @@ const isolatedAgent = new Agent({
 ## 5. 运行与事件
 
 ```ts
-const result = await agent.run({
+const result = await agent.invoke({
   input: '杭州天气怎么样？',
   sessionId: 'optional-session-id',
   context: appRunContext,
-}, {
   model: {
-    stream: false,
-    reasoning: { enabled: true, effort: 'high' },
+    reasoningEnabled: true,
+    reasoningEffort: 'high',
   },
-  signal,
-  onEvent(event) {
-    // 可被 Runtime 直接输出的标准应用事件
-  },
-  onTrace(event) {
-    // 完整 AgentEvent 轨迹
-  },
-})
+}, signal)
+
+for await (const event of agent.stream({
+  input: '杭州天气怎么样？',
+  model: { reasoningEffort: 'max' },
+}, signal)) {
+  // 可被 Runtime 直接输出的标准应用事件
+}
 ```
 
-`Agent.run()` 的 `model` 优先于 `execution.model`，未提供的嵌套字段继续继承构造默认值。同一 Run
-在进入 AgentLoop 前只解析一次设置，因此工具调用后的后续 Model Step 不会自行切换流式方式或推理等级。
-`reasoning.effort` 是开放字符串，CraftAgent 核心不假设固定枚举；具体 Adapter 必须转换并校验当前模型
-支持的值。显式 `reasoning.enabled: false` 时不会继承默认 effort。
+`invoke(request, signal?)` 固定调用 Adapter 的 `complete()` 并返回 `AgentRunResult`；
+`stream(request, signal?)` 固定调用 Adapter 的 `stream()` 并返回 `AsyncIterable<AgentOutputEvent>`。
+公开模型配置不存在 `stream` 字段，因此方法名与执行方式不会互相矛盾。唯一的运行控制量是取消信号，直接
+作为第二参数；Run/Turn ID 由 Agent 内部生成，完整轨迹统一通过 `observability.onTrace` 配置。
 
-当 Agent 声明为 `new Agent<AppRunContext>()` 时，`run()` 的 `context` 为必填。它只传给当前 Run 的工具级
+`AgentRequest.model` 优先于 `execution.model`，未提供字段继续继承构造默认值。同一 Run 在进入 AgentLoop 前
+只解析一次。`reasoningEffort` 是开放的非空字符串；单独提供时会隐式启用推理。显式
+`reasoningEnabled: false` 会清除继承的 effort，且不能同时提供 `reasoningEffort`。公开扁平字段只服务常用
+入口，进入 AgentLoop 前转换为 `{ reasoning: { enabled, effort }, stream }`，Adapter 无需支持两套协议。
+
+当 Agent 声明为 `new Agent<AppRunContext>()` 时，请求的 `context` 为必填。它只传给当前 Run 的工具级
 Guard、全局 Guard 和 `execute()`，不进入模型、Session Log、标准前端事件或 Agent 单例。
 
-`onEvent` 输出以下稳定应用事件：
+`stream()` 依次输出以下稳定应用事件：
 
 - `session.started`
 - `message.delta`
@@ -179,15 +185,14 @@ Guard、全局 Guard 和 `execute()`，不进入模型、Session Log、标准前
 序列化这些事件，不再把 `sessionId` 改名为 `conversationId`，也不删除 `runId` 等关联字段。只有宿主已有
 外部协议或确实需要裁剪字段时，才自行增加 Adapter；该 Adapter 不属于 CraftAgent 核心。
 
-`onTrace` 输出完整 `AgentEvent`，包括 Run、Step、模型输出、工具调用、Tool Harness 子事件和终态。流式
+`observability.onTrace` 输出完整 `AgentEvent`，包括 Run、Step、模型输出、工具调用、Tool Harness 子事件和终态。流式
 模型输出使用 `agent.model.chunk`，非流式完整响应使用 `agent.model.completed`；
-`agent.run.started.modelExecution` 记录本次 Run 的最终设置。
-`observability.onTrace` 提供全局观察，单次 run 的 `onTrace` 只观察本次执行。所有观察器异常都会隔离；
-阶段 6 再通过 DiagnosticSink 记录。
+`agent.run.started.modelExecution` 记录本次 Run 的最终内部设置。轨迹观察器异常会被隔离；事件流则是业务
+输出而不是观察旁路：消费者读取速度形成背压，提前停止迭代会取消当前 Run。
 
 ## 6. 风险评估与用户审批
 
-工具可在 `defineTool()` 中配置局部 `toolGuard` 处理参数级规则；Agent 根配置的 `toolGuard.evaluate()` 处理
+工具可在 `defineTool()` 中配置局部 `guard` 处理参数级规则；Agent 配置的 `tools.guard` 处理
 部署、租户、用户和环境约束。缺少任一层等价于该层 allow，两层都存在时按工具级、全局级顺序执行，并按
 `deny > ask > allow` 合并。Agent 内部负责适配 Harness 并管理一次性审批。
 
@@ -200,10 +205,10 @@ interface AppRunContext {
 
 const agent = new Agent<AppRunContext>({
   model,
-  tools: { additional: [businessTool] },
-  toolGuard: {
+  tools: {
+    additional: [businessTool],
     approvalTimeoutMs: 120_000,
-    evaluate(request) {
+    guard(request) {
       if (request.context.permissions.includes('tools:execute'))
         return { decision: 'allow' }
       return {
@@ -215,10 +220,14 @@ const agent = new Agent<AppRunContext>({
 })
 ```
 
+工具级和全局 Guard 接收同一个 `ToolGuardRequest` 对象并返回同一个 `ToolGuardDecision` 联合类型。区别只在
+类型精度：工具级 `request.input` 由自己的 Zod Schema 推导，全局 Guard 面对任意已注册工具，因此 input
+默认为 `unknown`。两层都能读取同一份 `request.context`，无需学习或转换第二套协议。
+
 工具 `metadata` 是任意 JSON 安全标签，由两层 Guard 自行解释；CraftAgent 不提供固定 risk 枚举，也不根据
 metadata 自动授权。任一 Guard 抛错或返回非法结构时 fail-closed 为当前工具失败。
 
-单次 `ask.approvalTimeoutMs` 优先于通用 `toolGuard.approvalTimeoutMs`，均未提供时默认 120 秒。正整数表示
+单次 `ask.approvalTimeoutMs` 优先于通用 `tools.approvalTimeoutMs`，均未提供时默认 120 秒。正整数表示
 等待毫秒数；`-1` 表示永久等待用户决定。永久等待不会创建超时定时器，并在标准事件中输出
 `approvalTimeoutMs: -1` 和 `expiresAt: null`。其他值无效。
 
@@ -234,7 +243,8 @@ agent.resolveToolApproval({ approvalId, decision: 'deny' })
 `{ accepted: false, reason: 'not-found-or-settled' }`。`deny` 和用户拒绝只阻止当前工具执行；AgentLoop
 持久化失败 `role=tool` 消息并继续下一 Model Step，不把它们提升为整个 Run 的终止条件。
 
-Agent 实例只在当前进程中保存 pending 审批。没有 `onEvent` 交互出口、出口失效、Run 取消或进程重启时
+Agent 实例只在当前进程中保存 pending 审批。`invoke()` 没有交互事件出口，因此 ask 会 fail-closed；
+`stream()` 出口失效、消费者停止、Run 取消或进程重启时
 必须 fail-closed。完整交互见[工具审批全链路](../../learning/tool-approval-flow.md)。
 
 `-1` 只关闭审批自己的定时器，不会覆盖调用方 AbortSignal 或 `execution.limits.maxDurationMs`。若要求在没有人为

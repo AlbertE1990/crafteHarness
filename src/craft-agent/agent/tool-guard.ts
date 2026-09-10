@@ -1,13 +1,8 @@
 import type {
-  ToolGuardDecision,
   ToolGuardEvaluator,
-  ToolGuardRequest,
 } from '../tools'
 import type { JsonObject } from '../types/json'
-import {
-  normalizeToolGuardDecision,
-  validateApprovalTimeout,
-} from '../tools/guard-validation'
+import { validateApprovalTimeout } from '../tools/guard-validation'
 
 /** 公共 Guard 决定与请求协议定义在 tools 层，此处统一从 Agent 入口转出。 */
 export type {
@@ -23,18 +18,6 @@ export const DEFAULT_TOOL_APPROVAL_TIMEOUT_MS = 120_000
 
 /** Node.js setTimeout 可稳定表达的最大毫秒值，仅供 Agent 内部校验使用。 */
 export const MAX_TOOL_APPROVAL_TIMEOUT_MS = 2_147_483_647
-
-/**
- * Agent 的全局工具约束和审批默认值。
- *
- * evaluate 适合判断部署、租户、用户和环境约束；缺省表示全局 Guard 直接 allow。
- * 工具自身仍可通过 defineTool().toolGuard 作参数级判断。
- */
-export interface ToolGuardConfig<TContext = undefined> {
-  readonly evaluate?: ToolGuardEvaluator<TContext>
-  /** ask 未单独指定时使用的通用审批时限；-1 表示不自动过期，但仍响应 Run 取消。 */
-  readonly approvalTimeoutMs?: number
-}
 
 /** 应用层提交给 Agent 的一次性用户决定。 */
 export type ToolApprovalDecision = 'allow' | 'deny'
@@ -100,43 +83,24 @@ export type ToolGuardOutputListener = (
 
 /** Agent 内部使用的已校验 Tool Guard 配置。 */
 export interface DefinedToolGuardConfig<TContext = undefined> {
-  readonly evaluate?: ToolGuardEvaluator<TContext>
+  readonly guard?: ToolGuardEvaluator<TContext>
   readonly approvalTimeoutMs: number
 }
 
-/** 校验 Tool Guard 配置；未配置 evaluate 时该层不会参与决策。 */
+/** 校验 Tool Guard 配置；未配置 guard 时该层不会参与决策。 */
 export function defineToolGuardConfig<TContext = undefined>(
-  input: ToolGuardConfig<TContext> | undefined,
+  guard: ToolGuardEvaluator<TContext> | undefined,
+  approvalTimeoutInput: number | undefined,
 ): DefinedToolGuardConfig<TContext> {
-  if (input !== undefined && (typeof input !== 'object' || input === null))
-    throw new TypeError('Agent config.toolGuard 必须是对象')
-  if (input?.evaluate !== undefined && typeof input.evaluate !== 'function')
-    throw new TypeError('Agent config.toolGuard.evaluate 必须是函数')
+  if (guard !== undefined && typeof guard !== 'function')
+    throw new TypeError('Agent config.tools.guard 必须是函数')
 
-  const approvalTimeoutMs = input?.approvalTimeoutMs
+  const approvalTimeoutMs = approvalTimeoutInput
     ?? DEFAULT_TOOL_APPROVAL_TIMEOUT_MS
-  validateApprovalTimeout(approvalTimeoutMs, 'Agent config.toolGuard.approvalTimeoutMs')
+  validateApprovalTimeout(approvalTimeoutMs, 'Agent config.tools.approvalTimeoutMs')
 
   return Object.freeze({
-    ...(input?.evaluate ? { evaluate: input.evaluate } : {}),
+    ...(guard ? { guard } : {}),
     approvalTimeoutMs,
   })
-}
-
-/**
- * 将 Agent 的全局 Guard 适配到 Tool Harness，并补入通用审批时间。
- *
- * 返回 undefined 表示没有全局 Guard；Harness 仍会独立执行工具自身的 toolGuard。
- */
-export function createGlobalToolGuard<TContext = undefined>(
-  config: DefinedToolGuardConfig<TContext>,
-): ToolGuardEvaluator<TContext> | undefined {
-  if (!config.evaluate)
-    return undefined
-  return async (request: ToolGuardRequest<TContext>): Promise<ToolGuardDecision> => (
-    normalizeToolGuardDecision(
-      await config.evaluate!(request),
-      config.approvalTimeoutMs,
-    )
-  )
 }

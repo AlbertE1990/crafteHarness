@@ -40,7 +40,7 @@ export interface ToolGuardToolInfo<
 /**
  * 工具级和全局 Guard 共用的评估输入。
  *
- * `input` 已通过 inputSchema 校验。context 来自当前 agent.run()，不会发送给模型、
+ * `input` 已通过 inputSchema 校验。context 来自当前 Agent 请求，不会发送给模型、
  * 写入 Session Log 或保存在 Agent 单例上。直接使用 Tool Harness 时，关联字段可以缺省。
  */
 export interface ToolGuardRequest<

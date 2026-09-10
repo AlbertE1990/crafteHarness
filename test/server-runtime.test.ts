@@ -1,7 +1,6 @@
 // @vitest-environment node
 
 import type {
-  AgentConfigInput,
   ModelCompletion,
   ModelStreamChunk,
 } from '../src/craft-agent'
@@ -64,37 +63,69 @@ function parseSse(body: string): ServerStreamEvent[] {
     })
 }
 
-/** 为一次 Agent 测试生成唯一关联 ID，并固定预期 approvalId。 */
-function createIdFactory(
-  approvalId: string,
-): NonNullable<NonNullable<AgentConfigInput['execution']>['createId']> {
-  let eventId = 0
-  return (kind) => {
-    if (kind === 'approval')
-      return approvalId
-    if (kind === 'event')
-      return `event-${++eventId}`
-    return `${kind}-http`
-  }
-}
+type ApprovalRequestedEvent = Extract<
+  ServerStreamEvent,
+  { readonly type: 'tool.approval.requested' }
+>
 
-/** Fastify.inject 在 SSE 完成后才返回，因此轮询独立 POST，直到 Agent 已建立 pending approval。 */
-async function submitApprovalWhenReady(
+/** 从真实 SSE 中读取 Agent 生成的审批 ID，再提交一次用户决定。 */
+async function resolveStreamApproval(
+  chat: Response,
   baseUrl: string,
-  approvalId: string,
   decision: 'allow' | 'deny',
-) {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const response = await fetch(`${baseUrl}/api/tool-approvals/${approvalId}`, {
+): Promise<{
+  readonly approval: Response
+  readonly approvalId: string
+  readonly body: string
+  readonly requested: ApprovalRequestedEvent
+}> {
+  if (!chat.body)
+    throw new Error('聊天响应缺少 SSE body')
+  const [inspectionStream, bodyStream] = chat.body.tee()
+  const bodyPromise = new Response(bodyStream).text()
+  const requested = await readApprovalRequest(inspectionStream)
+  const approval = await fetch(
+    `${baseUrl}/api/tool-approvals/${requested.approvalId}`,
+    {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ decision }),
-    })
-    if (response.status === 200)
-      return response
-    await new Promise<void>(resolve => setTimeout(resolve, 5))
+    },
+  )
+  return {
+    approval,
+    approvalId: requested.approvalId,
+    body: await bodyPromise,
+    requested,
   }
-  throw new Error(`审批 ${approvalId} 未进入等待状态`)
+}
+
+/** 增量解析 SSE，直到观察到工具审批请求。 */
+async function readApprovalRequest(
+  stream: ReadableStream<Uint8Array>,
+): Promise<ApprovalRequestedEvent> {
+  const reader = stream.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    let boundary = buffer.search(/\r?\n\r?\n/)
+    while (boundary >= 0) {
+      const separator = buffer.slice(boundary).match(/^\r?\n\r?\n/)?.[0] ?? '\n\n'
+      const frame = buffer.slice(0, boundary)
+      buffer = buffer.slice(boundary + separator.length)
+      const event = parseSse(frame)[0]
+      if (event?.type === 'tool.approval.requested') {
+        void reader.cancel()
+        return event
+      }
+      boundary = buffer.search(/\r?\n\r?\n/)
+    }
+    if (done)
+      throw new Error('SSE 在工具审批请求出现前结束')
+  }
 }
 
 describe('server runtime HTTP boundary', () => {
@@ -104,7 +135,6 @@ describe('server runtime HTTP boundary', () => {
     })
     const agent = new Agent({
       model: adapter,
-      session: { createSessionId: () => 'json-session' },
     })
     const app = createServerApp({ agent, logger: false })
 
@@ -114,9 +144,10 @@ describe('server runtime HTTP boundary', () => {
         url: '/api/chat',
         payload: {
           message: '使用非流式请求',
+          stream: false,
           model: {
-            stream: false,
-            reasoning: { enabled: true, effort: 'future-level' },
+            reasoningEnabled: true,
+            reasoningEffort: 'future-level',
           },
         },
       })
@@ -127,7 +158,7 @@ describe('server runtime HTTP boundary', () => {
       expect(response.json()).toMatchObject({
         data: {
           status: 'completed',
-          sessionId: 'json-session',
+          sessionId: expect.stringMatching(/^session-[0-9a-f-]{36}$/),
           content: 'JSON 回答',
           reasoning: 'JSON 思考',
         },
@@ -155,9 +186,6 @@ describe('server runtime HTTP boundary', () => {
     const agent = new Agent({
       model: adapter,
       systemPrompt: '你是一个AI助手',
-      session: {
-        createSessionId: () => 'http-session',
-      },
       execution: {
         now: () => new Date('2026-09-08T09:00:00.000Z'),
       },
@@ -173,23 +201,26 @@ describe('server runtime HTTP boundary', () => {
 
       expect(chat.statusCode).toBe(200)
       expect(chat.headers['content-type']).toContain('text/event-stream')
-      expect(parseSse(chat.body)).toEqual([
-        { type: 'session.started', sessionId: 'http-session' },
+      const events = parseSse(chat.body)
+      const sessionId = events[0]?.sessionId
+      expect(sessionId).toMatch(/^session-[0-9a-f-]{36}$/)
+      expect(events).toEqual([
+        { type: 'session.started', sessionId },
         {
           type: 'message.delta',
-          sessionId: 'http-session',
+          sessionId,
           channel: 'reasoning',
           delta: 'HTTP 思考',
         },
         {
           type: 'message.delta',
-          sessionId: 'http-session',
+          sessionId,
           channel: 'content',
           delta: 'HTTP 回答',
         },
         {
           type: 'message.completed',
-          sessionId: 'http-session',
+          sessionId,
           content: 'HTTP 回答',
           reasoning: 'HTTP 思考',
         },
@@ -199,7 +230,7 @@ describe('server runtime HTTP boundary', () => {
       expect(list.statusCode).toBe(200)
       expect(list.json()).toMatchObject({
         data: [{
-          id: 'http-session',
+          id: sessionId,
           name: '通过 HTTP 调用 Agent',
           createAt: '2026-09-08T09:00:00.000Z',
         }],
@@ -208,12 +239,12 @@ describe('server runtime HTTP boundary', () => {
 
       const detail = await app.inject({
         method: 'GET',
-        url: '/api/conversation/http-session',
+        url: `/api/conversation/${sessionId}`,
       })
       expect(detail.statusCode).toBe(200)
       expect(detail.json()).toMatchObject({
         data: {
-          id: 'http-session',
+          id: sessionId,
           name: '通过 HTTP 调用 Agent',
           displayHistory: [
             { role: 'user', content: '通过 HTTP 调用 Agent' },
@@ -299,7 +330,7 @@ describe('server runtime HTTP boundary', () => {
     })
     const agent = new Agent({
       model: new ScriptedModelAdapter({ script: [] }),
-      session: { store },
+      sessionStore: store,
     })
     const app = createServerApp({ agent, logger: false })
 
@@ -352,15 +383,15 @@ describe('server runtime HTTP boundary', () => {
     })
     const agent = new Agent({
       model: adapter,
-      session: {
-        createSessionId: () => 'approval-session',
-      },
       execution: {
-        createId: createIdFactory('approval-http'),
         now: () => new Date('2026-09-10T02:00:00.000Z'),
       },
-      tools: { mode: 'replace', tools: [manageRuntimeResourceTool] },
-      toolGuard: serverToolGuard,
+      tools: {
+        mode: 'replace',
+        tools: [manageRuntimeResourceTool],
+        guard: serverToolGuard,
+        approvalTimeoutMs: 120_000,
+      },
     })
     const app = createServerApp({ agent, logger: false })
 
@@ -371,34 +402,33 @@ describe('server runtime HTTP boundary', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: '写入演示资源' }),
       })
-      const approval = await submitApprovalWhenReady(baseUrl, 'approval-http', 'allow')
-      const chatBody = await chat.text()
+      const resolved = await resolveStreamApproval(chat, baseUrl, 'allow')
       // Agent 才是一次性语义的事实边界；HTTP 路由只把 accepted=false 投影为 404。
       const duplicateApproval = agent.resolveToolApproval({
-        approvalId: 'approval-http',
+        approvalId: resolved.approvalId,
         decision: 'allow',
       })
 
-      expect(approval.status).toBe(200)
+      expect(resolved.approval.status).toBe(200)
       expect(duplicateApproval).toEqual({
         accepted: false,
         reason: 'not-found-or-settled',
       })
-      expect(parseSse(chatBody)).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          type: 'tool.approval.requested',
-          sessionId: 'approval-session',
-          runId: 'run-http',
-          approvalId: 'approval-http',
-          toolName: 'manage_runtime_resource',
-          approvalTimeoutMs: 45_000,
-          expiresAt: '2026-09-10T02:00:45.000Z',
-        }),
+      expect(resolved.requested).toMatchObject({
+        type: 'tool.approval.requested',
+        sessionId: expect.stringMatching(/^session-[0-9a-f-]{36}$/),
+        runId: expect.stringMatching(/^run-[0-9a-f-]{36}$/),
+        approvalId: expect.stringMatching(/^approval-[0-9a-f-]{36}$/),
+        toolName: 'manage_runtime_resource',
+        approvalTimeoutMs: 45_000,
+        expiresAt: '2026-09-10T02:00:45.000Z',
+      })
+      expect(parseSse(resolved.body)).toEqual(expect.arrayContaining([
         expect.objectContaining({
           type: 'tool.approval.resolved',
-          sessionId: 'approval-session',
-          runId: 'run-http',
-          approvalId: 'approval-http',
+          sessionId: resolved.requested.sessionId,
+          runId: resolved.requested.runId,
+          approvalId: resolved.approvalId,
           outcome: 'allowed',
         }),
         expect.objectContaining({
@@ -439,14 +469,11 @@ describe('server runtime HTTP boundary', () => {
     })
     const agent = new Agent({
       model: adapter,
-      session: {
-        createSessionId: () => 'rejection-session',
+      tools: {
+        mode: 'replace',
+        tools: [manageRuntimeResourceTool],
+        guard: serverToolGuard,
       },
-      execution: {
-        createId: createIdFactory('approval-reject'),
-      },
-      tools: { mode: 'replace', tools: [manageRuntimeResourceTool] },
-      toolGuard: serverToolGuard,
     })
     const app = createServerApp({ agent, logger: false })
 
@@ -457,16 +484,15 @@ describe('server runtime HTTP boundary', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: '写入后由我拒绝' }),
       })
-      const rejection = await submitApprovalWhenReady(baseUrl, 'approval-reject', 'deny')
-      const chatBody = await chat.text()
+      const resolved = await resolveStreamApproval(chat, baseUrl, 'deny')
 
-      expect(rejection.status).toBe(200)
-      expect(parseSse(chatBody)).toEqual(expect.arrayContaining([
+      expect(resolved.approval.status).toBe(200)
+      expect(parseSse(resolved.body)).toEqual(expect.arrayContaining([
         expect.objectContaining({
           type: 'tool.approval.resolved',
-          sessionId: 'rejection-session',
-          runId: 'run-http',
-          approvalId: 'approval-reject',
+          sessionId: resolved.requested.sessionId,
+          runId: resolved.requested.runId,
+          approvalId: resolved.approvalId,
           outcome: 'denied',
         }),
         expect.objectContaining({
@@ -507,11 +533,11 @@ describe('server runtime HTTP boundary', () => {
     })
     const agent = new Agent({
       model: adapter,
-      session: {
-        createSessionId: () => 'denial-session',
+      tools: {
+        mode: 'replace',
+        tools: [manageRuntimeResourceTool],
+        guard: serverToolGuard,
       },
-      tools: { mode: 'replace', tools: [manageRuntimeResourceTool] },
-      toolGuard: serverToolGuard,
     })
     const app = createServerApp({ agent, logger: false })
 
@@ -526,7 +552,7 @@ describe('server runtime HTTP boundary', () => {
       expect(events).toEqual(expect.arrayContaining([
         expect.objectContaining({
           type: 'tool.guard.denied',
-          sessionId: 'denial-session',
+          sessionId: expect.stringMatching(/^session-[0-9a-f-]{36}$/),
           callId: 'call-denied-delete',
           toolName: 'manage_runtime_resource',
           reason: '受保护资源 protected/system 禁止删除',

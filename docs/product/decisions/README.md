@@ -9,6 +9,8 @@ ADR 记录重要技术选择及其背景、备选方案和后果。
 - [ADR-0005：Agent Loop 使用 Session 驱动的确定性串行状态机](./adr-0005-deterministic-agent-loop.md)
 - [ADR-0006：Agent 默认装载安全内置工具](./adr-0006-agent-default-builtin-tools.md)
 - [ADR-0007：外部持久化只通过 SessionStore Port 接入](./adr-0007-session-store-persistence-port.md)
+- [ADR-0008：Agent 调用采用意图优先的 invoke/stream API](./adr-0008-intent-first-agent-invocation.md)
+- [ADR-0009：Agent 配置按使用意图减负并统一 Guard 协议](./adr-0009-agent-config-and-guard-context.md)
 
 状态使用：
 

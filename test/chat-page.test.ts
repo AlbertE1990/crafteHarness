@@ -128,9 +128,10 @@ describe('chat page conversations', () => {
     expect(existingRequest).toEqual({
       message: '继续提问',
       conversationId: 'chat-existing',
+      stream: true,
       model: {
-        stream: true,
-        reasoning: { enabled: true, effort: 'high' },
+        reasoningEnabled: true,
+        reasoningEffort: 'high',
       },
     })
     expect(wrapper.text()).toContain('继续回答')
@@ -147,9 +148,10 @@ describe('chat page conversations', () => {
     const newRequest = JSON.parse(String(fetchMock.mock.calls[4][1]?.body))
     expect(newRequest).toEqual({
       message: '创建新对话',
+      stream: true,
       model: {
-        stream: true,
-        reasoning: { enabled: true, effort: 'high' },
+        reasoningEnabled: true,
+        reasoningEffort: 'high',
       },
     })
     expect(wrapper.text()).toContain('新会话回答')
@@ -182,9 +184,10 @@ describe('chat page conversations', () => {
 
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
       message: '非流式提问',
+      stream: false,
       model: {
-        stream: false,
-        reasoning: { enabled: true, effort: 'high' },
+        reasoningEnabled: true,
+        reasoningEffort: 'high',
       },
     })
     expect(wrapper.get('.markdown-body strong').text()).toBe('JSON')

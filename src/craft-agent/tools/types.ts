@@ -36,7 +36,7 @@ export interface ToolRunContext<TContext = undefined> {
   readonly runId?: string
   readonly sessionId?: string
   readonly attempt: number
-  /** 当前 agent.run() 注入的业务上下文；不会自动持久化或发送给模型。 */
+  /** 当前 Agent 请求注入的业务上下文；不会自动持久化或发送给模型。 */
   readonly context: TContext
   /** 工具必须观察或继续向下游传递此取消信号。 */
   readonly signal: AbortSignal
@@ -71,7 +71,7 @@ export interface ToolDefinition<
   /** CraftAgent 不解释的 JSON 安全业务标签；未配置时为空对象。 */
   readonly metadata?: TMetadata
   /** 工具自身的参数级风险评估；缺省表示工具级 Guard 直接 allow。 */
-  readonly toolGuard?: ToolGuardEvaluator<
+  readonly guard?: ToolGuardEvaluator<
     TContext,
     z.output<TInputSchema>,
     TMetadata

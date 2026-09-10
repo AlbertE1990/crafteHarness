@@ -29,7 +29,7 @@ import {
   normalizeSessionError,
   parseToolArguments,
 } from './errors'
-import { defineAgentModelExecutionOptions } from './model-options'
+import { defineAgentLoopModelExecutionOptions } from './model-options'
 import { consumeModelCompletion, consumeModelStream } from './model-stream'
 import { addUsage, appendReasoning, createResultBase } from './run-state'
 import {
@@ -74,7 +74,7 @@ export class AgentLoop<TContext = undefined> {
   async run(request: AgentRunRequest<TContext>, options: AgentRunOptions = {}): Promise<AgentRunResult> {
     const input = validateRequest(request)
     // 一次 Run 只解析一次模型设置，工具往返后的后续 Step 继续使用相同配置。
-    const modelExecution = defineAgentModelExecutionOptions(options.model)
+    const modelExecution = defineAgentLoopModelExecutionOptions(options.model)
     const state = this.createRunState(request, options)
     const signals = createRunSignals(this.limits.maxDurationMs, options.signal)
     const eventBase = (): AgentEventBase => ({
@@ -399,7 +399,7 @@ export class AgentLoop<TContext = undefined> {
   private async runModelStep(
     state: MutableRunState,
     step: number,
-    modelExecution: ReturnType<typeof defineAgentModelExecutionOptions>,
+    modelExecution: ReturnType<typeof defineAgentLoopModelExecutionOptions>,
     signal: AbortSignal,
     eventBase: () => AgentEventBase,
     listener?: AgentRunOptions['onEvent'],
@@ -545,8 +545,8 @@ export class AgentLoop<TContext = undefined> {
       sessionId: state.sessionId,
       context,
       signal,
-      ...(tool.toolGuard !== undefined ? { toolGuardOverride: tool.toolGuard } : {}),
-      ...(this.config.toolGuard ? { globalToolGuard: this.config.toolGuard } : {}),
+      ...(tool.guard !== undefined ? { guardOverride: tool.guard } : {}),
+      ...(this.config.globalGuard ? { globalGuard: this.config.globalGuard } : {}),
       // AgentLoop 不理解前端或 HTTP；它只把 Agent 配置中的审批函数继续传给 Tool Harness。
       ...(this.config.requestToolApproval
         ? { requestApproval: this.config.requestToolApproval }

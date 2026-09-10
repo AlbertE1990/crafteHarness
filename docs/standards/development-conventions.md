@@ -10,6 +10,10 @@
 
 ### 1.1 降低使用者心智负担
 
+本项目的公共 API 设计哲学是：**开发通用库时，把方便留给使用者，把不方便留给库的实现者。**
+内部实现复杂并不是把组装、归一化、背压、取消和协议转换转嫁给调用方的理由；只要库能够根据明确意图
+确定性处理，就应由库承担，并通过测试守住复杂度。
+
 公共 API 的首要体验原则是：**能由框架根据已有信息确定性完成的工作，应优先在内部完成。** 普通使用路径
 应让开发者只描述业务意图，不要求理解或串联内部适配步骤。
 
@@ -35,9 +39,10 @@
 
 单一配置根不等于所有字段都平铺。字段达到两个以上、共享职责并具有相同生命周期时，应组成命名配置组：
 
-- 高频且已经自成体系的能力保持短路径，例如 `model`、`tools` 和 `toolGuard`。
-- `session` 只包含 Store 和 Session ID 等会话基础设施。
-- `execution` 只包含模型调用方式、循环预算、时钟和运行标识等执行期设置。
+- 高频且已经自成体系的能力保持短路径，例如 `model`、`tools` 和 `sessionStore`。
+- 与工具集合共同参与调用控制的能力归入 `tools`，例如 `tools.guard` 和 `tools.approvalTimeoutMs`。
+- 只有一个 Store 时直接使用 `sessionStore`，不为单字段创建 `session` 包装。
+- `execution` 只包含模型默认设置、循环预算和时钟等执行期设置。
 - `observability` 只包含不改变业务控制流的观察器。
 - 不为了视觉整齐创建只有一个字段的对象，也不使用会暗示不存在能力的名称。例如仅有 ToolGuard 时不能命名为
   `security`，否则容易让人误认为同时提供了认证、权限或沙箱。
@@ -47,7 +52,7 @@
   编写新 Adapter。供应商专属 Adapter 只承载真实协议差异。
 - `adapter` 表示实现选择，`provider` 表示轨迹和错误中的真实诊断身份，两个概念不得复用同一字段。
 - 供应商或模型会扩展的能力值不能在 Core 固定枚举；Core 使用稳定意图和开放值，具体 Adapter 负责
-  映射并校验，例如 `reasoning.effort`。
+  映射并校验，例如公开的 `reasoningEffort` 和内部的 `reasoning.effort`。
 
 ### 1.3 公共导出与测试代码边界
 
@@ -143,7 +148,8 @@ executeAttempt(tool, input, {
 
 - 核心数据先于回调和观察器。
 - 多个可注入依赖组成稳定运行上下文时，使用 `options` 或专门的 Context 类型。
-- `AbortSignal`、Logger、Clock、随机数生成器等横切依赖，应通过上下文或 options 传入。
+- 唯一可选控制量是 `AbortSignal` 时直接作为末尾参数；只有多个控制量形成稳定概念时才创建 options 对象。
+- Logger、Clock、随机数生成器等横切依赖，应通过上下文、配置组或 options 传入。
 - 不使用隐藏的全局 service locator 获取网络、数据库、日志和会话依赖。
 
 ## 3. 命名与布尔值
@@ -195,7 +201,8 @@ executeAttempt(tool, input, {
 - assistant Tool Call 意图成功写入后，应为每个 callId 形成对应 tool message；取消也要保持模型消息配对完整。
 - `completed`、`stopped` 和 `failed` 必须分开建模；预算耗尽不伪装成模型或基础设施异常。
 - Session 版本冲突不得静默合并，也不得在缺少恢复协议时自动重放模型和工具。
-- 实时事件观察器属于旁路；观察器故障不能更改执行结果，后续由 DiagnosticSink 记录其异常。
+- 完整轨迹观察器属于旁路；观察器故障不能更改执行结果。`Agent.stream()` 的事件流是业务输出通道，
+  必须传播背压和消费者取消，不能伪装成会吞掉失败的观察回调。
 - 流式和非流式必须调用 Adapter 的真实 `stream/complete` 方法；不得把完整结果伪装成增量流。一次 Run
   的模型执行设置在进入循环前解析一次，后续 Step 不得读取可变 UI 或全局状态。
 - 并行、重试和恢复不能只通过 `Promise.all` 或外层循环临时加入，必须先定义提交、取消、计费和副作用语义。
@@ -209,11 +216,13 @@ executeAttempt(tool, input, {
 - 公共构造配置使用单一对象参数；新增模型、Store 或策略选项不得制造第二个配置根。
 - `defineAgentConfig()` 只归一化显式输入，不读取环境变量或全局配置。
 - 门面可以提供官方 Adapter 的便利创建，但 contracts/core/sessions/tools 不得反向依赖 Adapter。
-- 默认依赖必须可替换；时钟和 ID 生成器保留测试注入点。
-- 应用输出与完整轨迹使用不同类型和回调，不能为了前端方便删减底层 AgentEvent。
+- 默认依赖必须可替换；公共 Agent 配置不暴露仅服务测试的 ID 工厂，ID 统一由内部按
+  `session-/run-/turn-/event-/approval-` 前缀加 UUID 生成；低层组件可保留必要的确定性测试注入点。
+- 应用输出通过 `AsyncIterable<AgentOutputEvent>` 消费，完整轨迹通过全局观察器接收；不能为了前端方便
+  删减底层 AgentEvent，也不能要求调用方把回调包装成自己的流。
 - Session 列表来自 Store 能力，不在 Runtime 维护第二份会话 ID 索引。
 - 配置结构可以冻结，但不得擅自深度冻结调用方注入的有状态 Adapter、Store 或策略实例。
-- Run 级租户、用户和环境数据必须通过 `agent.run({ context })` 传递，不得写入 Agent 单例或隐藏全局变量。
+- Run 级租户、用户和环境数据必须通过 Agent 请求的 `context` 传递，不得写入 Agent 单例或隐藏全局变量。
 - Runtime 负责从可信认证结果构造 context；核心不得默认把 context 发给模型、前端或 Session Store。
 - 同职责配置是否已经进入稳定分组，是否避免了单字段包装和含义过大的组名？
 - 新增外部类型是否从预期公共入口显式导出，测试辅助代码是否留在 `test/`？

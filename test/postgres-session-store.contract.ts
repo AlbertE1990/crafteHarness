@@ -62,18 +62,18 @@ async function assertAgentRestoresFromDatabase(store: PostgresSessionStore): Pro
   const firstAdapter = new ScriptedModelAdapter({
     script: [{ method: 'stream', chunks: [completionChunk('第一轮回答')] }],
   })
-  await new Agent({ model: firstAdapter, session: { store } }).run({
+  await consume(new Agent({ model: firstAdapter, sessionStore: store }).stream({
     sessionId,
     input: '第一轮问题',
-  })
+  }))
 
   const secondAdapter = new ScriptedModelAdapter({
     script: [{ method: 'stream', chunks: [completionChunk('第二轮回答')] }],
   })
-  await new Agent({ model: secondAdapter, session: { store } }).run({
+  await consume(new Agent({ model: secondAdapter, sessionStore: store }).stream({
     sessionId,
     input: '第二轮问题',
-  })
+  }))
   const rolesAndContent = secondAdapter.calls[0]?.request.messages.map(message => ({
     role: message.role,
     content: 'content' in message ? message.content : undefined,
@@ -85,6 +85,12 @@ async function assertAgentRestoresFromDatabase(store: PostgresSessionStore): Pro
   ]
   if (JSON.stringify(rolesAndContent) !== JSON.stringify(expected))
     throw new Error('PostgreSQL Agent 恢复失败：新实例未加载第一轮数据库历史')
+}
+
+/** 完整消费 Agent 输出；数据库契约只关心最终持久化事实。 */
+async function consume(events: AsyncIterable<unknown>): Promise<void> {
+  for await (const _event of events)
+    void _event
 }
 
 /** 构造数据库集成探针使用的确定性模型完成块。 */

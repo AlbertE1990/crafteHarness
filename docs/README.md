@@ -57,8 +57,11 @@
 - Agent Loop 以 Run/Turn/Step 串联模型、工具和 Session，并提供预算、取消、稳定终态和实时事件。
 - Agent 门面自动处理 Session ID，分离标准应用输出与完整轨迹，并提供会话读取和分页列表。
 - Runtime 可直接输出标准 `AgentOutputEvent`；只有兼容自有外部协议时才增加应用侧 Adapter。
+- `agent.invoke()` 返回完整结果，`agent.stream()` 提供带背压和取消的异步事件流；模型设置在请求中保持扁平。
 - 工具级与 Agent 全局 ToolGuard 按 `deny > ask > allow` 合并；缺省 Guard 直接允许。
-- `agent.run({ context })` 可把可信租户、用户和环境数据仅传给本次 Guard 与工具执行。
+- `agent.invoke()/stream()` 可把可信租户、用户和环境数据仅传给本次 Guard 与工具执行。
+- 工具级 `guard` 与全局 `tools.guard` 共用同一协议和请求 context；持久化通过根 `sessionStore` 注入。
+- 公共配置不要求 ID 工厂，Agent 内部统一生成带语义前缀的 UUID。
 - Agent 内置一次性审批、超时、取消和重复提交控制。
 - 真实 DeepSeek 冒烟仍需在配置 API Key 后执行。
 - Fastify 已迁移到 Agent 门面；持久化轨迹查询接口是下一阶段。

@@ -193,7 +193,7 @@ reasoning、供应商请求扩展和错误映射等专项测试。
 
 - system prompt、最大模型 Step。
 - provider、模型名、API Key、base URL。
-- `execution.model` 中的默认流式方式、思考开关与开放推理强度。
+- `execution.model` 中的默认思考开关与开放推理强度；流式方式由 `Agent.invoke()/stream()` 决定。
 - 工具事件监听器。
 
 声明式模型配置遵循“兼容协议默认、供应商差异显式”的规则：

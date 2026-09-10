@@ -35,7 +35,7 @@ export class MemorySessionStore implements SessionCatalogStore {
 
   constructor(options: MemorySessionStoreOptions = {}) {
     this.now = options.now ?? (() => new Date())
-    this.createEventId = options.createEventId ?? randomUUID
+    this.createEventId = options.createEventId ?? (() => `event-${randomUUID()}`)
   }
 
   /** 原子追加一批事实；任一事件无效时整批都不会写入。 */

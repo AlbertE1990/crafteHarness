@@ -189,7 +189,7 @@ SQL、ORM、文件、远程 API 和业务 Service 都通过实现 `SessionStore`
 
 ```ts
 const store = new ApiSessionStore({ client })
-const agent = new Agent({ model, session: { store } })
+const agent = new Agent({ model, sessionStore: store })
 ```
 
 完整数据库表、事务、分页、用户 metadata 扩展和测试实践见

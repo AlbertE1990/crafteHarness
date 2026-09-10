@@ -38,7 +38,7 @@ interface PendingApproval {
  * HTTP、Fastify 或前端。所有等待项只存在于当前 Agent 实例内，并遵循首个终态生效。
  */
 export class ToolApprovalManager<TContext = undefined> {
-  /** runId 定位当前 agent.run() 的应用事件监听器。 */
+  /** runId 定位当前 agent.stream() 的应用事件出口。 */
   private readonly listeners = new Map<string, ToolGuardOutputListener>()
   /** approvalId 定位等待中的 Tool Harness Promise。 */
   private readonly pending = new Map<string, PendingApproval>()
@@ -51,7 +51,8 @@ export class ToolApprovalManager<TContext = undefined> {
       ?? DEFAULT_TOOL_APPROVAL_TIMEOUT_MS
     validateTimeout(defaultTimeoutMs)
     this.defaultTimeoutMs = defaultTimeoutMs
-    this.createApprovalId = options.createApprovalId ?? randomUUID
+    this.createApprovalId = options.createApprovalId
+      ?? (() => `approval-${randomUUID()}`)
     this.now = options.now ?? (() => new Date())
   }
 

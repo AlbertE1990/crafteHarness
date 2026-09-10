@@ -84,7 +84,7 @@ const isSidebarOpen = ref(false)
 const errorMessage = ref('')
 const conversationError = ref('')
 const failedPrompt = ref('')
-// 模型选项由用户显式控制，并随每次请求传给 Agent.run()，不会通过自然语言推断。
+// 模型选项由用户显式控制，并随每次 Agent 请求发送，不会通过自然语言推断。
 const useStreaming = ref(true)
 const reasoningEnabled = ref(true)
 const reasoningEffort = ref('high')
@@ -542,22 +542,22 @@ async function send(prompt = input.value, appendUserMessage = true) {
   }
 
   try {
-    const reasoning: NonNullable<AgentModelExecutionOptions['reasoning']>
-      = reasoningEnabled.value
-        ? {
-            enabled: true,
-            ...(reasoningEffort.value.trim()
-              ? { effort: reasoningEffort.value.trim() }
-              : {}),
-          }
-        : { enabled: false }
     const requestBody: {
       message: string
       conversationId?: string
+      stream: boolean
       model: AgentModelExecutionOptions
     } = {
       message,
-      model: { stream: requestUsesStreaming, reasoning },
+      stream: requestUsesStreaming,
+      model: reasoningEnabled.value
+        ? {
+            reasoningEnabled: true,
+            ...(reasoningEffort.value.trim()
+              ? { reasoningEffort: reasoningEffort.value.trim() }
+              : {}),
+          }
+        : { reasoningEnabled: false },
     }
     if (conversationId.value)
       requestBody.conversationId = conversationId.value

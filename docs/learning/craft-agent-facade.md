@@ -1,47 +1,34 @@
-# CraftAgent 统一入口：从配置到会话查询
+# CraftAgent 统一入口：从配置到调用
 
 ## 1. 学习目标
 
 完成本篇后，你应该能解释：
 
-- 为什么日常应用使用 `Agent`，底层测试和扩展仍保留 `AgentLoop`。
-- `defineAgentConfig()` 如何把开发者输入归一化为内部协议。
-- 精简输出事件与完整轨迹事件为什么必须分层。
-- Session ID、事实日志和会话列表如何流转。
-- ToolGuard 风险规则与 Agent 内部审批生命周期如何分工。
+- 为什么日常应用使用 `Agent`，高级扩展仍可直接使用 `AgentLoop`。
+- `invoke()`、`stream()` 为什么分别表达非流式和流式意图。
+- 公开扁平模型设置如何转换成 Adapter 使用的内部协议。
+- 标准应用事件、完整轨迹和 Session Log 为什么是三条不同通道。
 
 ## 2. 模块地图
 
 ```text
 src/craft-agent/agent/
-  config.ts        # 模型配置、依赖注入、预算和默认值归一化
-  normalize-tools.ts # 原始 DefinedTool 到 AgentTool 的内部归一化
-  tool-guard.ts    # 风险评估输入、决定和应用审批事件
-  tool-approval-manager.ts # 内部 pending、超时、取消和一次性决定
-  types.ts         # run 输入、精简输出和会话查询类型
-  agent.ts         # AgentLoop 门面、标准应用事件和 Session 查询
-  index.ts         # 本模块导出
+  types.ts                 # 请求、扁平模型设置、输出和会话查询类型
+  model-options.ts         # 公开设置的校验、继承和内部协议转换
+  config.ts                # 单一配置根与默认值归一化
+  event-stream.ts          # 背压和消费者取消
+  normalize-tools.ts       # DefinedTool 到 AgentTool 的内部归一化
+  tool-approval-manager.ts # pending、超时、取消和一次性审批
+  agent.ts                 # invoke/stream 门面与 Session 查询
 ```
 
-推荐阅读顺序：`types.ts` → `config.ts` → `normalize-tools.ts` → `Agent.run()` →
+推荐阅读顺序：`types.ts` → `model-options.ts` → `config.ts` → `Agent.invoke()/stream()` →
 `createOutputProjector()` → `listSessions()`。
 
-## 3. 完整使用示例
+## 3. 最短正确用法
 
 ```ts
-import Agent, { defineTool } from 'craft-agent'
-import { z } from 'zod'
-
-const echoTool = defineTool({
-  name: 'echo',
-  description: '返回输入文字。',
-  inputSchema: z.strictObject({ text: z.string() }),
-  outputSchema: z.strictObject({ text: z.string() }),
-  metadata: { domain: 'demo' },
-  execute(input) {
-    return input
-  },
-})
+import Agent from 'craft-agent'
 
 const agent = new Agent({
   model: {
@@ -50,132 +37,117 @@ const agent = new Agent({
     baseURL: 'https://example.com/v1',
     model: 'example-model',
   },
-  tools: {
-    additional: [echoTool],
-  },
   execution: {
     model: {
-      stream: true,
-      reasoning: { enabled: true, effort: 'high' },
+      reasoningEnabled: true,
+      reasoningEffort: 'high',
     },
-    limits: { maxModelSteps: 8, maxToolCalls: 16 },
   },
 })
 
-const result = await agent.run({ input: '复述 hello' }, {
-  // 页面或 CLI 的手动设置可以只覆盖本次 Run。
-  model: { stream: false, reasoning: { effort: 'max' } },
-  onEvent(event) {
-    if (event.type === 'message.delta')
-      process.stdout.write(event.delta)
+const result = await agent.invoke({
+  input: '给出一份完整答案',
+  model: { reasoningEffort: 'max' },
+}, signal)
+
+for await (const event of agent.stream({
+  input: '边生成边显示答案',
+}, signal)) {
+  if (event.type === 'message.delta')
+    process.stdout.write(event.delta)
+}
+```
+
+环境变量由 Runtime 读取，Agent 不与部署方式耦合。取消是唯一的单次控制参数，所以直接传
+`AbortSignal`，不需要为了一个字段创建 `control` 对象。
+
+## 4. 为什么拆成两个方法
+
+旧式设计把 `stream` 放进模型选项，同时用回调接收事件。调用方可能写出“要求流式的方法 +
+`stream: false`”这类矛盾配置，还需要把回调重新包装成 SSE、Web Stream 或异步迭代器。
+
+现在由方法表达不可冲突的意图：
+
+| 调用                       | Adapter 方法 | 返回值                            | 适合场景                    |
+| -------------------------- | ------------ | --------------------------------- | --------------------------- |
+| `invoke(request, signal?)` | `complete()` | `AgentRunResult`                  | 后台任务、普通 JSON         |
+| `stream(request, signal?)` | `stream()`   | `AsyncIterable<AgentOutputEvent>` | SSE、CLI、实时 UI、交互审批 |
+
+`stream()` 的通道会等待消费者接走事件。消费者较慢时，背压会向上传递；消费者提前结束 `for await`
+时，Agent 自动取消当前 Run。通用库内部承担这些细节，使用者只需按语言原生方式迭代。
+
+## 5. 模型设置的两层形态
+
+调用方使用扁平字段：
+
+```ts
+const request = {
+  input: '分析问题',
+  model: {
+    reasoningEnabled: true,
+    reasoningEffort: 'high',
   },
-  onTrace(event) {
-    console.log(event.type, event.runId, event.sessionId)
+}
+```
+
+Agent 在进入 Loop 前转换为内部协议：
+
+```ts
+const internalModelExecution = {
+  stream: true, // 由 stream() 方法确定
+  reasoning: { enabled: true, effort: 'high' },
+}
+```
+
+规则如下：
+
+- 请求字段覆盖 `execution.model` 默认值。
+- 只写 `reasoningEffort` 会自动启用推理。
+- `reasoningEnabled: false` 会清除继承的 effort，不能再同时提供 effort。
+- effort 是开放字符串，具体 Adapter 校验供应商是否支持。
+- 同一 Run 只归一化一次，工具调用后的后续 Step 不会改变设置。
+
+## 6. 三条输出通道
+
+- `AgentOutputEvent`：`stream()` 的业务输出，适合直接写入 SSE、WebSocket 或 CLI。
+- `AgentEvent`：通过构造配置 `observability.onTrace` 观察的完整运行轨迹，观察器失败不会改变业务结果。
+- Session Log：持久化的会话事实，用于恢复模型上下文，不等价于实时输出或调试轨迹。
+
+`AgentOutputEvent` 包括 `session.started`、内容/推理增量、审批、策略拒绝、完成和错误事件。工具审批
+必须走 `stream()`，因为 `invoke()` 在返回前没有交互出口，遇到 ask 会 fail-closed。
+
+## 7. context 与 Session
+
+`new Agent<AppContext>()` 后，每次请求必须提供 `context`。它只进入当前 Run 的 Guard 和工具执行函数，
+不会写入模型消息、Session Log、标准事件或 Agent 单例。
+
+全局 Guard 属于工具调用策略，因此和工具集合放在同一个配置组；持久化只有一个依赖，直接使用根字段：
+
+```ts
+const agent = new Agent<AppContext>({
+  model,
+  tools: {
+    additional: [businessTool],
+    guard: request => request.context.permissions.includes('tools:execute')
+      ? { decision: 'allow' }
+      : { decision: 'deny', reason: '没有工具执行权限' },
+    approvalTimeoutMs: 120_000,
   },
+  sessionStore: new PostgresSessionStore(pool),
 })
-
-const session = await agent.getSession(result.sessionId)
-const page = await agent.listSessions({ limit: 20 })
-
-// 列表只有摘要；选择某一项后再读取带事件上下文的消息详情。
-console.log(page.sessions[0]?.sessionId)
-console.log(session?.messages[0]?.message)
-console.log(session?.messages[0]?.turnId)
 ```
 
-环境变量写在这段 Runtime 组装代码中，而不是 CraftAgent 内部。这样 CLI、Fastify、Worker 和测试可以
-使用不同配置来源，Agent 本身不与部署方式耦合。
+调用方不配置 ID 工厂。Agent 使用 `session-/run-/turn-/event-/approval-` 加 UUID 生成可诊断标识；确定性 ID
+注入只保留在需要精细测试的低层组件中。
 
-## 4. 数据流转图
+`listSessions()` 从 Store 分页读取摘要；`getSession()` 按需读取一个一致快照。自定义 Store 只实现
+`append/read` 仍可运行 Agent，但调用 `listSessions()` 前还需实现 `SessionCatalogStore`。
 
-```mermaid
-flowchart TD
-  Config[AgentConfigInput] --> Normalize[defineAgentConfig]
-  Normalize --> Adapter[ModelAdapter]
-  Normalize --> Store[SessionStore]
-  Builtins[默认内置工具] --> Normalize
-  Normalize --> Tools[最终 AgentTool 数组]
-  Request[Agent.run 输入] --> SessionId[复用或生成 sessionId]
-  Defaults[execution.model 默认值] --> Resolve[单次模型设置归一化]
-  Request --> Resolve
-  Resolve --> Loop
-  SessionId --> Loop[AgentLoop]
-  Adapter --> Loop
-  Store <--> Loop
-  RawTools[defineTool 结果] --> Normalize
-  Tools --> Loop
-  Guard[toolGuard.evaluate] --> Loop
-  Loop --> Approval[Agent 内部 ApprovalManager]
-  Approval --> Output
-  Loop --> Trace[完整 AgentEvent / onTrace]
-  Loop --> Project[标准应用事件投影]
-  Project --> Output[onEvent / CLI / SSE]
-  Store --> Catalog[listSessions: 摘要目录]
-  Store --> Detail[getSession: 按需详情]
-```
+## 8. 练习
 
-重点是两条输出路径互不替代：应用 UI 通常只需要 `onEvent`，调试器需要 `onTrace`。轨迹暂时是实时接口，
-可分页持久化轨迹仍在后续阶段。
-
-`onEvent` 的 `AgentOutputEvent` 已是标准应用协议，Server 可以直接写入 SSE 或 WebSocket。非流式调用则
-可以直接等待 `AgentRunResult`，不需要把完整结果伪造成 SSE。默认不需要再将
-`session.started` 改成 `conversation`，也不需要把 `sessionId` 改成 `conversationId`；兼容既有接口时再由
-Runtime 编写自己的投影函数。
-
-## 5. 一次调用时序
-
-```mermaid
-sequenceDiagram
-  participant App as 应用 Runtime
-  participant A as Agent
-  participant L as AgentLoop
-  participant S as SessionStore
-  participant M as ModelAdapter
-
-  App->>A: run(input, optional sessionId)
-  A-->>App: session.started
-  A->>L: run(normalized request)
-  L->>S: read + append facts
-  alt stream = true
-    L->>M: stream(messages, tools, reasoning)
-    M-->>L: content/reasoning chunks
-    L-->>A: agent.model.chunk
-    A-->>App: message.delta
-  else stream = false
-    L->>M: complete(messages, tools, reasoning)
-    M-->>L: ModelCompletion
-    L-->>A: agent.model.completed
-  end
-  L->>S: append final assistant + turn.completed
-  L-->>A: agent.run.completed
-  A-->>App: message.completed
-  A-->>App: AgentRunResult
-```
-
-## 6. 容易混淆的边界
-
-- `defineAgentConfig()` 不是环境变量加载器；它只处理已经交给它的数据。
-- `tools` 只接受 `defineTool()` 结果，并由配置边界统一转换为内部执行结构。
-- 不配置 `tools` 不代表没有工具；Agent 会自动装载时间和计算器。
-- `tools.additional` 只追加应用工具；完全不使用内置工具时显式选择 `mode: 'replace'`。
-- `session.started` 表示本次 run 已确定 Session ID，不保证它此前不存在。
-- `listSessions()` 来自 Store 目录，只返回摘要，不维护第二份 Server 内存索引，也不对每项调用 `read()`。
-- `getSession()` 返回的每条消息外层保留 Session Event 关联信息；真正的模型消息位于 `.message`。
-- `onEvent/onTrace` 是观察旁路，不能拿来修改控制流。
-- `execution.model` 是默认值，`Agent.run(..., { model })` 是本次覆盖；同一 Run 的全部 Step 使用同一设置。
-- `reasoning.effort` 不是固定枚举。核心接受非空字符串，Adapter 判断当前供应商和模型是否支持。
-- 工具自身 `toolGuard` 与 Agent 全局 `toolGuard.evaluate()` 都只作决定；审批等待、超时和重复提交由 Agent 内部处理。
-- 缺少任一 Guard 层等价于该层 allow；两层结果按 `deny > ask > allow` 合并。
-- `agent.run({ context })` 的数据只进入当前 Run 的 Guard 和 execute，不进入模型或 Session Log。
-- 应用通过 `onEvent` 接收审批，通过 `resolveToolApproval()` 提交决定，不需要创建 Broker。
-- 自定义 Store 可以只实现 `append/read`；这时 Agent 能运行，但不能列会话。
-
-## 7. 练习
-
-1. 参考 `test/support/scripted-model-adapter.ts` 创建确定性模型替身，并观察标准应用事件与完整轨迹数量差异。
-2. 定义两个不同输入 Schema 的工具，直接通过 `additional: [toolA, toolB]` 注册。
-3. 连续向同一个 sessionId 发起两次 run，检查第二次模型输入包含第一轮历史。
-4. 使用 `listSessions({ limit: 1 })` 和 `afterSessionId` 读取两页。
-5. 创建 `new Agent<AppContext>()`，让全局 Guard 根据 tenantId 拒绝一次调用。
+1. 用 `invoke()` 发起一次完整响应，检查 Adapter 的 `complete()` 被调用。
+2. 用 `for await` 消费 `stream()`，在收到第一个事件后 `break`，观察 AbortSignal 被触发。
+3. 在构造配置设置 effort，再在请求中仅覆盖 effort，检查内部 Adapter 收到继承后的嵌套结构。
+4. 创建 `new Agent<AppContext>()`，让 `tools.guard` 根据 tenantId 拒绝一次工具调用。
 
 协议细节见[Agent 门面协议](../standards/protocols/agent.md)。

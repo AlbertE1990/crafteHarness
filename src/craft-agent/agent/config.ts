@@ -12,23 +12,23 @@ import type {
 import type {
   AgentEventListener,
   AgentLoopLimits,
-  AgentModelExecutionOptions,
   AgentTool,
-  DefinedAgentModelExecutionOptions,
 } from '../core'
 import type {
   ToolEventListener,
   ToolGuardEvaluator,
 } from '../tools'
 import type { AgentToolInput } from './normalize-tools'
-import type { DefinedToolGuardConfig, ToolGuardConfig } from './tool-guard'
-import { randomUUID } from 'node:crypto'
+import type {
+  AgentModelExecutionOptions,
+  DefinedAgentModelExecutionOptions,
+} from './types'
 import { DeepSeekModelAdapter } from '../adapters/deepseek'
 import { OpenAICompatibleModelAdapter } from '../adapters/openai-compatible'
 import { builtinToolNames, createBuiltinTools } from '../builtins/registry'
-import { defineAgentModelExecutionOptions } from '../core/model-options'
 import { createLimits } from '../core/stop-policy'
 import { MemorySessionStore } from '../sessions'
+import { defineAgentModelExecutionOptions } from './model-options'
 import { normalizeAgentToolDefinitions } from './normalize-tools'
 import { defineToolGuardConfig } from './tool-guard'
 
@@ -57,8 +57,17 @@ export type AgentModelInput
     | OpenAICompatibleAgentModelConfig
     | ModelAdapter
 
+/** 两种工具集合模式共用的全局 Guard 和审批设置。 */
+export interface AgentToolsCommonConfig<TContext = undefined> {
+  /** 与工具自身 guard 使用相同请求和决定协议的 Agent 级全局 Guard。 */
+  readonly guard?: ToolGuardEvaluator<TContext>
+  /** Guard 返回 ask 且未指定时限时采用的毫秒数；-1 表示不自动过期。 */
+  readonly approvalTimeoutMs?: number
+}
+
 /** 保留默认内置工具，并允许对它们进行显式调整和追加。 */
-export interface ExtendAgentToolsConfig<TContext = undefined> {
+export interface ExtendAgentToolsConfig<TContext = undefined>
+  extends AgentToolsCommonConfig<TContext> {
   readonly mode?: 'extend'
   readonly disabledBuiltins?: readonly BuiltinToolName[]
   readonly overrides?: Readonly<Partial<Record<BuiltinToolName, AgentToolInput<TContext>>>>
@@ -73,7 +82,8 @@ export interface ExtendAgentToolsConfig<TContext = undefined> {
 }
 
 /** 完全跳过默认内置工具，仅注册调用方给出的工具集合。 */
-export interface ReplaceAgentToolsConfig<TContext = undefined> {
+export interface ReplaceAgentToolsConfig<TContext = undefined>
+  extends AgentToolsCommonConfig<TContext> {
   readonly mode: 'replace'
   readonly tools: readonly AgentToolInput<TContext>[]
 }
@@ -82,30 +92,14 @@ export interface ReplaceAgentToolsConfig<TContext = undefined> {
 export type AgentToolsInput<TContext = undefined>
   = ExtendAgentToolsConfig<TContext> | ReplaceAgentToolsConfig<TContext>
 
-/** CraftAgent 生成运行、轮次、事件和审批标识时使用的稳定种类。 */
-export type AgentIdKind = 'run' | 'turn' | 'event' | 'approval'
-
-/** 宿主可注入的 ID 生成器；未注入时由 CraftAgent 生成随机 ID。 */
-export type AgentIdFactory = (kind: AgentIdKind) => string
-
-/** Session Store 与会话 ID 的宿主集成配置。 */
-export interface AgentSessionConfig {
-  /** 默认使用进程内 MemorySessionStore；生产环境应注入持久化实现。 */
-  readonly store?: SessionStore
-  /** 未指定 sessionId 时使用的 ID 生成器。 */
-  readonly createSessionId?: () => string
-}
-
 /** AgentLoop 的模型调用方式、预算和确定性运行基础设施。 */
 export interface AgentExecutionConfig {
-  /** 所有 Run 默认采用的模型调用方式；Agent.run() 可以按次覆盖。 */
+  /** 所有请求默认采用的推理设置；AgentRequest.model 可以按次覆盖。 */
   readonly model?: AgentModelExecutionOptions
   /** 单次 Run 的模型步数、工具调用数、耗时和 Token 预算。 */
   readonly limits?: Partial<AgentLoopLimits>
   /** 测试或宿主环境可注入的时钟。 */
   readonly now?: () => Date
-  /** 测试或宿主环境可注入的 Run、Turn、Event 和 Approval ID 生成器。 */
-  readonly createId?: AgentIdFactory
 }
 
 /** 不参与控制流的全局轨迹与工具生命周期观察器。 */
@@ -123,20 +117,19 @@ export interface AgentConfigInput<TContext = undefined> {
   readonly systemPrompt?: string
   /** 未配置时自动装载全部内置工具。 */
   readonly tools?: AgentToolsInput<TContext>
-  /** 全局工具约束与通用审批时限；工具自己的参数级 Guard 随 defineTool() 配置。 */
-  readonly toolGuard?: ToolGuardConfig<TContext>
-  /** Session Store 和会话标识配置。 */
-  readonly session?: AgentSessionConfig
-  /** AgentLoop 模型调用方式、预算、时钟和运行标识配置。 */
+  /** 默认使用 MemorySessionStore；生产环境可直接注入持久化实现。 */
+  readonly sessionStore?: SessionStore
+  /** AgentLoop 模型默认值、预算和时钟配置。 */
   readonly execution?: AgentExecutionConfig
   /** 全局轨迹与工具事件观察器。 */
   readonly observability?: AgentObservabilityConfig
 }
 
-/** defineAgentConfig() 归一化后的 Session 配置。 */
-export interface DefinedAgentSessionConfig {
-  readonly store: SessionStore
-  readonly createSessionId: () => string
+/** defineAgentConfig() 归一化后的工具集合与全局策略。 */
+export interface DefinedAgentToolsConfig<TContext = undefined> {
+  readonly registered: readonly AgentTool<TContext>[]
+  readonly guard?: ToolGuardEvaluator<TContext>
+  readonly approvalTimeoutMs: number
 }
 
 /** defineAgentConfig() 归一化后的执行配置。 */
@@ -144,7 +137,6 @@ export interface DefinedAgentExecutionConfig {
   readonly model: DefinedAgentModelExecutionOptions
   readonly limits: AgentLoopLimits
   readonly now: () => Date
-  readonly createId?: AgentIdFactory
 }
 
 /** defineAgentConfig() 归一化后的观察器配置。 */
@@ -156,10 +148,9 @@ export interface DefinedAgentObservabilityConfig {
 /** defineAgentConfig() 返回的已归一化、只读配置。 */
 export interface DefinedAgentConfig<TContext = undefined> {
   readonly model: ModelAdapter
-  readonly tools: readonly AgentTool<TContext>[]
+  readonly tools: DefinedAgentToolsConfig<TContext>
   readonly systemPrompt?: string
-  readonly toolGuard: DefinedToolGuardConfig<TContext>
-  readonly session: DefinedAgentSessionConfig
+  readonly sessionStore: SessionStore
   readonly execution: DefinedAgentExecutionConfig
   readonly observability: DefinedAgentObservabilityConfig
 }
@@ -177,31 +168,25 @@ export function defineAgentConfig<TContext = undefined>(
     throw new TypeError('Agent 配置必须是对象')
   assertKnownConfigFields(
     input,
-    ['model', 'systemPrompt', 'tools', 'toolGuard', 'session', 'execution', 'observability'],
+    ['model', 'systemPrompt', 'tools', 'sessionStore', 'execution', 'observability'],
     'Agent config',
   )
-  assertOptionalConfigGroup(input.session, 'session')
   assertOptionalConfigGroup(input.execution, 'execution')
   assertOptionalConfigGroup(input.observability, 'observability')
-  assertKnownConfigFields(input.session, ['store', 'createSessionId'], 'Agent config.session')
-  assertKnownConfigFields(input.execution, ['model', 'limits', 'now', 'createId'], 'Agent config.execution')
+  assertKnownConfigFields(input.execution, ['model', 'limits', 'now'], 'Agent config.execution')
   assertKnownConfigFields(
     input.observability,
     ['onToolEvent', 'onTrace'],
     'Agent config.observability',
   )
 
-  if (input.session?.store !== undefined
-    && (typeof input.session.store.append !== 'function'
-      || typeof input.session.store.read !== 'function')) {
-    throw new TypeError('Agent config.session.store 必须实现 SessionStore')
+  if (input.sessionStore !== undefined
+    && (typeof input.sessionStore.append !== 'function'
+      || typeof input.sessionStore.read !== 'function')) {
+    throw new TypeError('Agent config.sessionStore 必须实现 SessionStore')
   }
   if (input.execution?.now !== undefined && typeof input.execution.now !== 'function')
     throw new TypeError('Agent config.execution.now 必须是函数')
-  if (input.execution?.createId !== undefined && typeof input.execution.createId !== 'function')
-    throw new TypeError('Agent config.execution.createId 必须是函数')
-  if (input.session?.createSessionId !== undefined && typeof input.session.createSessionId !== 'function')
-    throw new TypeError('Agent config.session.createSessionId 必须是函数')
   if (input.observability?.onToolEvent !== undefined
     && typeof input.observability.onToolEvent !== 'function') {
     throw new TypeError('Agent config.observability.onToolEvent 必须是函数')
@@ -212,23 +197,24 @@ export function defineAgentConfig<TContext = undefined>(
   }
 
   const model = createModelAdapter(input.model)
-  const tools = createTools<TContext>(input.tools)
+  const registeredTools = createTools<TContext>(input.tools)
   const limits = createLimits(input.execution?.limits)
   const modelExecution = defineAgentModelExecutionOptions(input.execution?.model)
-  const toolGuard = defineToolGuardConfig(input.toolGuard)
+  const guardConfig = defineToolGuardConfig(
+    input.tools?.guard,
+    input.tools?.approvalTimeoutMs,
+  )
   const systemPrompt = input.systemPrompt?.trim()
   const now = input.execution?.now ?? (() => new Date())
-  const createSessionId = input.session?.createSessionId
-    ?? (() => `session-${randomUUID()}`)
-  const session = Object.freeze({
-    store: input.session?.store ?? new MemorySessionStore({ now }),
-    createSessionId,
+  const tools = Object.freeze({
+    registered: registeredTools,
+    ...(guardConfig.guard ? { guard: guardConfig.guard } : {}),
+    approvalTimeoutMs: guardConfig.approvalTimeoutMs,
   })
   const execution = Object.freeze({
     model: modelExecution,
     limits,
     now,
-    ...(input.execution?.createId ? { createId: input.execution.createId } : {}),
   })
   const observability = Object.freeze({
     ...(input.observability?.onToolEvent
@@ -243,8 +229,7 @@ export function defineAgentConfig<TContext = undefined>(
     model,
     tools,
     ...(systemPrompt ? { systemPrompt } : {}),
-    toolGuard,
-    session,
+    sessionStore: input.sessionStore ?? new MemorySessionStore({ now }),
     execution,
     observability,
   })
@@ -283,7 +268,11 @@ function createTools<TContext = undefined>(
     throw new TypeError('Agent config.tools 必须是工具配置对象')
 
   if (input.mode === 'replace') {
-    assertKnownConfigFields(input, ['mode', 'tools'], 'Agent config.tools')
+    assertKnownConfigFields(
+      input,
+      ['mode', 'tools', 'guard', 'approvalTimeoutMs'],
+      'Agent config.tools',
+    )
     rejectReplaceOnlyFields(input)
     if (!Array.isArray(input.tools))
       throw new TypeError('Agent config.tools.tools 必须是数组')
@@ -295,7 +284,15 @@ function createTools<TContext = undefined>(
   const extend = input as ExtendAgentToolsConfig<TContext>
   assertKnownConfigFields(
     extend,
-    ['mode', 'disabledBuiltins', 'overrides', 'additional', 'guardOverrides'],
+    [
+      'mode',
+      'disabledBuiltins',
+      'overrides',
+      'additional',
+      'guardOverrides',
+      'guard',
+      'approvalTimeoutMs',
+    ],
     'Agent config.tools',
   )
   if (extend.disabledBuiltins !== undefined
@@ -362,16 +359,16 @@ function createTools<TContext = undefined>(
     const selected = override ?? tool
     if (!Object.hasOwn(guardOverrides, name))
       return [selected]
-    const toolGuard = guardOverrides[name] ?? null
+    const guard = guardOverrides[name] ?? null
     const execute: AgentTool<TContext>['execute'] = (rawInput, options) => (
       selected.execute(rawInput, {
         ...options,
-        toolGuardOverride: toolGuard,
+        guardOverride: guard,
       })
     )
     return [Object.freeze({
       ...selected,
-      toolGuard,
+      guard,
       // 将覆盖收进注册项本身，直接调用 AgentTool.execute() 与经 AgentLoop 调用保持一致。
       execute,
     })]

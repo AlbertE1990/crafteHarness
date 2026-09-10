@@ -33,11 +33,10 @@ const agent = new Agent({
   },
   tools: {
     additional: [getUserLocationTool, getWeatherTool],
+    guard: serverToolGuard,
+    approvalTimeoutMs: 120_000,
   },
-  toolGuard: serverToolGuard,
-  session: {
-    store: new PostgresSessionStore(databasePool),
-  },
+  sessionStore: new PostgresSessionStore(databasePool),
 })
 
 const app = createServerApp({ agent })
@@ -48,27 +47,29 @@ const app = createServerApp({ agent })
 - 连接池由 Runtime 创建和关闭，不能进入 CraftAgent Core，也不能由 Store 模块在 import 时隐式创建。
 - `get_current_time` 和 `calculator` 由 Agent 自动装载，不进入 Server 工具注册表。
 - 应用工具使用 `defineTool()`，可直接组成普通只读数组并通过 `tools.additional` 追加；Agent 负责归一化。
-- Runtime 只实现 `toolGuard.evaluate()` 的业务风险规则；pending 审批、超时和重复提交由 Agent 管理。
+- Runtime 只实现 `tools.guard(request)` 的业务风险规则；pending 审批、超时和重复提交由 Agent 管理。
 - 当前风险规则只适用于代码仓库内受信第一方工具，不代表第三方插件安全边界。
 
 ## 4. 请求与取消
 
-Fastify 将 `message` 映射为 `Agent.run({ input })`，将 `conversationId` 映射为 `sessionId`。浏览器断开时，
+Fastify 将 `message` 映射为 Agent 请求的 `input`，将 `conversationId` 映射为 `sessionId`。浏览器断开时，
 使用同一个 AbortSignal 取消 Agent Run；模型 Adapter 和 Tool Harness 会继续传播该信号。
 
-请求中的 `model.stream` 决定传输：`true` 返回 `text/event-stream`，`false` 返回普通
-`application/json`，其 `data` 是封闭的 `AgentRunResult`。Server 必须把同一设置传入 `Agent.run()`，不能
-出现“HTTP 使用 JSON、内部仍调用 stream()”或相反的双重语义。
+请求顶层的 `stream` 决定传输：`true`（默认）返回 `text/event-stream` 并调用 `agent.stream()`；`false`
+返回普通 `application/json` 并调用 `agent.invoke()`，其 `data` 是封闭的 `AgentRunResult`。`model` 只包含
+`reasoningEnabled/reasoningEffort`。传输方式由方法直接表达，不再维护第二个模型开关。
 
 ## 5. 标准事件直出与会话查询
 
 Fastify 的聊天 SSE 默认原样输出 `AgentOutputEvent`：
 
 ```text
-agent.run(..., {
-  onEvent: event => writeSseEvent(reply.raw, event),
-})
+for await (const event of agent.stream(request, signal))
+  await writeSseEvent(reply.raw, event)
 ```
+
+Server 写入函数在 Node 响应返回 `false` 时等待 `drain`，因此网络背压可以沿异步迭代器传回 Agent；连接关闭
+会令写入失败并取消当前 Run，不能无界缓存模型输出。
 
 同步 JSON 无法在一个尚未完成的响应中推送审批请求。当前非流式路由不注册交互式审批出口，`ask` 会
 fail-closed 为本次工具失败并交回 AgentLoop；需要审批卡片时必须使用流式模式。若未来需要非流式审批，

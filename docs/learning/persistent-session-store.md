@@ -27,7 +27,7 @@ CraftAgent 只定义会话存储的行为，不负责数据库连接和用户系
 HTTP / CLI / Worker Runtime
   ├── 身份认证、权限判断、连接池生命周期
   ├── 构造应用自己的 SessionStore
-  └── new Agent({ model, session: { store } })
+  └── new Agent({ model, sessionStore: store })
                          │
                          ▼
                     AgentLoop
@@ -68,9 +68,9 @@ const agent = new Agent({ model })
 import Agent, { MemorySessionStore } from '../../src/craft-agent'
 
 const store = new MemorySessionStore()
-const agent = new Agent({ model, session: { store } })
+const agent = new Agent({ model, sessionStore: store })
 
-await agent.run({ sessionId: 'learning-session', input: '你好' })
+await agent.invoke({ sessionId: 'learning-session', input: '你好' })
 console.dir(await store.read('learning-session'), { depth: null })
 ```
 
@@ -374,7 +374,7 @@ export class PostgresSessionStore implements SessionCatalogStore {
 CraftAgent 不定义 `User`、`Role`、`Tenant` 或权限协议。Runtime 可以在创建 Session 时传入应用字段：
 
 ```ts
-await agent.run({
+await agent.invoke({
   input: '你好',
   sessionMetadata: {
     userId: authenticatedUser.id,

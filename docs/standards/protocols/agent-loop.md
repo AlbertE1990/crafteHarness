@@ -41,7 +41,7 @@ const loop = new AgentLoop({
   tools,
   systemPrompt,
   limits,
-  toolGuard,
+  globalGuard,
   requestToolApproval,
 })
 

@@ -11,9 +11,9 @@ Guard 合并、审批、重试和结果归一化都由 CraftAgent 内部完成�
 模型只能看到 `name`、`description` 和 `inputSchema`。以下内容永远不会发送给模型：
 
 - `outputSchema` 和 `execute()`；
-- `metadata` 与 `toolGuard`；
+- `metadata` 与 `guard`；
 - `execution.timeoutMs/retry`；
-- 当前 `agent.run().context`。
+- 当前 `agent.invoke()/stream()` 请求的 `context`。
 
 ## 2. 定义工具
 
@@ -41,7 +41,7 @@ export const getWeatherTool = defineTool({
   },
 
   // 工具固有且依赖本次参数的规则写在这里；缺省表示这一层 allow。
-  toolGuard(request) {
+  guard(request) {
     return request.input.city === '内部机房'
       ? { decision: 'deny', reason: '该位置不允许通过公共天气服务查询' }
       : { decision: 'allow' }
@@ -106,15 +106,15 @@ interface ToolRunContext<TContext> {
 }
 ```
 
-`context` 来自当前 `agent.run({ context })`。它用于传递租户、用户、角色、部署环境或请求级服务，
+`context` 来自当前 Agent 请求。它用于传递租户、用户、角色、部署环境或请求级服务，
 只在本次 Run 内存在；CraftAgent 不会把它发送给模型、写入 Session Log、发给前端或保存在 Agent 单例。
 
 ## 5. 两层 Tool Guard
 
 每次已通过输入校验的调用最多经过两层 Guard：
 
-1. 工具级 `defineTool({ toolGuard })`：判断工具固有、参数相关的风险。
-2. Agent 全局 `toolGuard.evaluate()`：判断部署、租户、用户、角色和环境约束。
+1. 工具级 `defineTool({ guard })`：判断工具固有、参数相关的风险。
+2. Agent 全局 `tools.guard`：判断部署、租户、用户、角色和环境约束。
 
 缺少某一层等价于该层返回 `allow`；两层都缺少时工具直接执行。配置了两层时，两层按“工具级 → 全局”
 顺序执行，最终结果按以下固定优先级合并：
@@ -132,6 +132,11 @@ deny > ask > allow
 
 Guard 只返回 `allow | deny | ask`，不直接执行工具，也不自己等待前端。Agent 内部负责审批 ID、pending
 Promise、超时、取消和重复提交。
+
+两层共用 `ToolGuardRequest<TContext, TInput, TMetadata>` 和 `ToolGuardDecision`。Harness 在 Zod 校验后只构造
+一次请求对象，先后原样传给局部和全局 Guard；因此 `callId/runId/sessionId/tool/input/context/signal` 完全一致。
+局部 Guard 保留 Schema 推导出的 input 类型；全局 Guard 因面对多个异构工具，将 input 视为 `unknown`，
+需要按 `request.tool.name` 进行业务收窄。
 
 ### 5.1 修改内置工具 Guard
 

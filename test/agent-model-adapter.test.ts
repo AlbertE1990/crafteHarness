@@ -25,13 +25,20 @@ function createAgent(adapter: ScriptedModelAdapter): Agent {
     model: adapter,
     tools: {
       additional: serverTools,
+      guard: serverToolGuard,
     },
-    toolGuard: serverToolGuard,
     systemPrompt: '你是一个AI助手',
-    session: {
-      createSessionId: () => 'generated-conversation',
-    },
   })
+}
+
+/** 完整消费一次门面事件流，模拟 SSE/CLI 的标准读取方式。 */
+async function collectEvents(
+  stream: AsyncIterable<AgentOutputEvent>,
+): Promise<AgentOutputEvent[]> {
+  const events: AgentOutputEvent[] = []
+  for await (const event of stream)
+    events.push(event)
+  return events
 }
 
 describe('agent runtime model adapter boundary', () => {
@@ -48,14 +55,12 @@ describe('agent runtime model adapter boundary', () => {
       }],
     })
     const agent = createAgent(adapter)
-    const events: AgentOutputEvent[] = []
-
-    const result = await agent.run({
+    const events = await collectEvents(agent.stream({
       input: '你好',
       sessionId: 'adapter-test-conversation',
-    }, { onEvent: event => events.push(event) })
+    }))
 
-    expect(result.status).toBe('completed')
+    expect(events.at(-1)?.type).toBe('message.completed')
     expect(adapter.calls[0]?.request.messages).toEqual([
       { role: 'system', content: '你是一个AI助手' },
       { role: 'user', content: '你好' },
@@ -126,14 +131,11 @@ describe('agent runtime model adapter boundary', () => {
       ],
     })
     const agent = createAgent(adapter)
-    const events: AgentOutputEvent[] = []
-
-    const result = await agent.run({
+    const events = await collectEvents(agent.stream({
       input: '现在几点',
       sessionId: 'fragmented-tool-call',
-    }, { onEvent: event => events.push(event) })
+    }))
 
-    expect(result).toMatchObject({ status: 'completed', steps: 2, toolCalls: 1 })
     expect(adapter.calls).toHaveLength(2)
     expect(adapter.calls[1]?.request.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -168,8 +170,8 @@ describe('agent runtime model adapter boundary', () => {
     })
     const agent = createAgent(adapter)
 
-    await agent.run({ input: '第一轮问题', sessionId: 'multi-turn' })
-    await agent.run({ input: '第二轮问题', sessionId: 'multi-turn' })
+    await collectEvents(agent.stream({ input: '第一轮问题', sessionId: 'multi-turn' }))
+    await collectEvents(agent.stream({ input: '第二轮问题', sessionId: 'multi-turn' }))
 
     expect(adapter.calls[1]?.request.messages).toEqual([
       { role: 'system', content: '你是一个AI助手' },
@@ -207,17 +209,7 @@ describe('agent runtime model adapter boundary', () => {
       }],
     })
     const agent = createAgent(adapter)
-    const events: AgentOutputEvent[] = []
-
-    const result = await agent.run({ input: '执行自定义工具' }, {
-      onEvent: event => events.push(event),
-    })
-
-    expect(result).toMatchObject({
-      status: 'failed',
-      stopReason: 'model_protocol_error',
-      error: { code: 'MODEL_PROTOCOL_ERROR' },
-    })
+    const events = await collectEvents(agent.stream({ input: '执行自定义工具' }))
     expect(events.at(-1)).toMatchObject({
       type: 'error',
       code: 'MODEL_PROTOCOL_ERROR',

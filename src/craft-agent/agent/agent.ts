@@ -12,9 +12,7 @@ import type {
   ResolveToolApprovalResult,
 } from './tool-guard'
 import type {
-  AgentExecutionOptions,
   AgentOutputEvent,
-  AgentOutputEventListener,
   AgentRequest,
   AgentSessionDetail,
   AgentSessionMessage,
@@ -22,11 +20,17 @@ import type {
 } from './types'
 import { randomUUID } from 'node:crypto'
 import { AgentLoop } from '../core'
-import { defineAgentModelExecutionOptions } from '../core/model-options'
 import { readSessionSnapshot } from '../sessions'
 import { defineAgentConfig } from './config'
+import { AsyncEventStream } from './event-stream'
+import {
+  createAgentLoopModelExecution,
+  defineAgentModelExecutionOptions,
+} from './model-options'
 import { ToolApprovalManager } from './tool-approval-manager'
-import { createGlobalToolGuard } from './tool-guard'
+
+/** Agent 内部把标准事件写入异步流时使用的输出端。 */
+type AgentOutputSink = (event: AgentOutputEvent) => void | Promise<void>
 
 /**
  * CraftAgent 的开发者门面。
@@ -44,44 +48,53 @@ export class Agent<TContext = undefined> {
 
   constructor(config: AgentConfigInput<TContext>) {
     this.config = defineAgentConfig(config)
-    this.store = this.config.session.store
-    const createId = this.config.execution.createId
+    this.store = this.config.sessionStore
     this.approvalManager = new ToolApprovalManager({
-      defaultTimeoutMs: this.config.toolGuard.approvalTimeoutMs,
+      defaultTimeoutMs: this.config.tools.approvalTimeoutMs,
       now: this.config.execution.now,
-      ...(createId
-        ? { createApprovalId: () => createId('approval') }
-        : {}),
     })
-    const globalToolGuard = createGlobalToolGuard(this.config.toolGuard)
     this.loop = new AgentLoop({
       model: this.config.model,
       store: this.store,
-      tools: this.config.tools,
+      tools: this.config.tools.registered,
       ...(this.config.systemPrompt ? { systemPrompt: this.config.systemPrompt } : {}),
       limits: this.config.execution.limits,
-      ...(globalToolGuard ? { toolGuard: globalToolGuard } : {}),
+      ...(this.config.tools.guard ? { globalGuard: this.config.tools.guard } : {}),
       requestToolApproval: this.approvalManager.requestApproval,
       ...(this.config.observability.onToolEvent
         ? { onToolEvent: this.config.observability.onToolEvent }
         : {}),
       now: this.config.execution.now,
-      ...(this.config.execution.createId
-        ? { createId: this.config.execution.createId }
-        : {}),
     })
     this.limits = this.loop.limits
   }
 
-  /**
-   * 执行一次用户 Turn。
-   *
-   * onEvent 提供稳定的应用输出，onTrace 暴露完整 AgentEvent；二者都是观察旁路，
-   * 回调异常不会改变模型、工具或 Session 的执行结果。
-   */
-  async run(
+  /** 执行一次非流式用户 Turn，并返回封闭结果。 */
+  async invoke(
     request: AgentRequest<TContext>,
-    options: AgentExecutionOptions = {},
+    signal?: AbortSignal,
+  ): Promise<AgentRunResult> {
+    return await this.execute(request, false, signal)
+  }
+
+  /**
+   * 执行一次流式用户 Turn；消费方停止迭代时自动取消同一个 Run。
+   *
+   * 事件通道包含背压，慢速 SSE、CLI 或 UI 消费者不会令 Agent 无限缓存输出。
+   */
+  stream(
+    request: AgentRequest<TContext>,
+    signal?: AbortSignal,
+  ): AsyncIterable<AgentOutputEvent> {
+    return this.createOutputStream(request, signal)
+  }
+
+  /** invoke() 与 stream() 共享的唯一运行路径。 */
+  private async execute(
+    request: AgentRequest<TContext>,
+    stream: boolean,
+    signal?: AbortSignal,
+    output?: AgentOutputSink,
   ): Promise<AgentRunResult> {
     if (typeof request !== 'object' || request === null)
       throw new TypeError('Agent request 必须是对象')
@@ -90,7 +103,7 @@ export class Agent<TContext = undefined> {
       throw new TypeError('Agent request.input 不能为空')
 
     const generatedSessionId = request.sessionId === undefined
-      ? this.config.session.createSessionId()
+      ? `session-${randomUUID()}`
       : undefined
     const sessionId = typeof request.sessionId === 'string'
       ? request.sessionId.trim()
@@ -100,23 +113,24 @@ export class Agent<TContext = undefined> {
     if (!sessionId)
       throw new TypeError('Agent sessionId 不能为空')
 
-    const runId = createRunId(options.runId, this.config)
+    const runId = createRunId()
     // 在进入循环前一次性解析，确保同一 Run 的多个模型 Step 不会使用不同设置。
     const modelExecution = defineAgentModelExecutionOptions(
-      options.model,
+      request.model,
       this.config.execution.model,
     )
+    const loopModelExecution = createAgentLoopModelExecution(modelExecution, stream)
     // 没有应用事件出口时 ask 会得到 unavailable；这避免无法展示的审批长期占用内存。
-    const stopObservingApprovals = options.onEvent
+    const stopObservingApprovals = output
       ? this.approvalManager.observeRun(
           runId,
-          options.onEvent,
+          output,
         )
       : undefined
 
     try {
-      await emit(options.onEvent, { type: 'session.started', sessionId })
-      const project = createOutputProjector(sessionId, options.onEvent)
+      await output?.({ type: 'session.started', sessionId })
+      const project = createOutputProjector(sessionId, output)
 
       return await this.loop.run({
         sessionId,
@@ -127,18 +141,53 @@ export class Agent<TContext = undefined> {
           : {}),
       }, {
         runId,
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.turnId ? { turnId: options.turnId } : {}),
-        model: modelExecution,
+        ...(signal ? { signal } : {}),
+        model: loopModelExecution,
         onEvent: async (event) => {
           await emitTrace(this.config.observability.onTrace, event)
-          await emitTrace(options.onTrace, event)
           await project(event)
         },
       })
     }
     finally {
       stopObservingApprovals?.()
+    }
+  }
+
+  /** 把内部回调协议适配为带背压和取消语义的 AsyncIterable。 */
+  private async* createOutputStream(
+    request: AgentRequest<TContext>,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentOutputEvent> {
+    const localController = new AbortController()
+    const combined = combineAbortSignals(signal, localController.signal)
+    const events = new AsyncEventStream<AgentOutputEvent>()
+    const execution = this.execute(
+      request,
+      true,
+      combined.signal,
+      event => events.write(event),
+    ).then(
+      (result) => {
+        events.close()
+        return result
+      },
+      (error: unknown) => {
+        events.fail(error)
+        throw error
+      },
+    )
+
+    try {
+      for await (const event of events)
+        yield event
+      await execution
+    }
+    finally {
+      localController.abort()
+      combined.dispose()
+      await events.return()
+      await execution.catch(() => undefined)
     }
   }
 
@@ -192,18 +241,8 @@ export class Agent<TContext = undefined> {
 }
 
 /** Agent 必须在进入 AgentLoop 前确定 runId，审批管理器才能提前注册对应事件出口。 */
-function createRunId<TContext>(
-  value: string | undefined,
-  config: DefinedAgentConfig<TContext>,
-): string {
-  const runId = value === undefined
-    ? config.execution.createId?.('run') ?? `run-${randomUUID()}`
-    : typeof value === 'string'
-      ? value.trim()
-      : ''
-  if (!runId)
-    throw new TypeError('Agent runId 不能为空')
-  return runId
+function createRunId(): string {
+  return `run-${randomUUID()}`
 }
 
 /**
@@ -238,7 +277,7 @@ function isSessionCatalogStore(store: SessionStore): store is SessionCatalogStor
 /** 把完整 AgentEvent 投影为供应商、网络和 UI 无关的标准应用事件。 */
 function createOutputProjector(
   sessionId: string,
-  listener: AgentOutputEventListener | undefined,
+  listener: AgentOutputSink | undefined,
 ): (event: AgentEvent) => Promise<void> {
   const reasoningSteps = new Set<number>()
   let emittedReasoning = false
@@ -256,7 +295,7 @@ function createOutputProjector(
         const separator = firstInStep && emittedReasoning ? '\n\n' : ''
         reasoningSteps.add(event.step)
         emittedReasoning = true
-        await emit(listener, {
+        await listener?.({
           type: 'message.delta',
           sessionId,
           channel: 'reasoning',
@@ -266,7 +305,7 @@ function createOutputProjector(
 
       const content = choice.delta.content ?? ''
       if (content) {
-        await emit(listener, {
+        await listener?.({
           type: 'message.delta',
           sessionId,
           channel: 'content',
@@ -279,7 +318,7 @@ function createOutputProjector(
     if (event.type === 'agent.tool.event'
       && event.event.type === 'tool.guard.decided'
       && event.event.result.decision === 'deny') {
-      await emit(listener, {
+      await listener?.({
         type: 'tool.guard.denied',
         sessionId,
         runId: event.runId,
@@ -291,7 +330,7 @@ function createOutputProjector(
     }
 
     if (event.type === 'agent.run.completed') {
-      await emit(listener, {
+      await listener?.({
         type: 'message.completed',
         sessionId,
         content: event.result.content,
@@ -302,7 +341,7 @@ function createOutputProjector(
     if (event.type !== 'agent.run.failed' && event.type !== 'agent.run.stopped')
       return
 
-    await emit(listener, {
+    await listener?.({
       type: 'error',
       sessionId,
       message: event.result.error.message,
@@ -312,10 +351,10 @@ function createOutputProjector(
   }
 }
 
-/** 应用输出属于观察旁路，监听器失败不能中断 Agent Run。 */
-async function emit(
-  listener: AgentOutputEventListener | undefined,
-  event: AgentOutputEvent,
+/** 完整轨迹观察器同样隔离异常，避免调试设施改变业务结果。 */
+async function emitTrace(
+  listener: DefinedAgentConfig<unknown>['observability']['onTrace'],
+  event: AgentEvent,
 ): Promise<void> {
   try {
     await listener?.(event)
@@ -325,15 +364,29 @@ async function emit(
   }
 }
 
-/** 完整轨迹观察器同样隔离异常，避免调试设施改变业务结果。 */
-async function emitTrace(
-  listener: DefinedAgentConfig<unknown>['observability']['onTrace'] | AgentExecutionOptions['onTrace'],
-  event: AgentEvent,
-): Promise<void> {
-  try {
-    await listener?.(event)
-  }
-  catch {
-    // 阶段 6 的 DiagnosticSink 将记录观察器异常。
+/** 组合调用方取消与流消费者取消，并提供显式监听清理。 */
+function combineAbortSignals(
+  external: AbortSignal | undefined,
+  local: AbortSignal,
+): { readonly signal: AbortSignal, dispose: () => void } {
+  if (!external)
+    return { signal: local, dispose: () => undefined }
+
+  const controller = new AbortController()
+  const abortFromExternal = () => controller.abort(external.reason)
+  const abortFromLocal = () => controller.abort(local.reason)
+  external.addEventListener('abort', abortFromExternal, { once: true })
+  local.addEventListener('abort', abortFromLocal, { once: true })
+  if (external.aborted)
+    abortFromExternal()
+  else if (local.aborted)
+    abortFromLocal()
+
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      external.removeEventListener('abort', abortFromExternal)
+      local.removeEventListener('abort', abortFromLocal)
+    },
   }
 }

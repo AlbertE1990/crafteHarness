@@ -79,16 +79,17 @@ OpenAI 兼容流可能把一个工具调用拆成多个 delta：名称、ID 和 
 
 这项规则属于供应商适配行为；Agent 只认识内部可选字段，不读取 DeepSeek SDK 类型。
 
-推理设置也按同一边界流转：应用在 `execution.model` 提供默认值，或在 `Agent.run()` 中按次覆盖；
-AgentLoop 把 `{ enabled, effort }` 放进 `ModelRequest`。公共 effort 是开放字符串，DeepSeek Adapter 再将
+推理设置也按同一边界流转：应用在 `execution.model` 提供默认值，或在 Agent 请求的
+`reasoningEnabled/reasoningEffort` 中按次覆盖；Agent 在进入 Loop 前转换为 `{ enabled, effort }` 并放进
+`ModelRequest`。公共 effort 是开放字符串，DeepSeek Adapter 再将
 它校验并转换为 `thinking.type` 和 `reasoning_effort`。因此未来模型增加新等级时，核心类型不需要发布
 破坏性修改，只需相应 Adapter 接受该值。
 
 ## 7. 流式与非流式不是同一种传输
 
 ```text
-stream: true  -> ModelAdapter.stream()   -> 多个 ModelStreamChunk
-stream: false -> ModelAdapter.complete() -> 一个 ModelCompletion
+agent.stream() -> ModelAdapter.stream()   -> 多个 ModelStreamChunk
+agent.invoke() -> ModelAdapter.complete() -> 一个 ModelCompletion
 ```
 
 AgentLoop 会把两种结果归一化为同一个内部 Step，但轨迹保持真实来源：前者输出

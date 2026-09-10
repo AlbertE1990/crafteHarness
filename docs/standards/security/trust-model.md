@@ -71,7 +71,7 @@ CraftAgent 只检查重试参数，不判断开发者的业务承诺是否正确
 
 ## 5. 运行上下文的信任来源
 
-`agent.run({ context })` 可以携带租户、用户、权限和环境，但 CraftAgent 不负责认证。Runtime 必须从已经
+Agent 请求的 `context` 可以携带租户、用户、权限和环境，但 CraftAgent 不负责认证。Runtime 必须从已经
 验证的服务端状态构造 context，不能把浏览器提交的角色或权限原样转入。
 
 ```text
@@ -85,7 +85,7 @@ CraftAgent 只检查重试参数，不判断开发者的业务承诺是否正确
 context 是 Run 级引用，不保存在 Agent 单例，不发送给模型，不写入 Session Log，也不默认进入前端事件。
 多用户服务必须为每个请求创建独立 context，不能修改共享全局变量来切换当前用户。
 
-TypeScript 会在 `new Agent<AppContext>()` 后要求 `run()` 提供 context；JavaScript 调用方仍可绕过类型，
+TypeScript 会在 `new Agent<AppContext>()` 后要求 `invoke()/stream()` 请求提供 context；JavaScript 调用方仍可绕过类型，
 因此依赖身份信息的全局 Guard 应对缺失或畸形字段返回 deny。
 
 ## 6. 用户审批不等于授权系统

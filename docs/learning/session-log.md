@@ -309,7 +309,7 @@ class ServiceSessionStore implements SessionStore {
 
 const agent = new Agent({
   model,
-  session: { store: new ServiceSessionStore(service) },
+  sessionStore: new ServiceSessionStore(service),
 })
 ```
 

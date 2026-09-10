@@ -23,7 +23,7 @@ export interface AgentToolInput<TContext = undefined> {
   readonly inputSchema: z.ZodType
   readonly outputSchema: z.ZodType
   readonly metadata: JsonObject
-  readonly toolGuard?: (...values: never[]) => unknown
+  readonly guard?: (...values: never[]) => unknown
   readonly execution?: ToolExecutionConfig
   readonly renderOutput?: (...values: never[]) => string
   readonly execute: (
