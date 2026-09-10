@@ -82,8 +82,6 @@ describe('deepSeek model adapter', () => {
     const adapter = new DeepSeekModelAdapter({
       apiKey: 'test-key',
       model: 'deepseek-v4-flash',
-      thinking: 'enabled',
-      reasoningEffort: 'high',
     }, createMockClient(create))
 
     const stream = await adapter.stream({
@@ -106,6 +104,7 @@ describe('deepSeek model adapter', () => {
         description: '查询天气',
         inputSchema: { type: 'object', additionalProperties: false },
       }],
+      reasoning: { enabled: true, effort: 'high' },
     })
     const chunks = []
     for await (const chunk of stream)
@@ -188,6 +187,20 @@ describe('deepSeek model adapter', () => {
         prompt_tokens: 12,
         total_tokens: 20,
       },
+    })
+  })
+
+  it('rejects unsupported reasoning effort in the dialect adapter', async () => {
+    const adapter = new DeepSeekModelAdapter({
+      apiKey: 'test-key',
+    }, createMockClient(vi.fn()))
+
+    await expect(adapter.complete({
+      messages: [{ role: 'user', content: '测试未知等级' }],
+      reasoning: { enabled: true, effort: 'future-level' },
+    })).rejects.toMatchObject({
+      code: 'MODEL_INVALID_REQUEST',
+      provider: 'deepseek',
     })
   })
 

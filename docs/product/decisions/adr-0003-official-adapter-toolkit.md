@@ -23,8 +23,9 @@
 - `ScriptedModelAdapter` 使用确定性脚本替代网络，支持调用快照、取消和流迭代错误。
 - `assertModelAdapterContract()` 同时检查 `complete()` 与 `stream()` 的最小运行时协议，测试时必须配合
   SDK 客户端替身或 Scripted Adapter，不能访问生产模型。
-- `defineAgentConfig()` 作为唯一归一化入口，使用判别联合创建 DeepSeek 和 OpenAI Compatible Adapter；
-  自定义实现直接传入 `ModelAdapter`。
+- `defineAgentConfig()` 作为唯一归一化入口。省略 `adapter` 时默认创建 OpenAI Compatible Adapter；
+  DeepSeek 等差异层通过 `adapter` 显式选择；自定义实现直接传入 `ModelAdapter`。
+- `provider` 只表示进入轨迹和错误的供应商身份，不再同时承担 Adapter 判别职责。
 - 协议差异明显的供应商应新增独立 Adapter，不能向通用兼容层不断加入厂商条件分支。
 
 ## 后果
@@ -47,3 +48,5 @@
 项目尚未发布，实际使用表明 `ScriptedModelAdapter` 和契约探针只被仓库测试消费。为避免把测试夹具误塑造成
 长期公共 API，删除原 `adapters/testing` 子入口并迁移到 `test/support`。外部 Adapter 开发要求继续由协议和
 学习文档说明；未来若出现稳定复用需求，再整体设计 `craft-agent/testing`，不恢复按子系统分散的 testing 入口。
+同次收口还将 OpenAI Compatible 设为声明式配置默认值，并使用 `adapter` 与 `provider` 分别表达实现选择和
+诊断身份。

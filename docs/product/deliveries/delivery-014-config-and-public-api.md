@@ -14,6 +14,8 @@
 - `AgentConfigInput` 新增 `session`、`execution`、`observability` 三个职责组。
 - `DefinedAgentConfig` 使用相同结构，`Agent` 内部不再消费另一套扁平字段。
 - `model`、`systemPrompt`、`tools` 和 `toolGuard` 保留在根部，避免高频配置产生无意义嵌套。
+- 声明式模型默认使用 OpenAI Compatible Adapter；普通兼容供应商只配置连接信息和可选 `provider` 身份。
+- DeepSeek 等协议差异通过 `adapter` 显式选择，删除 `providerName` 及旧的 provider 判别语义。
 - 将配置可接受的任意 `defineTool()` 结果公开命名为 `AgentToolInput`，内部归一化函数仍不导出。
 - 根入口由通配导出改为显式白名单；官方生产 Adapter 继续从 `craft-agent/adapters` 高级入口提供。
 - `ScriptedModelAdapter`、模型和 Session 契约探针迁入 `test/support`。

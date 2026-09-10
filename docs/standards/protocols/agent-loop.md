@@ -4,7 +4,7 @@
 
 ## 1. 职责与依赖边界
 
-`AgentLoop` 负责一次用户 Turn 的完整控制流程：读取 Session、调用模型、组装流、执行工具、写回消息，
+`AgentLoop` 负责一次用户 Turn 的完整控制流程：读取 Session、调用模型、组装结果、执行工具、写回消息，
 并在完成、预算停止、取消或异常时生成确定终态。
 
 ```text
@@ -25,7 +25,7 @@ ModelAdapter | SessionStore
 | --------- | ----------------------------------------------- | ---------------------------------- |
 | Run       | 一次 `AgentLoop.run()`，拥有预算、取消和关联 ID | 一次 Run 对应一次用户 Turn         |
 | Turn      | 一条用户输入到一个终态                          | completed / failed / cancelled     |
-| Step      | 一次模型流及其返回的一批 Tool Call              | 从 1 开始，受 `maxModelSteps` 限制 |
+| Step      | 一次模型调用及其返回的一批 Tool Call            | 从 1 开始，受 `maxModelSteps` 限制 |
 | Tool Call | 模型要求执行的一次逻辑工具调用                  | 同一批按 index 串行执行            |
 | Attempt   | Tool Harness 对某 Tool Call 的一次实际尝试      | 由工具重试策略管理                 |
 
@@ -53,6 +53,10 @@ const result = await loop.run({
   signal,
   runId,
   turnId,
+  model: {
+    stream: false,
+    reasoning: { enabled: true, effort: 'high' },
+  },
   onEvent,
 })
 ```
@@ -72,8 +76,11 @@ flowchart TD
   Begin --> Guard{取消或预算已用尽?}
   Guard -- 是 --> Stop[写入 cancelled / failed 终态]
   Guard -- 否 --> Load[从 Session Event 推导 messages]
-  Load --> Model[开始一个模型流 Step]
-  Model --> Assemble[组装 content / reasoning<br/>tool call fragments / usage]
+  Load --> Mode{stream?}
+  Mode -- 是 --> Stream[调用 stream 并组装 chunks]
+  Mode -- 否 --> CompleteModel[调用 complete 并校验 completion]
+  Stream --> Assemble[统一 StepResult]
+  CompleteModel --> Assemble
   Assemble --> Calls{存在 Tool Call?}
   Calls -- 否 --> Text{存在最终文本?}
   Text -- 否 --> Fail[MODEL_PROTOCOL_ERROR]
@@ -110,7 +117,11 @@ turn.completed
 所有追加都使用 Loop 当前观察到的 `expectedVersion`。发现其他 Writer 改变 Session 时，Run 以
 `session_error` 失败，不会自动合并或重新调用模型，因为旧输出依赖旧上下文，工具也可能已经产生副作用。
 
-## 6. 模型流组装规范
+## 6. 模型结果组装规范
+
+一次 Run 的 `model.stream/reasoning` 在进入循环前解析并固定。`stream=true` 调用 Adapter 的
+`stream()` 并输出 `agent.model.chunk`；`stream=false` 调用 `complete()` 并输出
+`agent.model.completed`。两条路径都投影为相同的 StepResult，再进入以下状态机规则。
 
 - 只消费候选 `index=0`；未找到时使用数组第一项。
 - `content`、`reasoning_content` 和函数名/参数分片按到达顺序拼接。

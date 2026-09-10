@@ -1,6 +1,10 @@
 // @vitest-environment node
 
-import type { AgentConfigInput, ModelStreamChunk } from '../src/craft-agent'
+import type {
+  AgentConfigInput,
+  ModelCompletion,
+  ModelStreamChunk,
+} from '../src/craft-agent'
 import type { ServerStreamEvent } from '../src/server/app'
 import { describe, expect, it } from 'vitest'
 import Agent, { MemorySessionStore } from '../src/craft-agent'
@@ -22,6 +26,26 @@ function chunk(
     created: 1_788_748_800,
     model: 'scripted-model',
     object: 'chat.completion.chunk',
+  }
+}
+
+/** 构造 HTTP 非流式契约测试使用的完整模型结果。 */
+function completion(content: string, reasoning = ''): ModelCompletion {
+  return {
+    id: 'server-runtime-non-stream',
+    choices: [{
+      finish_reason: 'stop',
+      index: 0,
+      logprobs: null,
+      message: {
+        role: 'assistant',
+        content,
+        ...(reasoning ? { reasoning_content: reasoning } : {}),
+      },
+    }],
+    created: 1_788_748_800,
+    model: 'scripted-model',
+    object: 'chat.completion',
   }
 }
 
@@ -74,6 +98,50 @@ async function submitApprovalWhenReady(
 }
 
 describe('server runtime HTTP boundary', () => {
+  it('returns ordinary JSON and never opens SSE when stream is false', async () => {
+    const adapter = new ScriptedModelAdapter({
+      script: [{ method: 'complete', result: completion('JSON 回答', 'JSON 思考') }],
+    })
+    const agent = new Agent({
+      model: adapter,
+      session: { createSessionId: () => 'json-session' },
+    })
+    const app = createServerApp({ agent, logger: false })
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/chat',
+        payload: {
+          message: '使用非流式请求',
+          model: {
+            stream: false,
+            reasoning: { enabled: true, effort: 'future-level' },
+          },
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.headers['content-type']).toContain('application/json')
+      expect(response.headers['content-type']).not.toContain('text/event-stream')
+      expect(response.json()).toMatchObject({
+        data: {
+          status: 'completed',
+          sessionId: 'json-session',
+          content: 'JSON 回答',
+          reasoning: 'JSON 思考',
+        },
+      })
+      expect(adapter.calls[0]).toMatchObject({
+        method: 'complete',
+        request: { reasoning: { enabled: true, effort: 'future-level' } },
+      })
+    }
+    finally {
+      await app.close()
+    }
+  })
+
   it('serves AgentLoop output through the frontend SSE and conversation APIs', async () => {
     const adapter = new ScriptedModelAdapter({
       script: [{

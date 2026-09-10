@@ -1,8 +1,10 @@
 import type {
+  ModelCompletion,
   ModelFinishReason,
   ModelFunctionToolCall,
   ModelStreamChunk,
   ModelTokenUsage,
+  ModelToolCall,
 } from '../contracts'
 import { ModelError } from '../contracts'
 
@@ -20,6 +22,65 @@ export interface ModelStepResult {
   readonly toolCalls: readonly ModelFunctionToolCall[]
   readonly finishReason?: ModelFinishReason
   readonly usage?: ModelTokenUsage
+}
+
+/**
+ * 校验并投影一次完整的非流式 completion。
+ *
+ * AgentLoop 最终只需要第一个候选的文本、思考、函数调用、停止原因和 usage；完整原始结果
+ * 仍通过 agent.model.completed 轨迹暴露，不在这里丢失。
+ */
+export function consumeModelCompletion(
+  completion: ModelCompletion,
+  provider: string,
+): ModelStepResult {
+  if (completion.object !== 'chat.completion')
+    throw protocolError(provider, '非流式模型结果 object 必须是 chat.completion')
+  if (!Array.isArray(completion.choices))
+    throw protocolError(provider, '非流式模型结果 choices 必须是数组')
+
+  const choice = completion.choices.find(item => item.index === 0)
+    ?? completion.choices[0]
+  if (!choice)
+    throw protocolError(provider, '非流式模型结果没有候选消息')
+  if (choice.message.role !== 'assistant')
+    throw protocolError(provider, '非流式模型候选必须返回 assistant 消息')
+  if (choice.message.function_call)
+    throw protocolError(provider, '当前 AgentLoop 不支持旧版 function_call')
+  if (choice.message.content !== undefined
+    && choice.message.content !== null
+    && typeof choice.message.content !== 'string') {
+    throw protocolError(provider, '非流式 assistant content 必须是字符串或 null')
+  }
+  if (choice.message.reasoning_content !== undefined
+    && choice.message.reasoning_content !== null
+    && typeof choice.message.reasoning_content !== 'string') {
+    throw protocolError(provider, '非流式 assistant reasoning_content 必须是字符串或 null')
+  }
+
+  const rawToolCalls = (choice.message.tool_calls ?? []) as readonly ModelToolCall[]
+  const toolCalls = rawToolCalls.map((call): ModelFunctionToolCall => {
+    if (call.type === 'custom')
+      throw protocolError(provider, '当前 AgentLoop 不支持 custom 工具调用')
+    if (!call.id || !call.function.name || typeof call.function.arguments !== 'string')
+      throw protocolError(provider, '模型返回了不完整的工具调用')
+    return call
+  })
+  const ids = new Set(toolCalls.map(call => call.id))
+  if (ids.size !== toolCalls.length)
+    throw protocolError(provider, '同一 Step 中的工具调用 ID 必须唯一')
+  if (choice.finish_reason === 'tool_calls' && toolCalls.length === 0)
+    throw protocolError(provider, '模型以 tool_calls 停止，但没有返回工具调用')
+  if (completion.usage)
+    validateUsage(completion.usage, provider)
+
+  return {
+    content: choice.message.content ?? '',
+    reasoning: choice.message.reasoning_content ?? '',
+    toolCalls,
+    ...(choice.finish_reason ? { finishReason: choice.finish_reason } : {}),
+    ...(completion.usage ? { usage: completion.usage } : {}),
+  }
 }
 
 /** 消费标准 chunk，并组装一个完整 Step 的文本、reasoning 和函数调用。 */

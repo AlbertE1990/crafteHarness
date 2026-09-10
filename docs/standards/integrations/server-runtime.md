@@ -13,7 +13,7 @@ CraftAgent 公共协议，不需要复制到产品学习文档中。
 | --------------------------- | ------------------------------------------------- |
 | `src/server/index.ts`       | 读取环境变量、构造 Agent、启动监听                |
 | `src/server/agent-tools.ts` | 定义并静态注册当前应用的第一方工具                |
-| `src/server/app.ts`         | Fastify 路由、SSE 帧、断开取消和前端展示投影      |
+| `src/server/app.ts`         | Fastify 路由、SSE/JSON 传输、断开取消和展示投影   |
 | `src/server/database/*`     | PostgreSQL Runtime 配置、迁移和连通性检查         |
 | `src/server/stores/*`       | 应用 Store；当前 Runtime 使用 PostgreSQL 实现     |
 | `src/craft-agent/agent/*`   | 与传输无关的 Agent 门面、配置、事件和 Session API |
@@ -26,7 +26,7 @@ CraftAgent 公共协议，不需要复制到产品学习文档中。
 ```ts
 const agent = new Agent({
   model: {
-    provider: 'deepseek',
+    adapter: 'deepseek',
     apiKey,
     baseURL,
     model,
@@ -56,6 +56,10 @@ const app = createServerApp({ agent })
 Fastify 将 `message` 映射为 `Agent.run({ input })`，将 `conversationId` 映射为 `sessionId`。浏览器断开时，
 使用同一个 AbortSignal 取消 Agent Run；模型 Adapter 和 Tool Harness 会继续传播该信号。
 
+请求中的 `model.stream` 决定传输：`true` 返回 `text/event-stream`，`false` 返回普通
+`application/json`，其 `data` 是封闭的 `AgentRunResult`。Server 必须把同一设置传入 `Agent.run()`，不能
+出现“HTTP 使用 JSON、内部仍调用 stream()”或相反的双重语义。
+
 ## 5. 标准事件直出与会话查询
 
 Fastify 的聊天 SSE 默认原样输出 `AgentOutputEvent`：
@@ -65,6 +69,10 @@ agent.run(..., {
   onEvent: event => writeSseEvent(reply.raw, event),
 })
 ```
+
+同步 JSON 无法在一个尚未完成的响应中推送审批请求。当前非流式路由不注册交互式审批出口，`ask` 会
+fail-closed 为本次工具失败并交回 AgentLoop；需要审批卡片时必须使用流式模式。若未来需要非流式审批，
+应新增异步任务和 pending 查询/恢复协议。
 
 不得默认把 `sessionId` 改名为 `conversationId`，也不得删除审批事件中的 `runId/sessionId`。如果 Runtime
 必须兼容已有外部 API，可以在 Server 自己增加显式 Adapter。Server 自身在 Agent 外发生的传输错误使用

@@ -20,15 +20,22 @@ const databasePool = createPostgresPool(readPostgresRuntimeConfig())
 const postgresSessionStore = new PostgresSessionStore(databasePool)
 const agent = new Agent({
   model: {
-    provider: 'deepseek',
+    adapter: 'deepseek',
     apiKey,
     baseURL: process.env.DEEPSEEK_BASE_URL?.trim() || 'https://api.deepseek.com',
     model: process.env.DEEPSEEK_MODEL?.trim() || 'deepseek-v4-flash',
-    thinking: process.env.DEEPSEEK_THINKING === 'disabled' ? 'disabled' : 'enabled',
-    reasoningEffort: normalizeReasoningEffort(process.env.DEEPSEEK_REASONING_EFFORT),
   },
   systemPrompt: '你是一个AI助手',
   execution: {
+    model: {
+      stream: true,
+      reasoning: {
+        enabled: process.env.DEEPSEEK_THINKING !== 'disabled',
+        ...(process.env.DEEPSEEK_REASONING_EFFORT?.trim()
+          ? { effort: process.env.DEEPSEEK_REASONING_EFFORT.trim() }
+          : {}),
+      },
+    },
     limits: {
       maxModelSteps: 5,
       maxToolCalls: 16,
@@ -58,14 +65,3 @@ async function start(): Promise<void> {
 }
 
 void start()
-
-/** 环境变量只接受 DeepSeek 当前支持的思考强度。 */
-function normalizeReasoningEffort(
-  value: string | undefined,
-): 'low' | 'high' | 'max' | undefined {
-  if (value === undefined || value === '')
-    return undefined
-  if (value === 'low' || value === 'high' || value === 'max')
-    return value
-  throw new Error('DEEPSEEK_REASONING_EFFORT 必须是 low、high 或 max')
-}

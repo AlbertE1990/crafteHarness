@@ -61,4 +61,5 @@
 
 2026-09-10 的预发布 API 收口将 `ScriptedModelAdapter` 与 `assertModelAdapterContract()` 迁移到
 `test/support`，并删除 `src/craft-agent/adapters/testing`。本记录保留阶段 2.1 当时的交付历史，当前公共边界
-以 ModelAdapter 协议和最新交付记录为准。
+以 ModelAdapter 协议和最新交付记录为准。声明式配置也在后续收口中改为默认 OpenAI Compatible，使用
+`adapter` 选择差异实现、使用 `provider` 记录真实供应商身份。

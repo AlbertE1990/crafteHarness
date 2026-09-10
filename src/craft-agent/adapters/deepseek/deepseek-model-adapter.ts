@@ -7,12 +7,13 @@ import type {
 } from 'openai/resources/chat/completions'
 import type {
   ModelCompletion,
-  ModelError,
   ModelMessage,
+  ModelReasoningOptions,
   ModelRequest,
   ModelStreamChunk,
 } from '../../contracts'
 import type { OpenAICompatibleRequestParams } from '../openai-compatible'
+import { ModelError } from '../../contracts'
 import {
   normalizeOpenAICompatibleChunk,
   normalizeOpenAICompatibleCompletion,
@@ -22,20 +23,18 @@ import {
 
 const DEEPSEEK_PROVIDER = 'deepseek'
 
-/** DeepSeek 思考模式的开关。 */
-export type DeepSeekThinkingMode = 'enabled' | 'disabled'
+/** DeepSeek 请求体内部使用的思考开关，不属于构造配置。 */
+type DeepSeekThinkingMode = 'enabled' | 'disabled'
 
 /** DeepSeek Chat Completions Adapter 的连接与模型配置。 */
 export interface DeepSeekModelAdapterConfig {
   readonly apiKey: string
   readonly baseURL?: string
   readonly model?: string
-  readonly thinking?: DeepSeekThinkingMode
-  readonly reasoningEffort?: 'low' | 'high' | 'max'
 }
 
 interface DeepSeekRequestExtension {
-  readonly thinking: { readonly type: DeepSeekThinkingMode }
+  readonly thinking?: { readonly type: DeepSeekThinkingMode }
   readonly reasoning_effort?: 'low' | 'high' | 'max'
 }
 
@@ -59,9 +58,6 @@ export function getDeepSeekReasoningContent(value: unknown): string {
  * DeepSeek 的消息降级、token 参数和 reasoning 扩展。
  */
 export class DeepSeekModelAdapter extends OpenAICompatibleModelAdapter {
-  private readonly thinking: DeepSeekThinkingMode
-  private readonly reasoningEffort?: 'low' | 'high' | 'max'
-
   /** 创建 DeepSeek 差异层；可注入客户端进行无网络契约测试。 */
   constructor(config: DeepSeekModelAdapterConfig, client?: OpenAI) {
     super({
@@ -70,8 +66,6 @@ export class DeepSeekModelAdapter extends OpenAICompatibleModelAdapter {
       baseURL: config.baseURL?.trim() || 'https://api.deepseek.com',
       model: config.model?.trim() || 'deepseek-v4-flash',
     }, client)
-    this.thinking = config.thinking ?? 'enabled'
-    this.reasoningEffort = config.reasoningEffort
   }
 
   /** 将 DeepSeek 不支持的 developer 消息降级，并完整回放 reasoning_content。 */
@@ -100,14 +94,10 @@ export class DeepSeekModelAdapter extends OpenAICompatibleModelAdapter {
   ): OpenAICompatibleRequestParams {
     const {
       max_completion_tokens: maxCompletionTokens,
+      reasoning_effort: _compatibleReasoningEffort,
       ...compatibleParams
     } = super.createBaseParams(request)
-    const extension: DeepSeekRequestExtension = {
-      thinking: { type: this.thinking },
-      ...(this.reasoningEffort
-        ? { reasoning_effort: this.reasoningEffort }
-        : {}),
-    }
+    const extension = this.createDeepSeekReasoningParams(request.reasoning)
 
     return {
       ...compatibleParams,
@@ -115,6 +105,40 @@ export class DeepSeekModelAdapter extends OpenAICompatibleModelAdapter {
         ? {}
         : { max_tokens: maxCompletionTokens }),
       ...extension,
+    }
+  }
+
+  /** DeepSeek 使用 thinking 开关，并在差异层校验当前支持的 effort。 */
+  private createDeepSeekReasoningParams(
+    reasoning: ModelReasoningOptions | undefined,
+  ): DeepSeekRequestExtension {
+    if (!reasoning)
+      return {}
+    const effort = reasoning.effort
+    if (reasoning.enabled === false && effort) {
+      throw new ModelError({
+        code: 'MODEL_INVALID_REQUEST',
+        message: '关闭 DeepSeek thinking 时不能同时指定 reasoning.effort',
+        provider: DEEPSEEK_PROVIDER,
+      })
+    }
+    let validatedEffort: DeepSeekRequestExtension['reasoning_effort']
+    if (effort) {
+      if (!isDeepSeekReasoningEffort(effort)) {
+        throw new ModelError({
+          code: 'MODEL_INVALID_REQUEST',
+          message: `DeepSeek reasoning.effort 不支持：${effort}`,
+          provider: DEEPSEEK_PROVIDER,
+        })
+      }
+      validatedEffort = effort
+    }
+
+    return {
+      ...(reasoning.enabled === undefined && effort === undefined
+        ? {}
+        : { thinking: { type: reasoning.enabled === false ? 'disabled' : 'enabled' } }),
+      ...(validatedEffort ? { reasoning_effort: validatedEffort } : {}),
     }
   }
 
@@ -132,6 +156,13 @@ export class DeepSeekModelAdapter extends OpenAICompatibleModelAdapter {
   protected override normalizeError(error: unknown): ModelError {
     return normalizeDeepSeekError(error)
   }
+}
+
+/** DeepSeek 当前支持的推理强度只在专属 Adapter 内维护。 */
+function isDeepSeekReasoningEffort(
+  value: string,
+): value is NonNullable<DeepSeekRequestExtension['reasoning_effort']> {
+  return value === 'low' || value === 'high' || value === 'max'
 }
 
 /** 保留兼容 completion 字段，并标准化 DeepSeek reasoning。 */

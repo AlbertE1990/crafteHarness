@@ -39,6 +39,22 @@ interface ModelAdapter {
 Adapter 不在内部自动重试。它只标记错误是否可能重试；当前 Agent Loop 会结合取消和预算归一化终态，
 但不会自动重试模型，尤其不能在已经输出流增量后盲目重放。模型重试需要后续定义独立恢复和计费语义。
 
+AgentLoop 根据一次 Run 的 `stream` 设置选择调用方法：`true` 调用 `stream()`，`false` 调用
+`complete()`。Adapter 必须同时实现两种方法，不能由 Core 把完整响应拆成伪增量，也不能由 HTTP Runtime
+把非流式结果包装成 SSE。
+
+`ModelRequest.reasoning` 表达供应商无关的调用意图：
+
+```ts
+interface ModelReasoningOptions {
+  enabled?: boolean
+  effort?: string
+}
+```
+
+`effort` 使用开放字符串，因为等级集合属于“供应商 + 模型版本”的能力，不是 Agent 状态机的不变量。
+Adapter 负责把它转换为目标字段并验证；不支持某个值时应抛出 `MODEL_INVALID_REQUEST`，不得静默降级。
+
 ## 3. 消息与工具调用
 
 消息角色复用 Chat Completions 的 `developer`、`system`、`user`、`assistant`、`tool` 和旧版
@@ -145,13 +161,15 @@ src/craft-agent/index.ts  -X->  src/craft-agent/adapters
 - 未知兼容字段保留与稳定 `provider` 来源。
 - OpenAI SDK 的取消、超时、鉴权、权限、限流、无效请求和服务错误分类。
 - 用于消息、请求、响应、chunk 和错误差异的 protected 模板方法。
+- 将通用 effort 映射为 Chat Completions 的 `reasoning_effort`；显式关闭映射为 `none`。
 
 通用层不得根据供应商名称执行条件分支。DeepSeek 通过差异层完成：
 
 - `developer` 消息转换为 `system`。
 - `max_completion_tokens` 转换为 `max_tokens`。
 - `reasoning_content` 在流、非流响应和后续 assistant 消息中完整转换。
-- `thinking` 与 `reasoning_effort` 请求扩展。
+- 将每次请求的 `reasoning.enabled/effort` 转换为 `thinking` 与 `reasoning_effort`，并在差异层维护
+  DeepSeek 当前支持的等级。
 
 协议差异无法由这些明确扩展点表达时，应直接实现新的 `ModelAdapter`，不能扭曲兼容层。
 
@@ -175,14 +193,19 @@ reasoning、供应商请求扩展和错误映射等专项测试。
 
 - system prompt、最大模型 Step。
 - provider、模型名、API Key、base URL。
-- 思考模式与思考强度。
+- `execution.model` 中的默认流式方式、思考开关与开放推理强度。
 - 工具事件监听器。
 
-模型配置使用判别联合：
+声明式模型配置遵循“兼容协议默认、供应商差异显式”的规则：
 
-- `provider: 'deepseek'` 使用官方 DeepSeek 差异层。
-- `provider: 'openai-compatible'` 使用通用兼容 Adapter，并以 `providerName` 保存真实来源。
+- 省略 `adapter` 时使用通用 OpenAI Compatible Adapter；API Key、base URL 和模型名不同不构成新 Adapter。
+- `provider` 只保存进入模型事件、错误和诊断的真实供应商名称，默认值为 `openai`。
+- `adapter: 'deepseek'` 使用官方 DeepSeek 差异层。
+- `adapter: 'openai-compatible'` 允许调用方在需要显式协议标识时选择默认兼容实现。
 - 自定义实现直接以 `ModelAdapter` 传入，不增加包装配置。
+
+使用 OpenAI SDK 只代表复用客户端和 Chat Completions 类型，不代表流量经过 OpenAI。请求地址始终由配置的
+`baseURL` 决定。只有请求结构、流事件、工具调用、鉴权或错误语义无法由兼容层表达时，才实现新 Adapter。
 
 环境变量只在外部 Runtime 中读取，再作为显式配置传入。`defineAgentConfig()` 不访问 `process.env`。
 Session Store、审批、预算和观察器位于同一配置根，而不是增加平行的全局配置入口。

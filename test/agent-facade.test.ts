@@ -3,6 +3,7 @@
 import type {
   AgentEvent,
   AgentOutputEvent,
+  ModelCompletion,
   ModelStreamChunk,
   SessionStore,
 } from '../src/craft-agent'
@@ -26,7 +27,54 @@ function chunk(content: string): ModelStreamChunk {
   }
 }
 
+/** 构造门面非流式测试使用的完整响应。 */
+function completion(content: string): ModelCompletion {
+  return {
+    id: `completion-${content}`,
+    choices: [{
+      finish_reason: 'stop',
+      index: 0,
+      logprobs: null,
+      message: { role: 'assistant', content },
+    }],
+    created: 1_788_748_800,
+    model: 'scripted-model',
+    object: 'chat.completion',
+  }
+}
+
 describe('agent facade', () => {
+  it('applies construction defaults and lets one Run override model execution', async () => {
+    const adapter = new ScriptedModelAdapter({
+      script: [
+        { method: 'complete', result: completion('默认非流式') },
+        { method: 'stream', chunks: [chunk('单次改为流式')] },
+      ],
+    })
+    const agent = new Agent({
+      model: adapter,
+      execution: {
+        model: {
+          stream: false,
+          reasoning: { enabled: true, effort: 'high' },
+        },
+      },
+    })
+
+    await agent.run({ sessionId: 'facade-default-model', input: '默认设置' })
+    await agent.run({ sessionId: 'facade-run-model', input: '覆盖设置' }, {
+      model: { stream: true, reasoning: { effort: 'max' } },
+    })
+
+    expect(adapter.calls.map(call => ({
+      method: call.method,
+      reasoning: call.request.reasoning,
+    }))).toEqual([
+      { method: 'complete', reasoning: { enabled: true, effort: 'high' } },
+      { method: 'stream', reasoning: { enabled: true, effort: 'max' } },
+    ])
+  })
+
   it('creates session IDs, emits simplified output and preserves complete traces', async () => {
     const configuredTraces: AgentEvent[] = []
     const runTraces: AgentEvent[] = []

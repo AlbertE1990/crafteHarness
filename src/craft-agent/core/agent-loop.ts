@@ -29,7 +29,8 @@ import {
   normalizeSessionError,
   parseToolArguments,
 } from './errors'
-import { consumeModelStream } from './model-stream'
+import { defineAgentModelExecutionOptions } from './model-options'
+import { consumeModelCompletion, consumeModelStream } from './model-stream'
 import { addUsage, appendReasoning, createResultBase } from './run-state'
 import {
   createLimits,
@@ -72,6 +73,8 @@ export class AgentLoop {
    */
   async run(request: AgentRunRequest, options: AgentRunOptions = {}): Promise<AgentRunResult> {
     const input = validateRequest(request)
+    // 一次 Run 只解析一次模型设置，工具往返后的后续 Step 继续使用相同配置。
+    const modelExecution = defineAgentModelExecutionOptions(options.model)
     const state = this.createRunState(request, options)
     const signals = createRunSignals(this.limits.maxDurationMs, options.signal)
     const eventBase = (): AgentEventBase => ({
@@ -86,6 +89,7 @@ export class AgentLoop {
       type: 'agent.run.started',
       provider: this.config.model.provider,
       model: this.config.model.model,
+      modelExecution,
       limits: this.limits,
     })
 
@@ -142,7 +146,14 @@ export class AgentLoop {
 
         let stepResult: ModelStepResult
         try {
-          stepResult = await this.runModelStep(state, step, signals.signal, eventBase, options.onEvent)
+          stepResult = await this.runModelStep(
+            state,
+            step,
+            modelExecution,
+            signals.signal,
+            eventBase,
+            options.onEvent,
+          )
         }
         catch (error) {
           const interrupted = getInterruption(signals)
@@ -387,6 +398,7 @@ export class AgentLoop {
   private async runModelStep(
     state: MutableRunState,
     step: number,
+    modelExecution: ReturnType<typeof defineAgentModelExecutionOptions>,
     signal: AbortSignal,
     eventBase: () => AgentEventBase,
     listener?: AgentRunOptions['onEvent'],
@@ -410,17 +422,32 @@ export class AgentLoop {
       remainingTokens,
     )
     const toolModels = [...this.tools.values()].map(tool => tool.model)
-    const stream = await this.config.model.stream({
+    const request = {
       messages: deriveModelMessages(snapshot.events),
       ...(toolModels.length > 0
         ? { tools: toolModels, parallel_tool_calls: false as const }
         : {}),
+      ...(modelExecution.reasoning ? { reasoning: modelExecution.reasoning } : {}),
       ...(stepTokenLimit === undefined ? {} : { max_completion_tokens: stepTokenLimit }),
-    }, {
+    }
+    const callOptions = {
       signal,
       runId: state.runId,
       sessionId: state.sessionId,
-    })
+    }
+
+    if (!modelExecution.stream) {
+      const completion = await this.config.model.complete(request, callOptions)
+      await emit(listener, {
+        ...eventBase(),
+        type: 'agent.model.completed',
+        step,
+        completion,
+      })
+      return consumeModelCompletion(completion, this.config.model.provider)
+    }
+
+    const stream = await this.config.model.stream(request, callOptions)
 
     return await consumeModelStream(stream, async (chunk) => {
       await emit(listener, {

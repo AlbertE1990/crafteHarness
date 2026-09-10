@@ -23,9 +23,9 @@ flowchart LR
   Request --> DeepSeek
   DeepSeek --> Compatible[OpenAICompatibleModelAdapter]
   Compatible --> SDK[OpenAI 兼容 SDK]
-  SDK --> Raw[DeepSeek chunk]
+  SDK --> Raw[chunk 或 completion]
   Raw --> Compatible
-  Compatible --> Standard[ModelStreamChunk]
+  Compatible --> Standard[ModelStreamChunk / ModelCompletion]
   Standard --> Agent
   Agent --> SSE[内容 / reasoning]
   Agent --> Harness[工具调用]
@@ -79,22 +79,38 @@ OpenAI 兼容流可能把一个工具调用拆成多个 delta：名称、ID 和 
 
 这项规则属于供应商适配行为；Agent 只认识内部可选字段，不读取 DeepSeek SDK 类型。
 
-## 7. 三种扩展路径
+推理设置也按同一边界流转：应用在 `execution.model` 提供默认值，或在 `Agent.run()` 中按次覆盖；
+AgentLoop 把 `{ enabled, effort }` 放进 `ModelRequest`。公共 effort 是开放字符串，DeepSeek Adapter 再将
+它校验并转换为 `thinking.type` 和 `reasoning_effort`。因此未来模型增加新等级时，核心类型不需要发布
+破坏性修改，只需相应 Adapter 接受该值。
 
-- 只有 base URL、模型名和凭据不同：直接配置 `provider: 'openai-compatible'`。
+## 7. 流式与非流式不是同一种传输
+
+```text
+stream: true  -> ModelAdapter.stream()   -> 多个 ModelStreamChunk
+stream: false -> ModelAdapter.complete() -> 一个 ModelCompletion
+```
+
+AgentLoop 会把两种结果归一化为同一个内部 Step，但轨迹保持真实来源：前者输出
+`agent.model.chunk`，后者输出 `agent.model.completed`。应用选择非流式时直接等待最终
+`AgentRunResult`；HTTP Runtime 应返回 JSON，而不是把完整结果切成一个伪 SSE 帧。
+
+## 8. 三种扩展路径
+
+- 只有 base URL、模型名和凭据不同：省略 `adapter`，直接使用默认 OpenAI Compatible 配置。
 - Chat Completions 兼容但存在少量字段差异：继承通用 Adapter 的 protected 模板方法。
 - 原生协议结构不同：直接实现 `ModelAdapter`，完整转换到内部协议。
 
 不要为了复用而把非兼容协议伪装成兼容服务。具体实现和测试步骤见
 [自定义模型 Adapter 开发实践](./custom-model-adapter.md)。
 
-## 8. 配置和错误
+## 9. 配置和错误
 
 `defineAgentConfig()` 归一化唯一配置根。它保存 Agent 基础参数和模型连接参数，再创建具体 Adapter。
 Adapter 将 SDK 异常转成 `ModelError`，但不会重试；否则重试次数、时间和 token 消耗无法被未来的
 Agent Loop 统一预算。
 
-## 9. 从测试反推设计
+## 10. 从测试反推设计
 
 - [`test/openai-compatible-adapter.test.ts`](../../test/openai-compatible-adapter.test.ts)：通用映射和流错误。
 - [`test/deepseek-adapter.test.ts`](../../test/deepseek-adapter.test.ts)：请求、响应、扩展字段和错误映射。

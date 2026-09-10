@@ -75,6 +75,7 @@ describe('openAI compatible model adapter', () => {
         inputSchema: { type: 'object', additionalProperties: false },
       }],
       max_completion_tokens: 128,
+      reasoning: { enabled: true, effort: 'future-level' },
       parallel_tool_calls: false,
       tool_choice: 'auto',
     })
@@ -98,6 +99,7 @@ describe('openAI compatible model adapter', () => {
         function: { name: 'lookup', strict: true },
       }],
       max_completion_tokens: 128,
+      reasoning_effort: 'future-level',
       parallel_tool_calls: false,
       tool_choice: 'auto',
       stream: true,

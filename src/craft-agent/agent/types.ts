@@ -4,6 +4,7 @@ import type {
 } from '../contracts'
 import type {
   AgentEventListener,
+  AgentModelExecutionOptions,
   AgentRunResult,
 } from '../core'
 import type { JsonObject } from '../types/json'
@@ -49,6 +50,8 @@ export interface AgentExecutionOptions {
   readonly signal?: AbortSignal
   readonly runId?: string
   readonly turnId?: string
+  /** 覆盖本次 Run 的流式输出与推理设置。 */
+  readonly model?: AgentModelExecutionOptions
   /** 适合 CLI、SSE 和业务界面直接消费的标准输出。 */
   readonly onEvent?: AgentOutputEventListener
   /** 适合调试器和轨迹存储的完整 AgentEvent。 */

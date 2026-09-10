@@ -7,12 +7,21 @@ import Agent from 'craft-agent'
 
 const agent = new Agent({
   model: {
-    provider: 'deepseek',
+    adapter: 'deepseek',
     apiKey: process.env.DEEPSEEK_API_KEY!,
+  },
+  execution: {
+    model: {
+      stream: true,
+      reasoning: { enabled: true, effort: 'high' },
+    },
   },
 })
 
-const result = await agent.run({ input: '你好' })
+const result = await agent.run({ input: '你好' }, {
+  // 页面或 CLI 可以按次覆盖；非流式会调用 Adapter.complete()。
+  model: { stream: false },
+})
 ```
 
 完整架构、使用方式与开发规范见[中文项目文档](./docs/README.md)。下方暂时保留原前端模板说明，前端只用于联调。

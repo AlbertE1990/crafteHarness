@@ -128,6 +128,10 @@ describe('chat page conversations', () => {
     expect(existingRequest).toEqual({
       message: '继续提问',
       conversationId: 'chat-existing',
+      model: {
+        stream: true,
+        reasoning: { enabled: true, effort: 'high' },
+      },
     })
     expect(wrapper.text()).toContain('继续回答')
 
@@ -141,8 +145,52 @@ describe('chat page conversations', () => {
     await flushPromises()
 
     const newRequest = JSON.parse(String(fetchMock.mock.calls[4][1]?.body))
-    expect(newRequest).toEqual({ message: '创建新对话' })
+    expect(newRequest).toEqual({
+      message: '创建新对话',
+      model: {
+        stream: true,
+        reasoning: { enabled: true, effort: 'high' },
+      },
+    })
     expect(wrapper.text()).toContain('新会话回答')
+  })
+
+  it('uses ordinary JSON instead of reading SSE when streaming is disabled', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: [] }))
+      .mockResolvedValueOnce(jsonResponse({
+        data: {
+          status: 'completed',
+          stopReason: 'completed',
+          sessionId: 'chat-json',
+          content: '一次性 **JSON** 回答',
+          reasoning: '一次性思考',
+        },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ data: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(ChatPage)
+    await flushPromises()
+
+    const streamToggle = wrapper.findAll('.model-toggle input')[0]
+    await streamToggle!.setValue(false)
+    expect(wrapper.text()).toContain('普通 JSON')
+
+    await wrapper.get('textarea').setValue('非流式提问')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      message: '非流式提问',
+      model: {
+        stream: false,
+        reasoning: { enabled: true, effort: 'high' },
+      },
+    })
+    expect(wrapper.get('.markdown-body strong').text()).toBe('JSON')
+    await wrapper.get('.reasoning-toggle').trigger('click')
+    expect(wrapper.text()).toContain('一次性思考')
+    expect(wrapper.find('.typing-indicator').exists()).toBe(false)
   })
 
   it('replaces the composer with a confirmation card while a tool awaits approval', async () => {

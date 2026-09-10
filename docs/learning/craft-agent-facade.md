@@ -45,8 +45,7 @@ const echoTool = defineTool({
 
 const agent = new Agent({
   model: {
-    provider: 'openai-compatible',
-    providerName: 'my-provider',
+    provider: 'my-provider',
     apiKey: process.env.MODEL_API_KEY!,
     baseURL: 'https://example.com/v1',
     model: 'example-model',
@@ -55,11 +54,17 @@ const agent = new Agent({
     additional: [echoTool],
   },
   execution: {
+    model: {
+      stream: true,
+      reasoning: { enabled: true, effort: 'high' },
+    },
     limits: { maxModelSteps: 8, maxToolCalls: 16 },
   },
 })
 
 const result = await agent.run({ input: '复述 hello' }, {
+  // 页面或 CLI 的手动设置可以只覆盖本次 Run。
+  model: { stream: false, reasoning: { effort: 'max' } },
   onEvent(event) {
     if (event.type === 'message.delta')
       process.stdout.write(event.delta)
@@ -91,6 +96,9 @@ flowchart TD
   Builtins[默认内置工具] --> Normalize
   Normalize --> Tools[最终 AgentTool 数组]
   Request[Agent.run 输入] --> SessionId[复用或生成 sessionId]
+  Defaults[execution.model 默认值] --> Resolve[单次模型设置归一化]
+  Request --> Resolve
+  Resolve --> Loop
   SessionId --> Loop[AgentLoop]
   Adapter --> Loop
   Store <--> Loop
@@ -109,7 +117,8 @@ flowchart TD
 重点是两条输出路径互不替代：应用 UI 通常只需要 `onEvent`，调试器需要 `onTrace`。轨迹暂时是实时接口，
 可分页持久化轨迹仍在后续阶段。
 
-`onEvent` 的 `AgentOutputEvent` 已是标准应用协议，Server 可以直接写入 SSE 或 WebSocket。默认不需要再将
+`onEvent` 的 `AgentOutputEvent` 已是标准应用协议，Server 可以直接写入 SSE 或 WebSocket。非流式调用则
+可以直接等待 `AgentRunResult`，不需要把完整结果伪造成 SSE。默认不需要再将
 `session.started` 改成 `conversation`，也不需要把 `sessionId` 改成 `conversationId`；兼容既有接口时再由
 Runtime 编写自己的投影函数。
 
@@ -127,10 +136,16 @@ sequenceDiagram
   A-->>App: session.started
   A->>L: run(normalized request)
   L->>S: read + append facts
-  L->>M: stream(messages, tools)
-  M-->>L: content/reasoning chunks
-  L-->>A: AgentEvent
-  A-->>App: message.delta
+  alt stream = true
+    L->>M: stream(messages, tools, reasoning)
+    M-->>L: content/reasoning chunks
+    L-->>A: agent.model.chunk
+    A-->>App: message.delta
+  else stream = false
+    L->>M: complete(messages, tools, reasoning)
+    M-->>L: ModelCompletion
+    L-->>A: agent.model.completed
+  end
   L->>S: append final assistant + turn.completed
   L-->>A: agent.run.completed
   A-->>App: message.completed
@@ -147,6 +162,8 @@ sequenceDiagram
 - `listSessions()` 来自 Store 目录，只返回摘要，不维护第二份 Server 内存索引，也不对每项调用 `read()`。
 - `getSession()` 返回的每条消息外层保留 Session Event 关联信息；真正的模型消息位于 `.message`。
 - `onEvent/onTrace` 是观察旁路，不能拿来修改控制流。
+- `execution.model` 是默认值，`Agent.run(..., { model })` 是本次覆盖；同一 Run 的全部 Step 使用同一设置。
+- `reasoning.effort` 不是固定枚举。核心接受非空字符串，Adapter 判断当前供应商和模型是否支持。
 - `toolGuard.evaluate()` 只决定 `allow/deny/ask`；审批等待、超时和重复提交由 Agent 内部处理。
 - 应用通过 `onEvent` 接收审批，通过 `resolveToolApproval()` 提交决定，不需要创建 Broker。
 - 自定义 Store 可以只实现 `append/read`；这时 Agent 能运行，但不能列会话。

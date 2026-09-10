@@ -2,7 +2,9 @@ import type { FastifyInstance, FastifyServerOptions } from 'fastify'
 import type { ServerResponse } from 'node:http'
 import type {
   Agent,
+  AgentModelExecutionOptions,
   AgentOutputEvent,
+  AgentRunResult,
   AgentSessionDetail,
   AgentSessionMessage,
   ModelMessage,
@@ -39,6 +41,11 @@ export interface ServerStreamErrorEvent {
 /** 默认 SSE 直接输出 CraftAgent 标准事件；仅额外保留 Server 自身的传输错误。 */
 export type ServerStreamEvent
   = AgentOutputEvent | ServerStreamErrorEvent
+
+/** 非流式聊天直接返回一次封闭的 Agent Run 结果，不使用 SSE 包装。 */
+export interface ServerChatJsonResponse {
+  readonly data: AgentRunResult
+}
 
 /** 创建 Fastify 应用时注入的 Runtime 和日志配置。 */
 export interface CreateServerAppOptions {
@@ -118,6 +125,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     Body: {
       conversationId?: string
       message: string
+      model?: AgentModelExecutionOptions
     }
   }>('/api/chat', {
     schema: {
@@ -126,6 +134,21 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
         properties: {
           conversationId: { type: 'string' },
           message: { type: 'string', minLength: 1 },
+          model: {
+            type: 'object',
+            properties: {
+              stream: { type: 'boolean' },
+              reasoning: {
+                type: 'object',
+                properties: {
+                  enabled: { type: 'boolean' },
+                  effort: { type: 'string', minLength: 1 },
+                },
+                additionalProperties: false,
+              },
+            },
+            additionalProperties: false,
+          },
         },
         required: ['message'],
         additionalProperties: false,
@@ -133,12 +156,43 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     },
   }, async (request, reply) => {
     const abortController = new AbortController()
+    const modelExecution = request.body.model
+    const useStream = modelExecution?.stream
+      ?? options.agent.config.execution.model.stream
+    const agentRequest = {
+      input: request.body.message,
+      ...(request.body.conversationId
+        ? { sessionId: request.body.conversationId }
+        : {}),
+      ...(!request.body.conversationId
+        ? {
+            sessionMetadata: {
+              source: 'server-runtime',
+              name: createConversationTitle(request.body.message),
+            },
+          }
+        : {}),
+    }
 
     // 浏览器断开连接时取消同一个 Agent Run，模型和工具会收到组合后的 AbortSignal。
     reply.raw.on('close', () => {
       if (!reply.raw.writableFinished)
         abortController.abort()
     })
+
+    if (!useStream) {
+      // 普通 JSON 请求没有实时事件通道，因此不会注册交互式工具审批观察器。
+      // ToolGuard 的 ask 会得到 unavailable 并作为工具失败交回 AgentLoop，而不会永久等待。
+      const result = await options.agent.run(agentRequest, {
+        signal: abortController.signal,
+        model: {
+          ...modelExecution,
+          stream: false,
+        },
+      })
+      const response: ServerChatJsonResponse = { data: result }
+      return response
+    }
 
     reply.hijack()
     reply.raw.writeHead(200, {
@@ -150,21 +204,12 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     reply.raw.flushHeaders()
 
     try {
-      await options.agent.run({
-        input: request.body.message,
-        ...(request.body.conversationId
-          ? { sessionId: request.body.conversationId }
-          : {}),
-        ...(!request.body.conversationId
-          ? {
-              sessionMetadata: {
-                source: 'server-runtime',
-                name: createConversationTitle(request.body.message),
-              },
-            }
-          : {}),
-      }, {
+      await options.agent.run(agentRequest, {
         signal: abortController.signal,
+        model: {
+          ...modelExecution,
+          stream: true,
+        },
         onEvent: async (event) => {
           // AgentOutputEvent 已是 CraftAgent 的标准应用协议，默认原样写出即可。
           await writeSseEvent(reply.raw, event)

@@ -16,11 +16,17 @@ import Agent, { defineTool } from 'craft-agent'
 
 const agent = new Agent({
   model: {
-    provider: 'deepseek',
+    adapter: 'deepseek',
     apiKey: process.env.DEEPSEEK_API_KEY!,
   },
   tools: {
     additional: [myTool],
+  },
+  execution: {
+    model: {
+      stream: true,
+      reasoning: { enabled: true, effort: 'high' },
+    },
   },
   systemPrompt: '你是一个可靠的助手。',
 })
@@ -30,9 +36,27 @@ const agent = new Agent({
 
 `model` 接受三种形式：
 
-- `{ provider: 'deepseek', ... }`：创建内置 DeepSeek Adapter。
-- `{ provider: 'openai-compatible', ... }`：创建 OpenAI Chat Completions 兼容 Adapter。
+- `{ apiKey, model, baseURL?, provider? }`：默认创建 OpenAI Chat Completions 兼容 Adapter；`provider`
+  只表示进入轨迹和错误的真实供应商名称。
+- `{ adapter: 'deepseek', ... }`：创建处理 thinking、reasoning 和消息差异的 DeepSeek Adapter。
+- `{ adapter: 'openai-compatible', ... }`：需要显式表达协议时，也可选择默认兼容 Adapter。
 - 直接传入开发者实现的 `ModelAdapter`。
+
+Kimi、Moonshot 或其他只改变 API Key、base URL 和模型名的兼容服务不需要新增 Adapter：
+
+```ts
+const kimiAgent = new Agent({
+  model: {
+    provider: 'moonshot',
+    apiKey: process.env.MOONSHOT_API_KEY!,
+    baseURL: 'https://api.moonshot.cn/v1',
+    model: 'kimi-k3',
+  },
+})
+```
+
+使用 `openai` npm 包只代表复用兼容客户端；实际请求目标由 `baseURL` 决定。旧的 `providerName` 和将
+`provider: 'deepseek' | 'openai-compatible'` 用作 Adapter 判别的配置不再接受。
 
 ## 3. 配置归一化
 
@@ -42,6 +66,7 @@ const agent = new Agent({
 归一化规则：
 
 - 模型声明转换为 `ModelAdapter`。
+- `execution.model` 补齐为一次 Run 的默认流式与推理设置，`stream` 默认为 `true`。
 - `execution.limits` 由 AgentLoop 的同一规则补齐并校验。
 - 工具配置解析为包含内置、覆盖和应用追加工具的最终只读数组。
 - 未传 Store 时创建 `MemorySessionStore`。
@@ -52,11 +77,11 @@ const agent = new Agent({
 
 配置按职责分为三组，同时让高频且已经自成体系的 `model`、`tools`、`toolGuard` 保持短路径：
 
-| 配置组          | 字段                        | 职责                           |
-| --------------- | --------------------------- | ------------------------------ |
-| `session`       | `store`、`createSessionId`  | 持久化端口和会话标识           |
-| `execution`     | `limits`、`now`、`createId` | AgentLoop 预算及确定性运行依赖 |
-| `observability` | `onTrace`、`onToolEvent`    | 不参与控制流的全局观察器       |
+| 配置组          | 字段                                 | 职责                               |
+| --------------- | ------------------------------------ | ---------------------------------- |
+| `session`       | `store`、`createSessionId`           | 持久化端口和会话标识               |
+| `execution`     | `model`、`limits`、`now`、`createId` | 模型调用方式、预算及确定性运行依赖 |
+| `observability` | `onTrace`、`onToolEvent`             | 不参与控制流的全局观察器           |
 
 `systemPrompt` 描述 Agent 行为，因此不放入模型供应商连接配置。`toolGuard` 本身已经是完整的风险评估组，
 不会再套一层容易暗示沙箱或身份认证能力的 `security`。项目尚未发布，旧的扁平字段不属于兼容输入。
@@ -113,6 +138,10 @@ const result = await agent.run({
   input: '杭州天气怎么样？',
   sessionId: 'optional-session-id',
 }, {
+  model: {
+    stream: false,
+    reasoning: { enabled: true, effort: 'high' },
+  },
   signal,
   onEvent(event) {
     // 可被 Runtime 直接输出的标准应用事件
@@ -122,6 +151,11 @@ const result = await agent.run({
   },
 })
 ```
+
+`Agent.run()` 的 `model` 优先于 `execution.model`，未提供的嵌套字段继续继承构造默认值。同一 Run
+在进入 AgentLoop 前只解析一次设置，因此工具调用后的后续 Model Step 不会自行切换流式方式或推理等级。
+`reasoning.effort` 是开放字符串，CraftAgent 核心不假设固定枚举；具体 Adapter 必须转换并校验当前模型
+支持的值。显式 `reasoning.enabled: false` 时不会继承默认 effort。
 
 `onEvent` 输出以下稳定应用事件：
 
@@ -137,7 +171,9 @@ const result = await agent.run({
 序列化这些事件，不再把 `sessionId` 改名为 `conversationId`，也不删除 `runId` 等关联字段。只有宿主已有
 外部协议或确实需要裁剪字段时，才自行增加 Adapter；该 Adapter 不属于 CraftAgent 核心。
 
-`onTrace` 输出完整 `AgentEvent`，包括 Run、Step、模型 chunk、工具调用、Tool Harness 子事件和终态。
+`onTrace` 输出完整 `AgentEvent`，包括 Run、Step、模型输出、工具调用、Tool Harness 子事件和终态。流式
+模型输出使用 `agent.model.chunk`，非流式完整响应使用 `agent.model.completed`；
+`agent.run.started.modelExecution` 记录本次 Run 的最终设置。
 `observability.onTrace` 提供全局观察，单次 run 的 `onTrace` 只观察本次执行。所有观察器异常都会隔离；
 阶段 6 再通过 DiagnosticSink 记录。
 

@@ -3,10 +3,13 @@
 import type {
   AgentConfigInput,
   AgentExecutionConfig,
+  AgentModelExecutionOptions,
   AgentObservabilityConfig,
   AgentSessionConfig,
   AgentToolInput,
+  DefinedAgentModelExecutionOptions,
   ModelAdapter,
+  ModelReasoningOptions,
   SessionStore,
   ToolGuardConfig,
 } from '../src/craft-agent'
@@ -28,6 +31,9 @@ import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 function acceptsPublicTypes(_value: {
   config: AgentConfigInput
   execution?: AgentExecutionConfig
+  modelExecution?: AgentModelExecutionOptions
+  definedModelExecution?: DefinedAgentModelExecutionOptions
+  reasoning?: ModelReasoningOptions
   observability?: AgentObservabilityConfig
   session?: AgentSessionConfig
   tool?: AgentToolInput
@@ -53,6 +59,28 @@ describe('craft-agent public API', () => {
     expect(DEFAULT_TOOL_APPROVAL_TIMEOUT_MS).toBeGreaterThan(0)
     expect('normalizeAgentToolDefinitions' in publicApi).toBe(false)
     expect('ToolApprovalManager' in publicApi).toBe(false)
+  })
+
+  it('types OpenAI compatible as the default and keeps provider separate from adapter', () => {
+    const kimiConfig: AgentConfigInput = {
+      model: {
+        provider: 'moonshot',
+        apiKey: 'test-key',
+        baseURL: 'https://api.moonshot.cn/v1',
+        model: 'kimi-k3',
+      },
+    }
+    const deepSeekConfig: AgentConfigInput = {
+      model: {
+        adapter: 'deepseek',
+        apiKey: 'test-key',
+        model: 'deepseek-flash',
+      },
+      execution: { model: { reasoning: { enabled: true, effort: 'high' } } },
+    }
+
+    expect(defineAgentConfig(kimiConfig).model.provider).toBe('moonshot')
+    expect(defineAgentConfig(deepSeekConfig).model.provider).toBe('deepseek')
   })
 
   it('exports production adapters only from the dedicated advanced entry', () => {

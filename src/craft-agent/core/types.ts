@@ -1,5 +1,7 @@
 import type {
   ModelAdapter,
+  ModelCompletion,
+  ModelReasoningOptions,
   ModelStreamChunk,
   ModelTokenUsage,
   SessionStore,
@@ -55,11 +57,27 @@ export interface AgentRunRequest {
   readonly sessionMetadata?: JsonObject
 }
 
+/** 单次 Agent Run 的模型调用方式；同一 Run 的所有 Step 使用同一份解析结果。 */
+export interface AgentModelExecutionOptions {
+  /** true 使用增量流，false 使用 ModelAdapter.complete()；默认 true。 */
+  readonly stream?: boolean
+  /** 通用推理意图；具体供应商字段和合法 effort 由 ModelAdapter 决定。 */
+  readonly reasoning?: ModelReasoningOptions
+}
+
+/** 经过边界校验和默认值合并后的模型调用方式。 */
+export interface DefinedAgentModelExecutionOptions {
+  readonly stream: boolean
+  readonly reasoning?: Readonly<ModelReasoningOptions>
+}
+
 /** 单次 Run 的取消、关联和实时观察选项。 */
 export interface AgentRunOptions {
   readonly signal?: AbortSignal
   readonly runId?: string
   readonly turnId?: string
+  /** 覆盖本次 Run 的流式与推理设置。 */
+  readonly model?: AgentModelExecutionOptions
   /** 观察器异常会被隔离，不能改变 Agent 的执行结果。 */
   readonly onEvent?: AgentEventListener
 }
@@ -163,6 +181,7 @@ export type AgentEvent = AgentEventBase & (
     readonly type: 'agent.run.started'
     readonly provider: string
     readonly model: string
+    readonly modelExecution: DefinedAgentModelExecutionOptions
     readonly limits: AgentLoopLimits
   }
   | { readonly type: 'agent.turn.started' }
@@ -171,6 +190,11 @@ export type AgentEvent = AgentEventBase & (
     readonly type: 'agent.model.chunk'
     readonly step: number
     readonly chunk: ModelStreamChunk
+  }
+  | {
+    readonly type: 'agent.model.completed'
+    readonly step: number
+    readonly completion: ModelCompletion
   }
   | {
     readonly type: 'agent.tool.call.started'

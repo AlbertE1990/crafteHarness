@@ -1,5 +1,9 @@
 <script setup lang="ts">
-import type { AgentOutputEvent } from '../craft-agent'
+import type {
+  AgentModelExecutionOptions,
+  AgentOutputEvent,
+  AgentRunResult,
+} from '../craft-agent'
 import MarkdownIt from 'markdown-it'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
@@ -64,6 +68,11 @@ interface ConversationDetailResponse {
   data: ConversationDetail
 }
 
+/** 非流式 /api/chat 的普通 JSON 响应。 */
+interface ChatJsonResponse {
+  data: AgentRunResult
+}
+
 const messages = ref<Message[]>([])
 const conversations = ref<ConversationSummary[]>([])
 const input = ref('')
@@ -75,6 +84,10 @@ const isSidebarOpen = ref(false)
 const errorMessage = ref('')
 const conversationError = ref('')
 const failedPrompt = ref('')
+// 模型选项由用户显式控制，并随每次请求传给 Agent.run()，不会通过自然语言推断。
+const useStreaming = ref(true)
+const reasoningEnabled = ref(true)
+const reasoningEffort = ref('high')
 // undefined 表示普通 Composer；有值时由状态决定展示审批卡片或自动拒绝卡片。
 const toolInteraction = ref<ToolInteraction>()
 // 审批 POST 失败只影响卡片提交，可恢复 pending 后重试，不应中断原聊天 SSE。
@@ -505,6 +518,8 @@ async function send(prompt = input.value, appendUserMessage = true) {
 
   isSending.value = true
   isAwaitingFirstToken.value = true
+  // 锁定本次请求设置；即使以后允许发送期间操作 UI，也不能改变正在执行的 Run。
+  const requestUsesStreaming = useStreaming.value
   let assistantMessageId: number | undefined
   let receivedDone = false
 
@@ -521,14 +536,30 @@ async function send(prompt = input.value, appendUserMessage = true) {
       content: '',
       reasoning: '',
       isReasoningOpen: true,
-      isStreaming: true,
+      isStreaming: requestUsesStreaming,
     }
     messages.value.push(assistantMessage)
     return assistantMessage
   }
 
   try {
-    const requestBody: { message: string, conversationId?: string } = { message }
+    const reasoning: NonNullable<AgentModelExecutionOptions['reasoning']>
+      = reasoningEnabled.value
+        ? {
+            enabled: true,
+            ...(reasoningEffort.value.trim()
+              ? { effort: reasoningEffort.value.trim() }
+              : {}),
+          }
+        : { enabled: false }
+    const requestBody: {
+      message: string
+      conversationId?: string
+      model: AgentModelExecutionOptions
+    } = {
+      message,
+      model: { stream: requestUsesStreaming, reasoning },
+    }
     if (conversationId.value)
       requestBody.conversationId = conversationId.value
 
@@ -541,90 +572,110 @@ async function send(prompt = input.value, appendUserMessage = true) {
     if (!response.ok)
       throw new Error(`请求失败（${response.status}）`)
 
-    await readEventStream(response, (event) => {
-      if (event.type === 'session.started') {
-        conversationId.value = event.sessionId
-        return
-      }
+    if (!requestUsesStreaming) {
+      const payload: unknown = await response.json()
+      if (!isChatJsonResponse(payload))
+        throw new Error('服务端返回了无法识别的非流式结果')
 
-      if (event.type === 'error' || event.type === 'server.error')
-        throw new Error(event.message)
+      const result = payload.data
+      conversationId.value = result.sessionId
+      if (result.status !== 'completed')
+        throw new Error(result.error.message)
 
-      if (event.type === 'tool.approval.requested') {
-        // Agent Run 仍在原 SSE 中等待；这里只替换 Composer，不能结束 readEventStream。
-        toolInteraction.value = {
-          kind: 'approval',
-          approvalId: event.approvalId,
-          callId: event.callId,
-          toolName: event.toolName,
-          reason: event.reason,
-          ...(event.title ? { title: event.title } : {}),
-          ...(event.details ? { details: event.details } : {}),
-          input: event.input,
-          risk: event.risk,
-          expiresAt: event.expiresAt,
-          status: 'pending',
-        }
-        startApprovalCountdown(event.expiresAt)
-        isAwaitingFirstToken.value = false
-        return
-      }
-
-      if (event.type === 'tool.approval.resolved') {
-        // approvalId 必须匹配当前卡片，迟到的旧事件不能覆盖新审批状态。
-        if (toolInteraction.value?.approvalId === event.approvalId) {
-          toolInteraction.value.status = event.outcome
-          stopApprovalCountdown()
-        }
-        return
-      }
-
-      if (event.type === 'tool.guard.denied') {
-        // deny 没有人工审批和 approvalId，因此卡片只展示原因，不渲染操作按钮。
-        toolInteraction.value = {
-          kind: 'denied',
-          callId: event.callId,
-          toolName: event.toolName,
-          reason: event.reason,
-          status: 'policy-denied',
-        }
-        stopApprovalCountdown()
-        isAwaitingFirstToken.value = false
-        return
-      }
-
-      if (event.type === 'message.delta') {
-        // 两个频道共用一个助手消息，但分别追加到 reasoning 和 content。
-        const assistantMessage = ensureAssistantMessage()
-        if (event.channel === 'reasoning') {
-          assistantMessage.reasoning += event.delta
-          assistantMessage.isReasoningOpen = true
-        }
-        else {
-          assistantMessage.content += event.delta
-        }
-        isAwaitingFirstToken.value = false
-        void scrollToLatest('auto')
-        return
-      }
-
-      conversationId.value = event.sessionId
       receivedDone = true
-      if (assistantMessageId === undefined && (event.content || event.reasoning)) {
-        const assistantMessage = ensureAssistantMessage()
-        assistantMessage.content = event.content
-        assistantMessage.reasoning = event.reasoning ?? ''
-      }
+      const assistantMessage = ensureAssistantMessage()
+      assistantMessage.content = result.content
+      assistantMessage.reasoning = result.reasoning
+      assistantMessage.isStreaming = false
+      assistantMessage.isReasoningOpen = false
+      isAwaitingFirstToken.value = false
+    }
+    else {
+      await readEventStream(response, (event) => {
+        if (event.type === 'session.started') {
+          conversationId.value = event.sessionId
+          return
+        }
 
-      const assistantMessage = messages.value.find(item => item.id === assistantMessageId)
-      if (assistantMessage) {
-        // done 携带完整值作为无增量场景的兜底；正常流式路径不重复追加。
-        assistantMessage.content ||= event.content
-        assistantMessage.reasoning ||= event.reasoning ?? ''
-        assistantMessage.isStreaming = false
-        assistantMessage.isReasoningOpen = false
-      }
-    })
+        if (event.type === 'error' || event.type === 'server.error')
+          throw new Error(event.message)
+
+        if (event.type === 'tool.approval.requested') {
+          // Agent Run 仍在原 SSE 中等待；这里只替换 Composer，不能结束 readEventStream。
+          toolInteraction.value = {
+            kind: 'approval',
+            approvalId: event.approvalId,
+            callId: event.callId,
+            toolName: event.toolName,
+            reason: event.reason,
+            ...(event.title ? { title: event.title } : {}),
+            ...(event.details ? { details: event.details } : {}),
+            input: event.input,
+            risk: event.risk,
+            expiresAt: event.expiresAt,
+            status: 'pending',
+          }
+          startApprovalCountdown(event.expiresAt)
+          isAwaitingFirstToken.value = false
+          return
+        }
+
+        if (event.type === 'tool.approval.resolved') {
+          // approvalId 必须匹配当前卡片，迟到的旧事件不能覆盖新审批状态。
+          if (toolInteraction.value?.approvalId === event.approvalId) {
+            toolInteraction.value.status = event.outcome
+            stopApprovalCountdown()
+          }
+          return
+        }
+
+        if (event.type === 'tool.guard.denied') {
+          // deny 没有人工审批和 approvalId，因此卡片只展示原因，不渲染操作按钮。
+          toolInteraction.value = {
+            kind: 'denied',
+            callId: event.callId,
+            toolName: event.toolName,
+            reason: event.reason,
+            status: 'policy-denied',
+          }
+          stopApprovalCountdown()
+          isAwaitingFirstToken.value = false
+          return
+        }
+
+        if (event.type === 'message.delta') {
+          // 两个频道共用一个助手消息，但分别追加到 reasoning 和 content。
+          const assistantMessage = ensureAssistantMessage()
+          if (event.channel === 'reasoning') {
+            assistantMessage.reasoning += event.delta
+            assistantMessage.isReasoningOpen = true
+          }
+          else {
+            assistantMessage.content += event.delta
+          }
+          isAwaitingFirstToken.value = false
+          void scrollToLatest('auto')
+          return
+        }
+
+        conversationId.value = event.sessionId
+        receivedDone = true
+        if (assistantMessageId === undefined && (event.content || event.reasoning)) {
+          const assistantMessage = ensureAssistantMessage()
+          assistantMessage.content = event.content
+          assistantMessage.reasoning = event.reasoning ?? ''
+        }
+
+        const assistantMessage = messages.value.find(item => item.id === assistantMessageId)
+        if (assistantMessage) {
+          // done 携带完整值作为无增量场景的兜底；正常流式路径不重复追加。
+          assistantMessage.content ||= event.content
+          assistantMessage.reasoning ||= event.reasoning ?? ''
+          assistantMessage.isStreaming = false
+          assistantMessage.isReasoningOpen = false
+        }
+      })
+    }
 
     if (!receivedDone)
       throw new Error('流式响应意外中断')
@@ -646,6 +697,20 @@ async function send(prompt = input.value, appendUserMessage = true) {
     isAwaitingFirstToken.value = false
     await scrollToLatest()
   }
+}
+
+/** 只验证页面实际消费的 AgentRunResult 字段，详细协议仍由 CraftAgent 类型定义。 */
+function isChatJsonResponse(value: unknown): value is ChatJsonResponse {
+  if (typeof value !== 'object' || value === null || !('data' in value))
+    return false
+  const data = (value as { data?: unknown }).data
+  if (typeof data !== 'object' || data === null)
+    return false
+  const result = data as Partial<AgentRunResult>
+  return (result.status === 'completed' || result.status === 'stopped' || result.status === 'failed')
+    && typeof result.sessionId === 'string'
+    && typeof result.content === 'string'
+    && typeof result.reasoning === 'string'
 }
 
 /** 使用上一次失败的原始提示词重试，避免聊天区出现重复的用户气泡。 */
@@ -889,6 +954,38 @@ onBeforeUnmount(() => {
 
         <footer class="composer-area">
           <div class="composer-content">
+            <div class="model-controls" aria-label="模型运行设置">
+              <label class="model-toggle">
+                <input v-model="useStreaming" type="checkbox" :disabled="isSending">
+                <span>流式输出</span>
+              </label>
+              <label class="model-toggle">
+                <input v-model="reasoningEnabled" type="checkbox" :disabled="isSending">
+                <span>启用思考</span>
+              </label>
+              <label class="reasoning-effort-control">
+                <span>推理等级</span>
+                <!-- 开放文本允许未来模型使用新等级；最终合法值由当前 ModelAdapter 校验。 -->
+                <input
+                  v-model="reasoningEffort"
+                  list="reasoning-effort-options"
+                  :disabled="isSending || !reasoningEnabled"
+                  aria-label="推理等级"
+                >
+                <datalist id="reasoning-effort-options">
+                  <option value="none" />
+                  <option value="minimal" />
+                  <option value="low" />
+                  <option value="medium" />
+                  <option value="high" />
+                  <option value="xhigh" />
+                  <option value="max" />
+                </datalist>
+              </label>
+              <span v-if="!useStreaming" class="transport-hint">
+                普通 JSON · 不支持交互式审批
+              </span>
+            </div>
             <div v-if="errorMessage" class="error-banner" role="alert">
               <div class="flex gap-2 items-center">
                 <div i-carbon-warning-alt-filled shrink-0 />
@@ -1628,6 +1725,45 @@ onBeforeUnmount(() => {
   background: rgb(248 250 252 / 82%);
 }
 
+.model-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-bottom: 9px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.model-toggle,
+.reasoning-effort-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.model-toggle input {
+  accent-color: #2563eb;
+}
+
+.reasoning-effort-control input {
+  width: 82px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  padding: 3px 6px;
+  color: #475569;
+  background: white;
+  font: inherit;
+}
+
+.reasoning-effort-control input:disabled {
+  opacity: 0.5;
+}
+
+.transport-hint {
+  color: #b45309;
+}
+
 .tool-confirm-card {
   padding: 14px 16px;
   border: 1px solid #fdba74;
@@ -1993,6 +2129,12 @@ onBeforeUnmount(() => {
 :global(html.dark) .conversation-sidebar,
 :global(html.dark) .composer-area {
   background: rgb(15 23 42 / 92%);
+}
+
+:global(html.dark) .reasoning-effort-control input {
+  border-color: #475569;
+  color: #cbd5e1;
+  background: #1e293b;
 }
 
 :global(html.dark) .conversation-item:hover:not(:disabled) {

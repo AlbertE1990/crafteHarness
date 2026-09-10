@@ -1,4 +1,10 @@
-import type { AgentEvent, ModelAdapter, ModelStreamChunk, SessionStore } from '../src/craft-agent'
+import type {
+  AgentEvent,
+  ModelAdapter,
+  ModelCompletion,
+  ModelStreamChunk,
+  SessionStore,
+} from '../src/craft-agent'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import {
@@ -29,6 +35,56 @@ function chunk(
   }
 }
 
+/** 构造非流式路径使用的单候选 completion。 */
+function completion(content: string, reasoning = ''): ModelCompletion {
+  return {
+    id: 'completion-non-stream',
+    choices: [{
+      finish_reason: 'stop',
+      index: 0,
+      logprobs: null,
+      message: {
+        role: 'assistant',
+        content,
+        ...(reasoning ? { reasoning_content: reasoning } : {}),
+      },
+    }],
+    created: 1_788_748_800,
+    model: 'scripted-model',
+    object: 'chat.completion',
+    provider: 'scripted',
+    usage: {
+      completion_tokens: 3,
+      prompt_tokens: 5,
+      total_tokens: 8,
+    },
+  }
+}
+
+/** 构造一次完整的非流式函数工具调用。 */
+function toolCompletion(): ModelCompletion {
+  return {
+    id: 'completion-non-stream-tool',
+    choices: [{
+      finish_reason: 'tool_calls',
+      index: 0,
+      logprobs: null,
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{
+          id: 'call-non-stream-tool',
+          type: 'function',
+          function: { name: 'non_stream_echo', arguments: '{"value":"hello"}' },
+        }],
+      },
+    }],
+    created: 1_788_748_800,
+    model: 'scripted-model',
+    object: 'chat.completion',
+  }
+}
+
 /** 创建确定性的内存 Store，事件 ID 不参与测试业务断言。 */
 function createStore(): MemorySessionStore {
   let event = 0
@@ -39,6 +95,92 @@ function createStore(): MemorySessionStore {
 }
 
 describe('agent loop', () => {
+  it('uses complete() and emits one completion trace when stream is disabled', async () => {
+    const adapter = new ScriptedModelAdapter({
+      script: [{ method: 'complete', result: completion('完整回答', '完整思考') }],
+    })
+    const events: AgentEvent[] = []
+    const loop = new AgentLoop({ model: adapter, store: createStore() })
+
+    const result = await loop.run({
+      sessionId: 'session-non-stream',
+      input: '使用普通响应',
+    }, {
+      model: {
+        stream: false,
+        reasoning: { enabled: true, effort: 'future-level' },
+      },
+      onEvent: event => events.push(event),
+    })
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      content: '完整回答',
+      reasoning: '完整思考',
+      usage: { total_tokens: 8 },
+    })
+    expect(adapter.calls).toEqual([
+      expect.objectContaining({
+        method: 'complete',
+        request: expect.objectContaining({
+          reasoning: { enabled: true, effort: 'future-level' },
+        }),
+      }),
+    ])
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'agent.run.started',
+        modelExecution: {
+          stream: false,
+          reasoning: { enabled: true, effort: 'future-level' },
+        },
+      }),
+      expect.objectContaining({ type: 'agent.model.completed' }),
+    ]))
+    expect(events.some(event => event.type === 'agent.model.chunk')).toBe(false)
+  })
+
+  it('keeps tool calls inside the non-streaming AgentLoop path', async () => {
+    const tool = defineTool({
+      name: 'non_stream_echo',
+      description: '返回输入',
+      inputSchema: z.strictObject({ value: z.string() }),
+      outputSchema: z.strictObject({ value: z.string() }),
+      security: { risk: 'safe', capabilities: [], idempotent: true },
+      execute: input => input,
+    })
+    const adapter = new ScriptedModelAdapter({
+      script: [
+        { method: 'complete', result: toolCompletion() },
+        { method: 'complete', result: completion('工具后回答') },
+      ],
+    })
+    const loop = new AgentLoop({
+      model: adapter,
+      store: createStore(),
+      tools: [createAgentTool(tool)],
+    })
+
+    const result = await loop.run({
+      sessionId: 'session-non-stream-tool',
+      input: '调用工具',
+    }, { model: { stream: false } })
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      content: '工具后回答',
+      steps: 2,
+      toolCalls: 1,
+    })
+    expect(adapter.calls.map(call => call.method)).toEqual(['complete', 'complete'])
+    expect(adapter.calls[1]?.request.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: 'tool',
+        tool_call_id: 'call-non-stream-tool',
+      }),
+    ]))
+  })
+
   it('creates a Session, streams a final answer and commits the completed Turn', async () => {
     const store = createStore()
     const adapter = new ScriptedModelAdapter({

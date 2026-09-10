@@ -9,8 +9,7 @@
 ```ts
 const agent = new Agent({
   model: {
-    provider: 'openai-compatible',
-    providerName: 'my-provider',
+    provider: 'my-provider',
     apiKey: process.env.MY_PROVIDER_API_KEY!,
     baseURL: 'https://example.com/v1',
     model: 'my-model',
@@ -18,7 +17,8 @@ const agent = new Agent({
 })
 ```
 
-DeepSeek 直接使用 `provider: 'deepseek'`，其 thinking、reasoning 和消息差异已经由官方 Adapter 处理。
+不填写 `adapter` 时默认使用 OpenAI Compatible。DeepSeek 使用 `adapter: 'deepseek'`，其 thinking、
+reasoning 和消息差异已经由官方 Adapter 处理。
 只有服务不是 Chat Completions 兼容，或者兼容接口存在无法用配置表达的差异时，才新增 Adapter。
 
 ## 2. OpenAI 兼容供应商的差异层
@@ -27,11 +27,13 @@ DeepSeek 直接使用 `provider: 'deepseek'`，其 thinking、reasoning 和消�
 
 - `toMessage()`：角色或 reasoning 回放差异。
 - `createBaseParams()`：请求字段或 token 参数差异。
+- `createReasoningParams()`：兼容协议中的推理字段差异；供应商存在独立开关时必须覆盖。
 - `normalizeCompletion()`：非流式供应商扩展。
 - `normalizeChunk()`：流式供应商扩展。
 - `normalizeError()`：SDK 之外的错误类型。
 
-不要根据 `provider` 名称在通用基类中增加条件分支。一个差异只属于某个供应商时，就留在对应目录。
+不要根据 `provider` 名称在通用基类中增加条件分支。`provider` 只是诊断身份，不参与 Adapter 选择；
+一个差异只属于某个供应商时，就留在对应目录。
 可参考 `src/craft-agent/adapters/deepseek/deepseek-model-adapter.ts`。
 
 ## 3. 非兼容协议的最小实现

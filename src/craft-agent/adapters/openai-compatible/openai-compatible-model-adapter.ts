@@ -17,6 +17,7 @@ import type {
   ModelCustomToolCall,
   ModelFunctionToolCall,
   ModelMessage,
+  ModelReasoningOptions,
   ModelRequest,
   ModelStreamChunk,
   ModelTokenUsage,
@@ -122,6 +123,7 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
 
   /** 创建兼容请求主体；供应商差异层可在保留标准语义的前提下扩展。 */
   protected createBaseParams(request: ModelRequest): OpenAICompatibleRequestParams {
+    const reasoning = this.createReasoningParams(request.reasoning)
     return {
       model: this.model,
       messages: request.messages.map(message => this.toMessage(message)),
@@ -137,7 +139,31 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
       ...(request.tool_choice === undefined
         ? {}
         : { tool_choice: request.tool_choice }),
+      ...reasoning,
     }
+  }
+
+  /**
+   * 将通用推理意图转换为 OpenAI Chat Completions 字段。
+   *
+   * effort 保持开放字符串，由目标服务最终校验；显式关闭映射为 OpenAI 的 `none`。
+   * 存在不同语义的兼容供应商应在自己的差异层覆盖本方法。
+   */
+  protected createReasoningParams(
+    reasoning: ModelReasoningOptions | undefined,
+  ): Record<string, unknown> {
+    if (!reasoning)
+      return {}
+    if (reasoning.enabled === false && reasoning.effort) {
+      throw new ModelError({
+        code: 'MODEL_INVALID_REQUEST',
+        message: '关闭模型推理时不能同时指定 reasoning.effort',
+        provider: this.provider,
+      })
+    }
+    if (reasoning.enabled === false)
+      return { reasoning_effort: 'none' }
+    return reasoning.effort ? { reasoning_effort: reasoning.effort } : {}
   }
 
   /** 标准化非流响应；供应商差异层可以增加 reasoning 等字段。 */

@@ -22,6 +22,7 @@ import type {
 } from './types'
 import { randomUUID } from 'node:crypto'
 import { AgentLoop } from '../core'
+import { defineAgentModelExecutionOptions } from '../core/model-options'
 import { readSessionSnapshot } from '../sessions'
 import { defineAgentConfig } from './config'
 import { ToolApprovalManager } from './tool-approval-manager'
@@ -104,6 +105,11 @@ export class Agent {
       throw new TypeError('Agent sessionId 不能为空')
 
     const runId = createRunId(options.runId, this.config)
+    // 在进入循环前一次性解析，确保同一 Run 的多个模型 Step 不会使用不同设置。
+    const modelExecution = defineAgentModelExecutionOptions(
+      options.model,
+      this.config.execution.model,
+    )
     // 没有应用事件出口时 ask 会得到 unavailable；这避免无法展示的审批长期占用内存。
     const stopObservingApprovals = options.onEvent
       ? this.approvalManager.observeRun(
@@ -126,6 +132,7 @@ export class Agent {
         runId,
         ...(options.signal ? { signal: options.signal } : {}),
         ...(options.turnId ? { turnId: options.turnId } : {}),
+        model: modelExecution,
         onEvent: async (event) => {
           await emitTrace(this.config.observability.onTrace, event)
           await emitTrace(options.onTrace, event)

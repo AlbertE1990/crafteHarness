@@ -26,24 +26,27 @@ describe('agent config', () => {
   it('keeps agent and model settings under one configuration root', () => {
     const config = defineAgentConfig({
       systemPrompt: '  你是测试助手  ',
-      execution: { limits: { maxModelSteps: 8 } },
+      execution: {
+        model: { stream: false, reasoning: { enabled: true, effort: 'max' } },
+        limits: { maxModelSteps: 8 },
+      },
       model: {
-        provider: 'deepseek',
+        adapter: 'deepseek',
         apiKey: 'test-key',
         baseURL: 'https://api.deepseek.com',
         model: 'deepseek-v4-pro',
-        thinking: 'enabled',
-        reasoningEffort: 'max',
       },
     })
 
     expect(config).toMatchObject({
       systemPrompt: '你是测试助手',
-      execution: { limits: { maxModelSteps: 8, maxToolCalls: 32 } },
+      execution: {
+        model: { stream: false, reasoning: { enabled: true, effort: 'max' } },
+        limits: { maxModelSteps: 8, maxToolCalls: 32 },
+      },
       model: {
         provider: 'deepseek',
         model: 'deepseek-v4-pro',
-        reasoningEffort: 'max',
       },
     })
     expect(Object.isFrozen(config)).toBe(true)
@@ -57,13 +60,31 @@ describe('agent config', () => {
     expect(() => defineAgentConfig({
       execution: { limits: { maxModelSteps: 0 } },
       model: {
-        provider: 'deepseek',
+        adapter: 'deepseek',
         apiKey: 'test-key',
         baseURL: 'https://api.deepseek.com',
         model: 'deepseek-v4-flash',
-        thinking: 'enabled',
       },
     })).toThrow('maxModelSteps')
+  })
+
+  it('validates model execution defaults without fixing provider effort enums in Core', () => {
+    const model = new ScriptedModelAdapter({ script: [] })
+    const config = defineAgentConfig({
+      model,
+      execution: {
+        model: { reasoning: { enabled: true, effort: 'provider-future-level' } },
+      },
+    })
+
+    expect(config.execution.model).toEqual({
+      stream: true,
+      reasoning: { enabled: true, effort: 'provider-future-level' },
+    })
+    expect(() => defineAgentConfig({
+      model,
+      execution: { model: { reasoning: { effort: ' ' } } },
+    })).toThrow('reasoning.effort 必须是非空字符串')
   })
 
   it('rejects removed flat fields and unknown grouped fields', () => {
@@ -87,8 +108,7 @@ describe('agent config', () => {
   it('creates the built-in OpenAI compatible adapter from the same config root', () => {
     const config = defineAgentConfig({
       model: {
-        provider: 'openai-compatible',
-        providerName: 'compatible-cloud',
+        provider: 'compatible-cloud',
         apiKey: 'test-key',
         baseURL: 'https://example.com/v1',
         model: 'compatible-model',
@@ -99,6 +119,53 @@ describe('agent config', () => {
       provider: 'compatible-cloud',
       model: 'compatible-model',
     })
+  })
+
+  it('allows explicitly selecting the OpenAI compatible default adapter', () => {
+    const config = defineAgentConfig({
+      model: {
+        adapter: 'openai-compatible',
+        apiKey: 'test-key',
+        model: 'openai-model',
+      },
+    })
+
+    expect(config.model).toMatchObject({
+      provider: 'openai',
+      model: 'openai-model',
+    })
+  })
+
+  it('rejects removed model discriminators instead of silently ignoring them', () => {
+    expect(() => defineAgentConfig({
+      model: {
+        provider: 'openai-compatible',
+        providerName: 'legacy-provider',
+        apiKey: 'test-key',
+        model: 'legacy-model',
+      },
+    } as unknown as Parameters<typeof defineAgentConfig>[0])).toThrow(
+      '请选择 adapter: \'openai-compatible\'',
+    )
+
+    expect(() => defineAgentConfig({
+      model: {
+        provider: 'legacy-provider',
+        providerName: 'legacy-provider',
+        apiKey: 'test-key',
+        model: 'legacy-model',
+      },
+    } as unknown as Parameters<typeof defineAgentConfig>[0])).toThrow(
+      'Agent config.model 包含未知字段：providerName',
+    )
+
+    expect(() => defineAgentConfig({
+      model: {
+        provider: 'deepseek',
+        apiKey: 'test-key',
+        model: 'deepseek-model',
+      },
+    })).toThrow('请选择 adapter: \'deepseek\'')
   })
 
   it('returns a custom adapter without creating a second configuration root', () => {

@@ -12,7 +12,9 @@ import type {
 import type {
   AgentEventListener,
   AgentLoopLimits,
+  AgentModelExecutionOptions,
   AgentTool,
+  DefinedAgentModelExecutionOptions,
 } from '../core'
 import type {
   ToolEventListener,
@@ -23,6 +25,7 @@ import { randomUUID } from 'node:crypto'
 import { DeepSeekModelAdapter } from '../adapters/deepseek'
 import { OpenAICompatibleModelAdapter } from '../adapters/openai-compatible'
 import { builtinToolNames, createBuiltinTools } from '../builtins/registry'
+import { defineAgentModelExecutionOptions } from '../core/model-options'
 import { createLimits } from '../core/stop-policy'
 import { MemorySessionStore } from '../sessions'
 import { normalizeAgentToolDefinitions } from './normalize-tools'
@@ -30,16 +33,21 @@ import { defineToolGuardConfig } from './tool-guard'
 
 /** 使用内置 DeepSeek Adapter 时需要的声明式配置。 */
 export interface DeepSeekAgentModelConfig extends DeepSeekModelAdapterConfig {
-  readonly provider: 'deepseek'
+  /** DeepSeek 存在 thinking、reasoning 和消息回放差异，因此需要显式选择专属差异层。 */
+  readonly adapter: 'deepseek'
   readonly apiKey: string
 }
 
-/** 使用任意 OpenAI Chat Completions 兼容服务时需要的声明式配置。 */
+/**
+ * 使用任意 OpenAI Chat Completions 兼容服务时需要的声明式配置。
+ *
+ * 这是声明式模型配置的默认分支；普通兼容供应商无需填写 adapter 或实现 ModelAdapter。
+ */
 export interface OpenAICompatibleAgentModelConfig
   extends Omit<OpenAICompatibleModelAdapterConfig, 'provider'> {
-  readonly provider: 'openai-compatible'
+  readonly adapter?: 'openai-compatible'
   /** 写入模型事件的真实供应商名称，默认 `openai`。 */
-  readonly providerName?: string
+  readonly provider?: string
 }
 
 /** Agent 支持内置模型配置，也允许直接传入自定义 ModelAdapter。 */
@@ -79,8 +87,10 @@ export interface AgentSessionConfig {
   readonly createSessionId?: () => string
 }
 
-/** AgentLoop 的预算和确定性运行基础设施。 */
+/** AgentLoop 的模型调用方式、预算和确定性运行基础设施。 */
 export interface AgentExecutionConfig {
+  /** 所有 Run 默认采用的模型调用方式；Agent.run() 可以按次覆盖。 */
+  readonly model?: AgentModelExecutionOptions
   /** 单次 Run 的模型步数、工具调用数、耗时和 Token 预算。 */
   readonly limits?: Partial<AgentLoopLimits>
   /** 测试或宿主环境可注入的时钟。 */
@@ -108,7 +118,7 @@ export interface AgentConfigInput {
   readonly toolGuard?: ToolGuardConfig
   /** Session Store 和会话标识配置。 */
   readonly session?: AgentSessionConfig
-  /** AgentLoop 预算、时钟和运行标识配置。 */
+  /** AgentLoop 模型调用方式、预算、时钟和运行标识配置。 */
   readonly execution?: AgentExecutionConfig
   /** 全局轨迹与工具事件观察器。 */
   readonly observability?: AgentObservabilityConfig
@@ -122,6 +132,7 @@ export interface DefinedAgentSessionConfig {
 
 /** defineAgentConfig() 归一化后的执行配置。 */
 export interface DefinedAgentExecutionConfig {
+  readonly model: DefinedAgentModelExecutionOptions
   readonly limits: AgentLoopLimits
   readonly now: () => Date
   readonly createId?: AgentIdFactory
@@ -162,7 +173,7 @@ export function defineAgentConfig(input: AgentConfigInput): DefinedAgentConfig {
   assertOptionalConfigGroup(input.execution, 'execution')
   assertOptionalConfigGroup(input.observability, 'observability')
   assertKnownConfigFields(input.session, ['store', 'createSessionId'], 'Agent config.session')
-  assertKnownConfigFields(input.execution, ['limits', 'now', 'createId'], 'Agent config.execution')
+  assertKnownConfigFields(input.execution, ['model', 'limits', 'now', 'createId'], 'Agent config.execution')
   assertKnownConfigFields(
     input.observability,
     ['onToolEvent', 'onTrace'],
@@ -192,6 +203,7 @@ export function defineAgentConfig(input: AgentConfigInput): DefinedAgentConfig {
   const model = createModelAdapter(input.model)
   const tools = createTools(input.tools)
   const limits = createLimits(input.execution?.limits)
+  const modelExecution = defineAgentModelExecutionOptions(input.execution?.model)
   const toolGuard = defineToolGuardConfig(input.toolGuard)
   const systemPrompt = input.systemPrompt?.trim()
   const now = input.execution?.now ?? (() => new Date())
@@ -202,6 +214,7 @@ export function defineAgentConfig(input: AgentConfigInput): DefinedAgentConfig {
     createSessionId,
   })
   const execution = Object.freeze({
+    model: modelExecution,
     limits,
     now,
     ...(input.execution?.createId ? { createId: input.execution.createId } : {}),
@@ -352,21 +365,42 @@ function createModelAdapter(input: AgentModelInput): ModelAdapter {
     return input
   }
 
-  if (input.provider === 'deepseek')
-    return new DeepSeekModelAdapter(input)
-  if (input.provider === 'openai-compatible') {
-    return new OpenAICompatibleModelAdapter({
-      apiKey: input.apiKey,
-      model: input.model,
-      ...(input.baseURL ? { baseURL: input.baseURL } : {}),
-      ...(input.providerName ? { provider: input.providerName } : {}),
+  const config = input as DeepSeekAgentModelConfig | OpenAICompatibleAgentModelConfig
+  if (config.adapter === 'deepseek') {
+    assertKnownConfigFields(
+      config,
+      ['adapter', 'apiKey', 'baseURL', 'model'],
+      'Agent config.model',
+    )
+    return new DeepSeekModelAdapter({
+      apiKey: config.apiKey,
+      ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+      ...(config.model ? { model: config.model } : {}),
     })
   }
+  if (config.adapter !== undefined && config.adapter !== 'openai-compatible')
+    throw new TypeError(`不支持的 Agent model adapter：${String(config.adapter)}`)
 
-  throw new TypeError('不支持的 Agent model 配置')
+  if (config.adapter === undefined
+    && (config.provider === 'deepseek' || config.provider === 'openai-compatible')) {
+    throw new TypeError(
+      `Agent config.model.provider 只表示真实供应商；请选择 adapter: '${config.provider}'`,
+    )
+  }
+  assertKnownConfigFields(
+    config,
+    ['adapter', 'provider', 'apiKey', 'baseURL', 'model'],
+    'Agent config.model',
+  )
+  return new OpenAICompatibleModelAdapter({
+    apiKey: config.apiKey,
+    model: config.model,
+    ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+    ...(config.provider ? { provider: config.provider } : {}),
+  })
 }
 
-/** 使用行为字段而非 provider 名称识别直接传入的自定义 Adapter。 */
+/** 使用行为字段而非 adapter/provider 名称识别直接传入的自定义 Adapter。 */
 function isModelAdapter(input: AgentModelInput): input is ModelAdapter {
   return typeof (input as ModelAdapter).complete === 'function'
     && typeof (input as ModelAdapter).stream === 'function'

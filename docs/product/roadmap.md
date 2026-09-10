@@ -28,7 +28,8 @@ flowchart LR
   P45 --> P46[阶段 4.6<br/>会话读模型与 PostgreSQL Store<br/>已完成]
   P46 --> P47[阶段 4.7<br/>ToolGuard 与内置审批管理<br/>已完成]
   P47 --> P48[阶段 4.8<br/>配置分组与公共 API 收口<br/>已完成]
-  P48 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
+  P48 --> P49[阶段 4.9<br/>单次模型设置与非流式 JSON<br/>已完成]
+  P49 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -229,6 +230,7 @@ flowchart LR
 已完成范围：
 
 - `AgentConfigInput` 按 `session`、`execution`、`observability` 分组，同时保留模型、工具和 ToolGuard 的短路径。
+- 默认提供 OpenAI Compatible 声明式模型配置，只有供应商协议差异才要求显式选择或实现 Adapter。
 - 输入配置和 `agent.config` 使用相同分组，不保留旧扁平配置兼容层。
 - 新增可公开命名的 `AgentToolInput`，内部工具归一化实现继续隐藏。
 - CraftAgent 根入口改为显式导出白名单，生产 Adapter 保留独立高级入口。
@@ -237,7 +239,19 @@ flowchart LR
 
 详细交付见[阶段 4.8 记录](./deliveries/delivery-014-config-and-public-api.md)。
 
-## 17. 阶段 5：轨迹持久化与查询（下一阶段）
+## 17. 阶段 4.9：单次模型设置与非流式 JSON（已完成）
+
+已完成范围：
+
+- `execution.model` 定义流式与推理默认值，`Agent.run()` 支持按次覆盖。
+- 通用推理等级使用开放字符串，由具体 Adapter 维护合法集合和字段映射。
+- AgentLoop 同时执行 `stream()` 与 `complete()`，并为完整响应提供独立轨迹事件。
+- 当前联调 Runtime 在流式时使用 SSE，非流式时返回普通 JSON。
+- 明确同步 JSON 无法承载中途人工审批；当前 fail-closed，未来如有需求再设计异步任务协议。
+
+详细交付见[阶段 4.9 记录](./deliveries/delivery-015-run-model-options-and-json.md)。
+
+## 18. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -247,7 +261,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 CraftAgent 核心协议。
 
-## 18. 阶段 6：异常诊断
+## 19. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -260,7 +274,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 19. 阶段 7：长期安全与扩展（最低优先级）
+## 20. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

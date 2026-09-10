@@ -22,10 +22,22 @@ export interface ModelTokenUsage {
   readonly [extension: string]: unknown
 }
 
+/**
+ * 一次模型调用的通用推理设置。
+ *
+ * `effort` 刻意使用开放字符串：不同供应商、不同模型支持的等级并不相同，合法值应由
+ * 具体 ModelAdapter 校验。`enabled` 也由 Adapter 转换为供应商自己的开关语义。
+ */
+export interface ModelReasoningOptions {
+  readonly enabled?: boolean
+  readonly effort?: string
+}
+
 /** 一次模型请求。模型标识和供应商连接配置归具体 Adapter，而不是每次请求。 */
 export interface ModelRequest {
   readonly messages: readonly ModelMessage[]
   readonly tools?: readonly ToolModelDefinition[]
+  readonly reasoning?: ModelReasoningOptions
   readonly max_completion_tokens?: number
   readonly parallel_tool_calls?: boolean
   readonly tool_choice?: 'none' | 'auto' | 'required'

@@ -35,12 +35,17 @@
 
 - 高频且已经自成体系的能力保持短路径，例如 `model`、`tools` 和 `toolGuard`。
 - `session` 只包含 Store 和 Session ID 等会话基础设施。
-- `execution` 只包含循环预算、时钟和运行标识等执行依赖。
+- `execution` 只包含模型调用方式、循环预算、时钟和运行标识等执行期设置。
 - `observability` 只包含不改变业务控制流的观察器。
 - 不为了视觉整齐创建只有一个字段的对象，也不使用会暗示不存在能力的名称。例如仅有 ToolGuard 时不能命名为
   `security`，否则容易让人误认为同时提供了认证、权限或沙箱。
 - 输入配置和对外暴露的归一化配置保持同样分组，避免 `new Agent(input)` 与 `agent.config` 使用两套路径。
 - 项目未发布时直接移除旧扁平字段，不维护双形态识别和兼容分支。
+- 多个供应商共享同一网络协议时，默认提供协议级 Adapter；只改变 endpoint、凭据和模型名不能要求使用者
+  编写新 Adapter。供应商专属 Adapter 只承载真实协议差异。
+- `adapter` 表示实现选择，`provider` 表示轨迹和错误中的真实诊断身份，两个概念不得复用同一字段。
+- 供应商或模型会扩展的能力值不能在 Core 固定枚举；Core 使用稳定意图和开放值，具体 Adapter 负责
+  映射并校验，例如 `reasoning.effort`。
 
 ### 1.3 公共导出与测试代码边界
 
@@ -189,6 +194,8 @@ executeAttempt(tool, input, {
 - `completed`、`stopped` 和 `failed` 必须分开建模；预算耗尽不伪装成模型或基础设施异常。
 - Session 版本冲突不得静默合并，也不得在缺少恢复协议时自动重放模型和工具。
 - 实时事件观察器属于旁路；观察器故障不能更改执行结果，后续由 DiagnosticSink 记录其异常。
+- 流式和非流式必须调用 Adapter 的真实 `stream/complete` 方法；不得把完整结果伪装成增量流。一次 Run
+  的模型执行设置在进入循环前解析一次，后续 Step 不得读取可变 UI 或全局状态。
 - 并行、重试和恢复不能只通过 `Promise.all` 或外层循环临时加入，必须先定义提交、取消、计费和副作用语义。
 
 详细行为见[Agent Loop 协议](./protocols/agent-loop.md)。

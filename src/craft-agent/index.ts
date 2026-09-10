@@ -72,6 +72,7 @@ export type {
   ModelInstructionMessage,
   ModelMessage,
   ModelMessageRole,
+  ModelReasoningOptions,
   ModelRequest,
   ModelStreamChoice,
   ModelStreamChunk,
@@ -110,6 +111,7 @@ export type {
   AgentEventListener,
   AgentLoopConfig,
   AgentLoopLimits,
+  AgentModelExecutionOptions,
   AgentRunCompletedResult,
   AgentRunErrorInfo,
   AgentRunFailedResult,
@@ -122,6 +124,7 @@ export type {
   AgentStepOutcome,
   AgentTokenUsage,
   AgentTool,
+  DefinedAgentModelExecutionOptions,
 } from './core'
 
 export {
