@@ -31,10 +31,9 @@ export const echoTool = defineTool({
   outputSchema: z.strictObject({
     text: z.string(),
   }),
-  security: {
+  metadata: {
     risk: 'safe',
     capabilities: [],
-    idempotent: true,
   },
   execute(input) {
     return { text: input.text }
@@ -85,8 +84,9 @@ ModelAdapter，并在收到同名 Tool Call 时通过 Tool Harness 执行。
 2. 非法输入在 `attempts: 0` 时拒绝，业务函数没有执行。
 3. 错误成功值返回 `INVALID_TOOL_OUTPUT`。
 4. 外部依赖使用 mock，不在核心测试中访问真实网络或数据库。
-5. 配置重试时，同时覆盖可重试和不可重试错误。
-6. 申请外部能力时，覆盖许可和拒绝路径。
+5. 配置 `execution.retry` 时，同时覆盖可重试和不可重试错误。
+6. 配置 Guard 时，覆盖 allow、deny、ask 以及两层合并路径。
+7. 使用运行上下文时，验证租户和用户信息能到达 Guard 与 execute。
 
 可参考 [`test/server-tools.test.ts`](../../test/server-tools.test.ts) 中的 `invokeServerTool()`。
 
@@ -109,7 +109,8 @@ pnpm dev
 
 ## 6. 常见问题
 
-- `security.risk` 是工具声明，不是授权；最终决定属于 Runtime 策略。
-- 配置 `retry` 前必须建立真实幂等语义，不能只把 `idempotent` 改成 `true`。
+- `metadata` 是应用自定义 JSON 标签，不会自动触发授权或拒绝。
+- 配置 `execution.retry` 就表示允许重复调用；写操作必须自行建立真实幂等语义。
+- 工具级 Guard 处理参数风险，全局 Guard 处理部署、租户、用户和环境约束；缺省 Guard 直接允许。
 - `outputSchema` 即使不发送给模型，也必须验证业务和上游返回值。
 - 大型结果应分页或摘要，不能依赖提高模型内容大小上限。

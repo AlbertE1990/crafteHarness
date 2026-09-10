@@ -37,7 +37,7 @@ async function invokeServerTool(
   return await tool.execute(rawInput, {
     callId: `test-${name}`,
     // 本辅助函数只测试工具业务边界；参数级 Guard 决定由下面的独立测试覆盖。
-    policy: { evaluate: () => ({ decision: 'allow' }) },
+    globalToolGuard: () => ({ decision: 'allow' }),
     ...options,
   })
 }
@@ -69,7 +69,6 @@ describe('server tools through CraftAgent', () => {
       description: '返回测试文本。',
       inputSchema: z.strictObject({ text: z.string() }),
       outputSchema: z.strictObject({ text: z.string() }),
-      security: { risk: 'safe', capabilities: [], idempotent: true },
       execute: input => input,
     })
     const [customTool] = defineAgentConfig({
@@ -81,7 +80,7 @@ describe('server tools through CraftAgent', () => {
 
     const result = await customTool.execute({ text: 'hello' }, {
       callId: 'custom-tool-call',
-      policy: { evaluate: () => ({ decision: 'allow' }) },
+      globalToolGuard: () => ({ decision: 'allow' }),
     })
 
     expect(customTool.model.name).toBe('echo_for_test')
@@ -202,8 +201,8 @@ describe('server tools through CraftAgent', () => {
   })
 
   it('uses validated arguments to allow reads, ask for writes and deny protected deletes', async () => {
-    /** 调用应用提供的评估函数，并补齐 Agent 正常提供的工具和关联上下文。 */
-    const evaluate = async (input: unknown) => await serverToolGuard.evaluate({
+    /** 直接调用工具自己的参数级 Guard，并补齐 Agent 正常提供的关联上下文。 */
+    const evaluate = async (input: unknown) => await manageRuntimeResourceTool.toolGuard!({
       runId: 'run-server-tool',
       sessionId: 'session-server-tool',
       callId: 'call-server-tool',
@@ -211,9 +210,10 @@ describe('server tools through CraftAgent', () => {
         name: manageRuntimeResourceTool.name,
         description: manageRuntimeResourceTool.description,
         inputSchema: manageRuntimeResourceTool.model.inputSchema,
-        security: manageRuntimeResourceTool.security,
+        metadata: manageRuntimeResourceTool.metadata,
       },
       input,
+      context: undefined,
       signal: new AbortController().signal,
     })
 
@@ -239,6 +239,22 @@ describe('server tools through CraftAgent', () => {
       decision: 'deny',
       reason: '受保护资源 protected/system 禁止删除',
     })
+
+    // 当前服务的全局 Guard 只约束部署允许的工具集合，不重复实现参数级规则。
+    expect(serverToolGuard.evaluate!({
+      runId: 'run-server-tool',
+      sessionId: 'session-server-tool',
+      callId: 'call-server-tool',
+      tool: {
+        name: manageRuntimeResourceTool.name,
+        description: manageRuntimeResourceTool.description,
+        inputSchema: manageRuntimeResourceTool.model.inputSchema,
+        metadata: manageRuntimeResourceTool.metadata,
+      },
+      input: { operation: 'write' },
+      context: undefined,
+      signal: new AbortController().signal,
+    })).toEqual({ decision: 'allow' })
   })
 
   it('keeps raw business functions available for focused unit tests', async () => {

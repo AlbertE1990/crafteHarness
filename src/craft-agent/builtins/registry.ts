@@ -13,9 +13,9 @@ export const builtinToolNames = Object.freeze([
 export type BuiltinToolName = typeof builtinToolNames[number]
 
 /** 每次创建 Agent 配置时生成独立的内置工具注册项。 */
-export function createBuiltinTools(): readonly AgentTool[] {
+export function createBuiltinTools<TContext = undefined>(): readonly AgentTool<TContext>[] {
   return Object.freeze([
-    createAgentTool(createCurrentTimeTool()),
-    createAgentTool(createCalculatorTool()),
+    createAgentTool(createCurrentTimeTool()) as unknown as AgentTool<TContext>,
+    createAgentTool(createCalculatorTool()) as unknown as AgentTool<TContext>,
   ])
 }

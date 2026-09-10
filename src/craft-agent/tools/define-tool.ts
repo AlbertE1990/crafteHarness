@@ -1,9 +1,26 @@
-import type { JsonSchema } from '../types/json'
-import type { DefinedTool, ToolDefinition, ToolRetryPolicy } from './types'
+import type { JsonObject, JsonSchema } from '../types/json'
+import type {
+  DefinedTool,
+  ToolDefinition,
+  ToolExecutionConfig,
+  ToolRetryPolicy,
+} from './types'
 import { z } from 'zod'
+import { cloneJsonObject, isJsonObject } from '../types/json'
 
 const TOOL_NAME_PATTERN = /^[A-Z][\w-]{0,63}$/i
 const MAX_TIMER_DELAY_MS = 2_147_483_647
+const TOOL_DEFINITION_FIELDS = new Set([
+  'name',
+  'description',
+  'inputSchema',
+  'outputSchema',
+  'metadata',
+  'toolGuard',
+  'execution',
+  'renderOutput',
+  'execute',
+])
 
 /**
  * 校验并冻结工具定义，同时预编译模型输入和成功输出的 JSON Schema。
@@ -13,9 +30,11 @@ const MAX_TIMER_DELAY_MS = 2_147_483_647
 export function defineTool<
   TInputSchema extends z.ZodType,
   TOutputSchema extends z.ZodType,
+  TContext = undefined,
+  TMetadata extends JsonObject = JsonObject,
 >(
-  definition: ToolDefinition<TInputSchema, TOutputSchema>,
-): DefinedTool<TInputSchema, TOutputSchema> {
+  definition: ToolDefinition<TInputSchema, TOutputSchema, TContext, TMetadata>,
+): DefinedTool<TInputSchema, TOutputSchema, TContext, TMetadata> {
   validateDefinition(definition)
 
   const inputJsonSchema = toJsonSchema(definition.inputSchema, 'input')
@@ -24,16 +43,17 @@ export function defineTool<
   const outputJsonSchema = toJsonSchema(definition.outputSchema, 'output')
   assertClosedObjects(inputJsonSchema, 'inputSchema', definition.name)
   assertClosedObjects(outputJsonSchema, 'outputSchema', definition.name)
-  const retry = definition.retry ? Object.freeze({ ...definition.retry }) : undefined
-  const security = Object.freeze({
-    ...definition.security,
-    capabilities: Object.freeze([...(definition.security.capabilities ?? [])]),
-  })
+  const rawMetadata = definition.metadata ?? {} as TMetadata
+  if (!isJsonObject(rawMetadata))
+    throw new TypeError(`工具 ${definition.name} 的 metadata 必须是可序列化 JSON 对象`)
+  // 复制后再冻结，避免 defineTool() 意外冻结调用方仍在其他地方使用的原始 metadata。
+  const metadata = cloneJsonObject(rawMetadata) as TMetadata
+  const execution = freezeExecutionConfig(definition.execution)
 
   return Object.freeze({
     ...definition,
-    retry,
-    security,
+    metadata: deepFreeze(metadata),
+    ...(execution ? { execution } : {}),
     model: Object.freeze({
       name: definition.name,
       description: definition.description.trim(),
@@ -53,9 +73,21 @@ function toJsonSchema(schema: z.ZodType, io: 'input' | 'output'): JsonSchema {
 }
 
 /** 注册期检查可以提前暴露配置错误，而不是等模型真正调用工具。 */
-function validateDefinition(
-  definition: ToolDefinition<z.ZodType, z.ZodType>,
+function validateDefinition<
+  TInputSchema extends z.ZodType,
+  TOutputSchema extends z.ZodType,
+  TContext,
+  TMetadata extends JsonObject,
+>(
+  definition: ToolDefinition<TInputSchema, TOutputSchema, TContext, TMetadata>,
 ): void {
+  if (typeof definition !== 'object' || definition === null)
+    throw new TypeError('工具定义必须是对象')
+  const unknownField = Object.keys(definition)
+    .find(field => !TOOL_DEFINITION_FIELDS.has(field))
+  if (unknownField)
+    throw new TypeError(`工具定义包含未知字段：${unknownField}`)
+
   if (!TOOL_NAME_PATTERN.test(definition.name)) {
     throw new TypeError(
       '工具名必须以字母开头，只包含字母、数字、下划线或连字符，且不超过 64 个字符',
@@ -65,20 +97,46 @@ function validateDefinition(
   if (!definition.description.trim())
     throw new TypeError(`工具 ${definition.name} 缺少有效 description`)
 
-  if (definition.timeoutMs !== undefined) {
-    if (!Number.isInteger(definition.timeoutMs)
-      || definition.timeoutMs <= 0
-      || definition.timeoutMs > MAX_TIMER_DELAY_MS) {
-      throw new RangeError(`工具 ${definition.name} 的 timeoutMs 必须是有效的正整数`)
-    }
-  }
+  if (definition.toolGuard !== undefined && typeof definition.toolGuard !== 'function')
+    throw new TypeError(`工具 ${definition.name} 的 toolGuard 必须是函数`)
 
-  if (definition.retry) {
-    validateRetryPolicy(definition.retry, definition.name)
-    // 此处只能检查配置声明是否一致，无法从任意业务代码中证明真实幂等性。
-    if (!definition.security.idempotent)
-      throw new TypeError(`工具 ${definition.name} 只有声明为幂等后才能配置 retry`)
+  if (definition.execution !== undefined) {
+    if (typeof definition.execution !== 'object'
+      || definition.execution === null
+      || Array.isArray(definition.execution)) {
+      throw new TypeError(`工具 ${definition.name} 的 execution 必须是对象`)
+    }
+    const unknownField = Object.keys(definition.execution)
+      .find(field => field !== 'timeoutMs' && field !== 'retry')
+    if (unknownField)
+      throw new TypeError(`工具 ${definition.name} 的 execution 包含未知字段：${unknownField}`)
+
+    const timeoutMs = definition.execution.timeoutMs
+    if (timeoutMs !== undefined
+      && (!Number.isInteger(timeoutMs)
+        || timeoutMs <= 0
+        || timeoutMs > MAX_TIMER_DELAY_MS)) {
+      throw new RangeError(`工具 ${definition.name} 的 execution.timeoutMs 必须是有效的正整数`)
+    }
+
+    if (definition.execution.retry)
+      validateRetryPolicy(definition.execution.retry, definition.name)
   }
+}
+
+/** 复制并冻结执行配置，防止注册后改变重试次数或超时。 */
+function freezeExecutionConfig(
+  execution: ToolExecutionConfig | undefined,
+): Readonly<ToolExecutionConfig> | undefined {
+  if (!execution)
+    return undefined
+  const retry = execution.retry
+    ? Object.freeze({ ...execution.retry })
+    : undefined
+  return Object.freeze({
+    ...(execution.timeoutMs !== undefined ? { timeoutMs: execution.timeoutMs } : {}),
+    ...(retry ? { retry } : {}),
+  })
 }
 
 /** 检查退避参数，避免无效策略在执行时制造忙循环或超长定时器。 */

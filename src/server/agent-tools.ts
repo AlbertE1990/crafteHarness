@@ -42,12 +42,13 @@ export const getUserLocationTool = defineTool({
     timezone: z.string().nullable(),
     accuracy: z.literal('approximate_ip'),
   }),
-  timeoutMs: 10_000,
-  retry: NETWORK_RETRY_POLICY,
-  security: {
+  execution: {
+    timeoutMs: 10_000,
+    retry: NETWORK_RETRY_POLICY,
+  },
+  metadata: {
     risk: 'read',
     capabilities: ['network:public'],
-    idempotent: true,
   },
   async execute(input, context) {
     return await getUserLocation(input, context)
@@ -81,12 +82,13 @@ export const getWeatherTool = defineTool({
     wind_scale: z.number().finite(),
     observed_at: z.string(),
   }),
-  timeoutMs: 20_000,
-  retry: NETWORK_RETRY_POLICY,
-  security: {
+  execution: {
+    timeoutMs: 20_000,
+    retry: NETWORK_RETRY_POLICY,
+  },
+  metadata: {
     risk: 'read',
     capabilities: ['network:public'],
-    idempotent: true,
   },
   async execute(input, context) {
     return await getWeather(input, context)
@@ -96,8 +98,8 @@ export const getWeatherTool = defineTool({
 /**
  * 一个真实产生进程内副作用、但影响范围受控的审批演示工具。
  *
- * 工具定义声明最大风险为 destructive；Runtime Policy 再依据 operation/resource 对单次调用
- * 分别作 allow、ask 或 deny 决定，从而覆盖审批链路的三种分支。
+ * metadata 只为观察和全局策略提供业务标签；工具自己的 toolGuard 依据 operation/resource
+ * 对单次调用作 allow、ask 或 deny 决定，从而覆盖审批链路的三种分支。
  */
 export const manageRuntimeResourceTool = defineTool({
   name: 'manage_runtime_resource',
@@ -109,12 +111,12 @@ export const manageRuntimeResourceTool = defineTool({
     existed: z.boolean(),
     value: z.string().nullable(),
   }),
-  security: {
-    // 声明整个工具的最大能力；单次调用仍由下方 ToolPolicy 根据参数细分。
+  metadata: {
     risk: 'destructive',
     capabilities: ['runtime-resource:manage'],
-    idempotent: false,
   },
+  // 工具级 Guard 只负责该工具固有、且依赖实际参数的规则。
+  toolGuard: request => evaluateRuntimeResourcePolicy(request.input),
   execute(input) {
     // 能进入此函数，说明 Harness 已经得到 allow 或本 callId 的 allowed-once。
     const previous = runtimeResources.get(input.resource)
@@ -144,7 +146,7 @@ export const manageRuntimeResourceTool = defineTool({
       }
     }
 
-    // protected/* 会在 Policy 中提前 deny，因此正常运行时无法到达这条删除语句。
+    // protected/* 会在工具级 Guard 中提前 deny，因此正常运行时无法到达这条删除语句。
     runtimeResources.delete(input.resource)
     return {
       operation: input.operation,
@@ -175,11 +177,10 @@ export const serverTools = [
 export const serverToolGuard: ToolGuardConfig = Object.freeze({
   approvalTimeoutMs: 120_000,
   evaluate: (request: ToolGuardRequest): ToolGuardDecision => {
-    if (request.tool.name === manageRuntimeResourceTool.name)
-      return evaluateRuntimeResourcePolicy(request.input)
-
-    // CraftAgent 内置工具以及当前两个只读网络工具都由服务端静态注册，可直接执行。
-    if (request.tool.security.risk === 'safe'
+    // 全局 Guard 只表达当前部署允许注册哪些工具；参数级风险留给工具自己的 Guard。
+    if (request.tool.name === 'calculator'
+      || request.tool.name === 'get_current_time'
+      || request.tool.name === manageRuntimeResourceTool.name
       || request.tool.name === getUserLocationTool.name
       || request.tool.name === getWeatherTool.name) {
       return { decision: 'allow' }
@@ -194,7 +195,7 @@ export const serverToolGuard: ToolGuardConfig = Object.freeze({
 
 /** 根据已经通过 Harness 校验的业务参数，决定单次资源操作的实际权限。 */
 function evaluateRuntimeResourcePolicy(input: unknown): ToolGuardDecision {
-  // Harness 已校验过一次；这里再次 parse 是为了在通用 ToolPolicyRequest.input 上安全恢复具体类型。
+  // Harness 已校验过一次；这里再次 parse 是为了在独立调用本评估函数时仍保持边界安全。
   const parsed = runtimeResourceInputSchema.safeParse(input)
   if (!parsed.success) {
     return {

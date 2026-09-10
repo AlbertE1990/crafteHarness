@@ -41,7 +41,7 @@ const loop = new AgentLoop({
   tools,
   systemPrompt,
   limits,
-  toolPolicy,
+  toolGuard,
   requestToolApproval,
 })
 
@@ -49,6 +49,7 @@ const result = await loop.run({
   sessionId,
   input,
   sessionMetadata,
+  context,
 }, {
   signal,
   runId,
@@ -147,7 +148,7 @@ toolCall.arguments
   -> JSON.parse
   -> AgentTool.execute
   -> executeTool
-  -> inputSchema / policy / approval / retry / outputSchema
+  -> inputSchema / layered guards / approval / retry / outputSchema
   -> ToolExecutionResult.content
   -> role=tool message
 ```

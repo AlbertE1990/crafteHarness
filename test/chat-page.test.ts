@@ -207,7 +207,7 @@ describe('chat page conversations', () => {
         title: '确认写入资源',
         details: { operation: 'write', resource: 'demo/ui' },
         input: { operation: 'write', resource: 'demo/ui', content: 'hello' },
-        risk: 'destructive',
+        toolMetadata: { risk: 'destructive' },
         approvalTimeoutMs: 45_000,
         requestedAt: new Date(Date.now()).toISOString(),
         expiresAt: new Date(Date.now() + 45_000).toISOString(),
@@ -260,7 +260,7 @@ describe('chat page conversations', () => {
     expect(wrapper.find('textarea').exists()).toBe(true)
   })
 
-  it('shows an automatic ToolPolicy denial without asking for a decision', async () => {
+  it('shows an automatic ToolGuard denial without asking for a decision', async () => {
     const stream = controlledStreamResponse([
       { type: 'session.started', sessionId: 'chat-denied' },
       {
@@ -313,7 +313,7 @@ describe('chat page conversations', () => {
         toolName: 'wait_for_confirmation',
         reason: '等待用户稍后确认',
         input: {},
-        risk: 'write',
+        toolMetadata: { risk: 'write' },
         approvalTimeoutMs: -1,
         requestedAt: new Date().toISOString(),
         expiresAt: null,

@@ -48,15 +48,15 @@ import { createAgentToolMap } from './tool-registry'
  * 一次 Run 对应一次用户 Turn；每个 Step 只包含一次模型请求及其返回的一批 Tool Call。
  * Session Log 是模型历史的唯一事实来源，本类不会维护跨 Run 的第二份可变消息数组。
  */
-export class AgentLoop {
+export class AgentLoop<TContext = undefined> {
   readonly limits: AgentLoopLimits
 
-  private readonly config: AgentLoopConfig
-  private readonly tools: ReadonlyMap<string, AgentTool>
+  private readonly config: AgentLoopConfig<TContext>
+  private readonly tools: ReadonlyMap<string, AgentTool<TContext>>
   private readonly now: () => Date
   private readonly createId: (kind: 'run' | 'turn' | 'event') => string
 
-  constructor(config: AgentLoopConfig) {
+  constructor(config: AgentLoopConfig<TContext>) {
     validateConfig(config)
     this.config = config
     this.limits = createLimits(config.limits)
@@ -71,7 +71,7 @@ export class AgentLoop {
    * 配置或请求形状错误会尽早抛出 TypeError；运行期模型、Session、预算和取消都会返回
    * AgentRunResult，并通过 onEvent 输出实时过程。
    */
-  async run(request: AgentRunRequest, options: AgentRunOptions = {}): Promise<AgentRunResult> {
+  async run(request: AgentRunRequest<TContext>, options: AgentRunOptions = {}): Promise<AgentRunResult> {
     const input = validateRequest(request)
     // 一次 Run 只解析一次模型设置，工具往返后的后续 Step 继续使用相同配置。
     const modelExecution = defineAgentModelExecutionOptions(options.model)
@@ -225,6 +225,7 @@ export class AgentLoop {
               state,
               step,
               stepResult.toolCalls,
+              request.context as TContext,
               signals,
               eventBase,
               options.onEvent,
@@ -322,7 +323,7 @@ export class AgentLoop {
   }
 
   /** 创建本次执行的可变内部游标；该状态不会跨 Run 保存。 */
-  private createRunState(request: AgentRunRequest, options: AgentRunOptions): MutableRunState {
+  private createRunState(request: AgentRunRequest<TContext>, options: AgentRunOptions): MutableRunState {
     const runId = options.runId ?? this.createId('run')
     const turnId = options.turnId ?? this.createId('turn')
     validateIdentifier(runId, 'runId')
@@ -348,7 +349,7 @@ export class AgentLoop {
 
   /** 在一个原子批次中创建可选 Session、写入 Turn 开始和用户消息。 */
   private async startTurn(
-    request: AgentRunRequest,
+    request: AgentRunRequest<TContext>,
     input: string,
     state: MutableRunState,
   ): Promise<number> {
@@ -464,6 +465,7 @@ export class AgentLoop {
     state: MutableRunState,
     step: number,
     toolCalls: readonly ModelFunctionToolCall[],
+    context: TContext,
     signals: RunSignals,
     eventBase: () => AgentEventBase,
     listener?: AgentRunOptions['onEvent'],
@@ -486,7 +488,15 @@ export class AgentLoop {
             message: interrupted.error.message,
             retryable: false,
           })
-        : await this.executeToolCall(state, step, toolCall, signals.signal, eventBase, listener)
+        : await this.executeToolCall(
+            state,
+            step,
+            toolCall,
+            context,
+            signals.signal,
+            eventBase,
+            listener,
+          )
 
       // 成功、业务失败、用户拒绝和策略拒绝都必须产生对应的 role=tool 消息。
       // 这样下一 Model Step 能看到明确结果，不会留下只有 assistant tool_call、没有响应的悬空历史。
@@ -511,6 +521,7 @@ export class AgentLoop {
     state: MutableRunState,
     step: number,
     toolCall: ModelFunctionToolCall,
+    context: TContext,
     signal: AbortSignal,
     eventBase: () => AgentEventBase,
     listener?: AgentRunOptions['onEvent'],
@@ -532,8 +543,10 @@ export class AgentLoop {
       callId: toolCall.id,
       runId: state.runId,
       sessionId: state.sessionId,
+      context,
       signal,
-      ...(this.config.toolPolicy ? { policy: this.config.toolPolicy } : {}),
+      ...(tool.toolGuard !== undefined ? { toolGuardOverride: tool.toolGuard } : {}),
+      ...(this.config.toolGuard ? { globalToolGuard: this.config.toolGuard } : {}),
       // AgentLoop 不理解前端或 HTTP；它只把 Agent 配置中的审批函数继续传给 Tool Harness。
       ...(this.config.requestToolApproval
         ? { requestApproval: this.config.requestToolApproval }
@@ -721,7 +734,7 @@ export class AgentLoop {
 }
 
 /** 构造时验证不可缺少的 Ports 和可选系统指令。 */
-function validateConfig(config: AgentLoopConfig): void {
+function validateConfig<TContext>(config: AgentLoopConfig<TContext>): void {
   if (!config || typeof config !== 'object')
     throw new TypeError('AgentLoop config 必须是对象')
   if (!config.model || typeof config.model.stream !== 'function')
@@ -733,7 +746,7 @@ function validateConfig(config: AgentLoopConfig): void {
 }
 
 /** Run 请求在写 Session 前完成校验。 */
-function validateRequest(request: AgentRunRequest): string {
+function validateRequest<TContext>(request: AgentRunRequest<TContext>): string {
   if (!request || typeof request !== 'object')
     throw new TypeError('AgentRunRequest 必须是对象')
   validateIdentifier(request.sessionId, 'sessionId')

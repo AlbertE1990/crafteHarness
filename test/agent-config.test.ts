@@ -17,7 +17,6 @@ function createTestTool(name: string) {
     description: `${name} 测试工具`,
     inputSchema: z.strictObject({}),
     outputSchema: z.strictObject({ name: z.string() }),
-    security: { risk: 'safe', capabilities: [], idempotent: true },
     execute: () => ({ name }),
   })
 }
@@ -198,6 +197,12 @@ describe('agent config', () => {
       toolGuard: { evaluate, approvalTimeoutMs: -1 },
     })
     expect(neverExpires.toolGuard.approvalTimeoutMs).toBe(-1)
+
+    const unguarded = defineAgentConfig({
+      model: new ScriptedModelAdapter({ script: [] }),
+    })
+    expect(unguarded.toolGuard).toEqual({ approvalTimeoutMs: 120_000 })
+    expect(unguarded.toolGuard).not.toHaveProperty('evaluate')
   })
 
   it('rejects invalid Tool Guard configuration before a Run starts', () => {
@@ -210,7 +215,7 @@ describe('agent config', () => {
     expect(() => defineAgentConfig({
       model,
       // 验证运行时边界，而不依赖 TypeScript 编译期检查。
-      toolGuard: { evaluate: undefined },
+      toolGuard: { evaluate: 'invalid' },
     } as unknown as Parameters<typeof defineAgentConfig>[0])).toThrow('evaluate 必须是函数')
   })
 
@@ -258,6 +263,26 @@ describe('agent config', () => {
     ])
     expect(config.tools[1]).not.toBe(calculator)
     expect(config.tools[1]?.model).toBe(calculator.model)
+  })
+
+  it('can replace a built-in tool Guard without replacing its implementation', async () => {
+    const config = defineAgentConfig({
+      model: new ScriptedModelAdapter({ script: [] }),
+      tools: {
+        guardOverrides: {
+          calculator: () => ({ decision: 'deny', reason: '当前部署禁用计算器' }),
+        },
+      },
+    })
+    const calculator = config.tools.find(tool => tool.name === 'calculator')!
+
+    await expect(calculator.execute({ operation: 'add', values: [1, 2] }, {
+      callId: 'call-overridden-builtin',
+    })).resolves.toMatchObject({
+      ok: false,
+      attempts: 0,
+      error: { code: 'TOOL_PERMISSION_DENIED', message: '当前部署禁用计算器' },
+    })
   })
 
   it('can replace the complete built-in tool collection', () => {

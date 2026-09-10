@@ -2,11 +2,11 @@ import type { z } from 'zod'
 import type { AgentTool } from '../core'
 import type {
   DefinedTool,
+  ToolExecutionConfig,
   ToolModelDefinition,
-  ToolRetryPolicy,
-  ToolSecurityMetadata,
+  ToolRunContext,
 } from '../tools'
-import type { JsonSchema } from '../types/json'
+import type { JsonObject, JsonSchema } from '../types/json'
 import { createAgentTool } from '../core'
 
 /**
@@ -17,16 +17,19 @@ import { createAgentTool } from '../core'
  *
  * 调用方通常不需要显式标注此类型；它只用于封装可接收任意 `defineTool()` 结果的配置。
  */
-export interface AgentToolInput {
+export interface AgentToolInput<TContext = undefined> {
   readonly name: string
   readonly description: string
   readonly inputSchema: z.ZodType
   readonly outputSchema: z.ZodType
-  readonly timeoutMs?: number
-  readonly retry?: ToolRetryPolicy
-  readonly security: ToolSecurityMetadata
+  readonly metadata: JsonObject
+  readonly toolGuard?: (...values: never[]) => unknown
+  readonly execution?: ToolExecutionConfig
   readonly renderOutput?: (...values: never[]) => string
-  readonly execute: (...values: never[]) => unknown
+  readonly execute: (
+    input: never,
+    context: ToolRunContext<TContext>,
+  ) => unknown
   readonly model: ToolModelDefinition
   readonly outputJsonSchema: JsonSchema
 }
@@ -38,25 +41,25 @@ export interface AgentToolInput {
  *
  * @internal
  */
-export function normalizeAgentToolDefinitions(
-  tools: readonly AgentToolInput[],
-): AgentTool[] {
+export function normalizeAgentToolDefinitions<TContext = undefined>(
+  tools: readonly AgentToolInput<TContext>[],
+): AgentTool<TContext>[] {
   return tools.map(tool => normalizeToolDefinition(tool))
 }
 
 /** 在唯一的类型擦除边界把任意具体 Zod Schema 工具交给 Tool Harness。 */
-function normalizeToolDefinition(value: AgentToolInput): AgentTool {
+function normalizeToolDefinition<TContext>(value: AgentToolInput<TContext>): AgentTool<TContext> {
   if (!isAgentToolDefinition(value))
     throw new TypeError('Agent 工具必须由 defineTool() 创建')
 
-  return createAgentTool(value as DefinedTool<z.ZodType, z.ZodType>)
+  return createAgentTool(value as DefinedTool<z.ZodType, z.ZodType, TContext>)
 }
 
 /** 识别已经完成 Schema 编译和注册期检查的 `defineTool()` 结果。 */
-function isAgentToolDefinition(value: unknown): value is AgentToolInput {
+function isAgentToolDefinition<TContext>(value: unknown): value is AgentToolInput<TContext> {
   if (typeof value !== 'object' || value === null)
     return false
-  const tool = value as Partial<AgentToolInput>
+  const tool = value as Partial<AgentToolInput<TContext>>
   return typeof tool.name === 'string'
     && typeof tool.description === 'string'
     && typeof tool.execute === 'function'
@@ -68,6 +71,6 @@ function isAgentToolDefinition(value: unknown): value is AgentToolInput {
     && tool.model !== null
     && typeof tool.outputJsonSchema === 'object'
     && tool.outputJsonSchema !== null
-    && typeof tool.security === 'object'
-    && tool.security !== null
+    && typeof tool.metadata === 'object'
+    && tool.metadata !== null
 }

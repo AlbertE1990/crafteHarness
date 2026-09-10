@@ -54,4 +54,4 @@
 
 - 原 `tools: AgentTool[]` 写法需要迁移为 `tools.additional` 或 `mode: 'replace'`，但不需要额外转换工具。
 - 新增默认内置工具属于可观察行为，必须经过协议评审并同步更新 `BuiltinToolName`、测试和文档。
-- 自动注册不是安全沙箱；Runtime 的 ToolPolicy 仍决定工具是否获准执行。
+- 自动注册不是安全沙箱；工具级与 Runtime 全局 ToolGuard 仍决定工具是否获准执行。

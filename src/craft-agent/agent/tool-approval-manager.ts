@@ -2,13 +2,11 @@ import type {
   ToolApprovalHandler,
   ToolApprovalOutcome,
   ToolApprovalRequest,
-  ToolPolicyRequest,
 } from '../tools'
 import type {
   ResolveToolApprovalRequest,
   ResolveToolApprovalResult,
   ToolApprovalResolvedOutcome,
-  ToolGuardDecision,
   ToolGuardOutputListener,
 } from './tool-guard'
 import { randomUUID } from 'node:crypto'
@@ -39,7 +37,7 @@ interface PendingApproval {
  * 它把 ToolApprovalHandler 的 pending Promise 与 Agent.resolveToolApproval() 关联起来，不依赖
  * HTTP、Fastify 或前端。所有等待项只存在于当前 Agent 实例内，并遵循首个终态生效。
  */
-export class ToolApprovalManager {
+export class ToolApprovalManager<TContext = undefined> {
   /** runId 定位当前 agent.run() 的应用事件监听器。 */
   private readonly listeners = new Map<string, ToolGuardOutputListener>()
   /** approvalId 定位等待中的 Tool Harness Promise。 */
@@ -81,35 +79,14 @@ export class ToolApprovalManager {
     }
   }
 
-  /** Tool Guard 自动 deny 时发送应用事件；该路径不会创建 approvalId。 */
-  async notifyDenied(
-    request: ToolPolicyRequest,
-    decision: Extract<ToolGuardDecision, { decision: 'deny' }>,
-  ): Promise<void> {
-    if (!request.runId || !request.sessionId)
-      return
-    const listener = this.listeners.get(request.runId)
-    if (!listener)
-      return
-
-    await safelyNotify(listener, {
-      type: 'tool.guard.denied',
-      sessionId: request.sessionId,
-      runId: request.runId,
-      callId: request.callId,
-      toolName: request.toolName,
-      reason: decision.reason,
-    })
-  }
-
   /**
    * Tool Harness 在 ask 后调用的内部处理器。
    *
    * Promise 会等待用户决定、当前调用超时、Run 取消或事件出口不可用；除 allowed-once 外全部
    * fail-closed，业务工具不会执行。
    */
-  readonly requestApproval: ToolApprovalHandler = async (
-    request: ToolApprovalRequest,
+  readonly requestApproval: ToolApprovalHandler<TContext> = async (
+    request: ToolApprovalRequest<TContext>,
   ): Promise<ToolApprovalOutcome> => {
     if (!request.runId || !request.sessionId)
       return 'unavailable'
@@ -156,7 +133,7 @@ export class ToolApprovalManager {
           runId,
           approvalId,
           callId: request.callId,
-          toolName: request.toolName,
+          toolName: request.tool.name,
           outcome: publicOutcome,
           resolvedAt,
         }).finally(() => resolve(outcome))
@@ -183,12 +160,12 @@ export class ToolApprovalManager {
         runId,
         approvalId,
         callId: request.callId,
-        toolName: request.toolName,
+        toolName: request.tool.name,
         reason: request.reason,
         ...(request.title ? { title: request.title } : {}),
         ...(request.details ? { details: request.details } : {}),
         input: request.input,
-        risk: request.security.risk,
+        toolMetadata: request.tool.metadata,
         approvalTimeoutMs,
         requestedAt,
         expiresAt,

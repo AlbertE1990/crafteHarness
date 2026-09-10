@@ -44,11 +44,6 @@ export function createCalculatorTool() {
       values: z.array(z.number()),
       result: z.number(),
     }),
-    security: {
-      risk: 'safe',
-      capabilities: [],
-      idempotent: true,
-    },
     execute(input) {
       const result = calculate(input.operation, input.values, input.precision)
       if (!Number.isFinite(result)) {

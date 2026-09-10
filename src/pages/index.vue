@@ -308,10 +308,9 @@ function isChatStreamEvent(value: unknown): value is ChatStreamEvent {
           && !Array.isArray(event.details)))
         && validTimeout
         && typeof event.requestedAt === 'string'
-        && (event.risk === 'safe'
-          || event.risk === 'read'
-          || event.risk === 'write'
-          || event.risk === 'destructive')
+        && typeof event.toolMetadata === 'object'
+        && event.toolMetadata !== null
+        && !Array.isArray(event.toolMetadata)
   }
   if (event.type === 'tool.approval.resolved') {
     return typeof event.sessionId === 'string'
@@ -611,7 +610,12 @@ async function send(prompt = input.value, appendUserMessage = true) {
             ...(event.title ? { title: event.title } : {}),
             ...(event.details ? { details: event.details } : {}),
             input: event.input,
-            risk: event.risk,
+            ...(event.toolMetadata.risk === 'safe'
+              || event.toolMetadata.risk === 'read'
+              || event.toolMetadata.risk === 'write'
+              || event.toolMetadata.risk === 'destructive'
+              ? { risk: event.toolMetadata.risk }
+              : {}),
             expiresAt: event.expiresAt,
             status: 'pending',
           }

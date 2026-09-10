@@ -12,8 +12,8 @@ import type {
   ToolEventListener,
   ToolExecutionEvent,
   ToolExecutionResult,
+  ToolGuardEvaluator,
   ToolModelDefinition,
-  ToolPolicy,
 } from '../tools'
 import type { JsonObject } from '../types/json'
 
@@ -32,16 +32,17 @@ export interface AgentLoopLimits {
 }
 
 /** 创建 AgentLoop 时注入的模型、存储、工具和部署侧策略。 */
-export interface AgentLoopConfig {
+export interface AgentLoopConfig<TContext = undefined> {
   readonly model: ModelAdapter
   readonly store: SessionStore
   /** 工具必须先通过 createAgentTool() 擦除不同 Schema 的泛型差异。 */
-  readonly tools?: readonly AgentTool[]
+  readonly tools?: readonly AgentTool<TContext>[]
   /** 只在创建全新 Session 时写入；已有 Session 不会重复追加。 */
   readonly systemPrompt?: string
   readonly limits?: Partial<AgentLoopLimits>
-  readonly toolPolicy?: ToolPolicy
-  readonly requestToolApproval?: ToolApprovalHandler
+  /** 部署、租户、用户和环境级 Guard；缺省表示该层 allow。 */
+  readonly toolGuard?: ToolGuardEvaluator<TContext>
+  readonly requestToolApproval?: ToolApprovalHandler<TContext>
   readonly onToolEvent?: ToolEventListener
   /** 测试可注入的墙上时钟。 */
   readonly now?: () => Date
@@ -50,9 +51,11 @@ export interface AgentLoopConfig {
 }
 
 /** 发起一次用户 Turn 的业务输入。 */
-export interface AgentRunRequest {
+export interface AgentRunRequest<TContext = undefined> {
   readonly sessionId: string
   readonly input: string
+  /** 仅在本次 Run 内传给 Guard 和工具执行函数，不进入模型或 Session Log。 */
+  readonly context?: TContext
   /** 仅在 Session 尚不存在时写入 session.created。 */
   readonly sessionMetadata?: JsonObject
 }
@@ -83,13 +86,15 @@ export interface AgentRunOptions {
 }
 
 /** 不同 DefinedTool 经过类型擦除后，Agent Loop 使用的统一注册项。 */
-export interface AgentTool {
+export interface AgentTool<TContext = undefined> {
   readonly name: string
   readonly model: ToolModelDefinition
+  /** Agent 配置可以替换或移除内置工具的局部 Guard。 */
+  readonly toolGuard?: ToolGuardEvaluator<TContext> | null
   /** 始终通过 Tool Harness 执行，而不是直接调用业务工具的 execute。 */
   execute: (
     rawInput: unknown,
-    options: ExecuteToolOptions,
+    options: ExecuteToolOptions<TContext>,
   ) => Promise<ToolExecutionResult<unknown>>
 }
 

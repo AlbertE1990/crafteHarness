@@ -37,7 +37,7 @@ const echoTool = defineTool({
   description: '返回输入文字。',
   inputSchema: z.strictObject({ text: z.string() }),
   outputSchema: z.strictObject({ text: z.string() }),
-  security: { risk: 'safe', capabilities: [], idempotent: true },
+  metadata: { domain: 'demo' },
   execute(input) {
     return input
   },
@@ -164,7 +164,9 @@ sequenceDiagram
 - `onEvent/onTrace` 是观察旁路，不能拿来修改控制流。
 - `execution.model` 是默认值，`Agent.run(..., { model })` 是本次覆盖；同一 Run 的全部 Step 使用同一设置。
 - `reasoning.effort` 不是固定枚举。核心接受非空字符串，Adapter 判断当前供应商和模型是否支持。
-- `toolGuard.evaluate()` 只决定 `allow/deny/ask`；审批等待、超时和重复提交由 Agent 内部处理。
+- 工具自身 `toolGuard` 与 Agent 全局 `toolGuard.evaluate()` 都只作决定；审批等待、超时和重复提交由 Agent 内部处理。
+- 缺少任一 Guard 层等价于该层 allow；两层结果按 `deny > ask > allow` 合并。
+- `agent.run({ context })` 的数据只进入当前 Run 的 Guard 和 execute，不进入模型或 Session Log。
 - 应用通过 `onEvent` 接收审批，通过 `resolveToolApproval()` 提交决定，不需要创建 Broker。
 - 自定义 Store 可以只实现 `append/read`；这时 Agent 能运行，但不能列会话。
 
@@ -174,5 +176,6 @@ sequenceDiagram
 2. 定义两个不同输入 Schema 的工具，直接通过 `additional: [toolA, toolB]` 注册。
 3. 连续向同一个 sessionId 发起两次 run，检查第二次模型输入包含第一轮历史。
 4. 使用 `listSessions({ limit: 1 })` 和 `afterSessionId` 读取两页。
+5. 创建 `new Agent<AppContext>()`，让全局 Guard 根据 tenantId 拒绝一次调用。
 
 协议细节见[Agent 门面协议](../standards/protocols/agent.md)。

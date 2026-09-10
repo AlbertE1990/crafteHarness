@@ -148,7 +148,6 @@ export {
   defineTool,
   executeTool,
   normalizeToolError,
-  safeToolPolicy,
   ToolError,
   validationIssuesToJson,
 } from './tools'
@@ -166,19 +165,14 @@ export type {
   ToolErrorOptions,
   ToolEventBase,
   ToolEventListener,
+  ToolExecutionConfig,
   ToolExecutionEvent,
   ToolExecutionFailure,
   ToolExecutionResult,
   ToolExecutionSuccess,
   ToolModelDefinition,
-  ToolPolicy,
-  ToolPolicyDecision,
-  ToolPolicyDecisionMetadata,
-  ToolPolicyRequest,
   ToolRetryPolicy,
-  ToolRisk,
   ToolRunContext,
-  ToolSecurityMetadata,
 } from './tools'
 
 /** 可安全跨网络、日志和持久层传递的 JSON 类型。 */

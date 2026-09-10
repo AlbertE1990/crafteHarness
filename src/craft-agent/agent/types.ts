@@ -10,12 +10,22 @@ import type {
 import type { JsonObject } from '../types/json'
 import type { ToolGuardOutputEvent } from './tool-guard'
 
-/** Agent.run() 的业务输入；未传 sessionId 时由 Agent 自动创建。 */
-export interface AgentRequest {
+/** 所有 Agent.run() 请求共有的业务字段。 */
+interface AgentRequestBase {
   readonly input: string
   readonly sessionId?: string
   readonly sessionMetadata?: JsonObject
 }
+
+/**
+ * Agent.run() 的业务输入；未传 sessionId 时由 Agent 自动创建。
+ *
+ * Agent 声明了运行上下文类型后，context 成为必填字段；默认无上下文时无需传入。
+ */
+export type AgentRequest<TContext = undefined>
+  = AgentRequestBase & ([TContext] extends [undefined]
+    ? { readonly context?: undefined }
+    : { readonly context: TContext })
 
 /** 面向应用层的标准实时输出；可直接传输，完整执行轨迹由 onTrace 暴露。 */
 export type AgentOutputEvent

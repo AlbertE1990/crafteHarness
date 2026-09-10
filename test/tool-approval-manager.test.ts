@@ -8,13 +8,17 @@ function createApprovalRequest(signal: AbortSignal): ToolApprovalRequest {
     callId: 'call-write',
     runId: 'run-approval',
     sessionId: 'session-approval',
-    toolName: 'manage_runtime_resource',
-    input: { operation: 'write', resource: 'demo/greeting', content: 'hello' },
-    security: {
-      risk: 'destructive',
-      capabilities: ['runtime-resource:manage'],
-      idempotent: false,
+    tool: {
+      name: 'manage_runtime_resource',
+      description: '管理演示资源',
+      inputSchema: { type: 'object' },
+      metadata: {
+        risk: 'destructive',
+        capabilities: ['runtime-resource:manage'],
+      },
     },
+    input: { operation: 'write', resource: 'demo/greeting', content: 'hello' },
+    context: undefined,
     reason: '工具将写入进程内资源 demo/greeting',
     title: '确认写入资源',
     details: { operation: 'write', resource: 'demo/greeting' },

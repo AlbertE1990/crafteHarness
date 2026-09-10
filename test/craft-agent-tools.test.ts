@@ -16,7 +16,7 @@ describe('defineTool', () => {
       description: '返回输入文本',
       inputSchema: z.strictObject({ text: z.string() }),
       outputSchema: z.strictObject({ text: z.string() }),
-      security: { risk: 'safe', idempotent: true },
+      metadata: { category: 'example' },
       execute: input => input,
     })
 
@@ -36,16 +36,63 @@ describe('defineTool', () => {
     })
   })
 
-  it('rejects retry configuration for a non-idempotent tool', () => {
-    expect(() => defineTool({
+  it('treats retry configuration as the tool author explicit repeat-execution decision', () => {
+    const tool = defineTool({
       name: 'create_record',
       description: '创建记录',
       inputSchema: z.strictObject({ value: z.string() }),
       outputSchema: z.strictObject({ id: z.string() }),
-      retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
-      security: { risk: 'write', idempotent: false },
+      execution: {
+        retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
+      },
       execute: () => ({ id: 'record-1' }),
-    })).toThrow('只有声明为幂等后才能配置 retry')
+    })
+
+    expect(tool.execution?.retry?.maxAttempts).toBe(2)
+  })
+
+  it('rejects removed security and top-level execution fields instead of silently accepting them', () => {
+    const base = {
+      name: 'legacy_tool',
+      description: '验证旧字段不会成为隐藏兼容输入',
+      inputSchema: z.strictObject({}),
+      outputSchema: z.string(),
+      execute: () => 'ok',
+    }
+
+    expect(() => defineTool({
+      ...base,
+      security: { risk: 'safe' },
+    } as unknown as Parameters<typeof defineTool>[0])).toThrow('未知字段：security')
+    expect(() => defineTool({
+      ...base,
+      timeoutMs: 1_000,
+    } as unknown as Parameters<typeof defineTool>[0])).toThrow('未知字段：timeoutMs')
+  })
+
+  it('copies, freezes and validates arbitrary tool metadata', () => {
+    const metadata = { risk: 'custom-level', nested: { owner: 'orders' } }
+    const tool = defineTool({
+      name: 'metadata_tool',
+      description: '验证业务 metadata 边界',
+      inputSchema: z.strictObject({}),
+      outputSchema: z.string(),
+      metadata,
+      execute: () => 'ok',
+    })
+
+    expect(tool.metadata).toEqual(metadata)
+    expect(tool.metadata).not.toBe(metadata)
+    expect(Object.isFrozen(tool.metadata)).toBe(true)
+    expect(Object.isFrozen(tool.metadata.nested)).toBe(true)
+    expect(() => defineTool({
+      name: 'invalid_metadata_tool',
+      description: '拒绝不能序列化的 metadata',
+      inputSchema: z.strictObject({}),
+      outputSchema: z.string(),
+      metadata: { invalid: () => 'no' },
+      execute: () => 'ok',
+    } as unknown as Parameters<typeof defineTool>[0])).toThrow('metadata 必须是可序列化 JSON 对象')
   })
 
   it('requires strict nested input objects so wire and runtime validation agree', () => {
@@ -56,7 +103,6 @@ describe('defineTool', () => {
         nested: z.object({ text: z.string() }),
       }),
       outputSchema: z.string(),
-      security: { risk: 'safe', idempotent: true },
       execute: input => input.nested.text,
     })).toThrow('请使用 z.strictObject()')
   })
@@ -70,7 +116,6 @@ describe('executeTool', () => {
       description: '返回数量',
       inputSchema: z.strictObject({ count: z.number().int() }),
       outputSchema: z.number(),
-      security: { risk: 'safe', idempotent: true },
       execute,
     })
 
@@ -90,7 +135,6 @@ describe('executeTool', () => {
       description: '模拟上游返回错误字段类型',
       inputSchema: z.strictObject({}),
       outputSchema: z.strictObject({ count: z.number() }),
-      security: { risk: 'safe', idempotent: true },
       execute: () => JSON.parse('{"count":"wrong"}') as { count: number },
     })
 
@@ -111,13 +155,14 @@ describe('executeTool', () => {
       description: '模拟临时上游错误',
       inputSchema: z.strictObject({}),
       outputSchema: z.strictObject({ value: z.string() }),
-      retry: {
-        maxAttempts: 3,
-        baseDelayMs: 0,
-        maxDelayMs: 0,
-        jitterRatio: 0,
+      execution: {
+        retry: {
+          maxAttempts: 3,
+          baseDelayMs: 0,
+          maxDelayMs: 0,
+          jitterRatio: 0,
+        },
       },
-      security: { risk: 'safe', idempotent: true },
       execute(_input, context) {
         attempts.push(context.attempt)
         if (context.attempt < 3) {
@@ -147,18 +192,17 @@ describe('executeTool', () => {
     expect(events.at(-1)?.type).toBe('tool.call.completed')
   })
 
-  it('fails closed when a capability-bearing tool has no runtime policy', async () => {
+  it('allows a tool directly when neither tool-level nor global Guard is configured', async () => {
     const tool = defineTool({
       name: 'read_network',
       description: '读取网络资源',
       inputSchema: z.strictObject({ url: z.url() }),
       outputSchema: z.string(),
-      security: {
+      metadata: {
         risk: 'read',
         capabilities: ['network:public'],
-        idempotent: true,
       },
-      execute: () => 'unreachable',
+      execute: () => 'reachable',
     })
 
     const result = await executeTool(tool, { url: 'https://example.com' }, {
@@ -166,10 +210,72 @@ describe('executeTool', () => {
     })
 
     expect(result).toMatchObject({
-      ok: false,
-      error: { code: 'TOOL_PERMISSION_DENIED' },
-      attempts: 0,
+      ok: true,
+      value: 'reachable',
+      attempts: 1,
     })
+  })
+
+  it('runs tool and global Guards with run context, then applies deny over ask', async () => {
+    interface RunContext {
+      readonly tenantId: string
+      readonly environment: 'test'
+    }
+    const inputSchema = z.strictObject({ resource: z.string() })
+    const outputSchema = z.string()
+    const order: string[] = []
+    const execute = vi.fn(() => 'unreachable')
+    const tool = defineTool<
+      typeof inputSchema,
+      typeof outputSchema,
+      RunContext
+    >({
+      name: 'context_guarded_write',
+      description: '验证两层 Guard 和运行上下文',
+      inputSchema,
+      outputSchema,
+      metadata: { risk: 'write' },
+      toolGuard(request) {
+        order.push(`tool:${request.context.tenantId}`)
+        return { decision: 'ask', reason: '工具需要确认' }
+      },
+      execute,
+    })
+
+    const result = await executeTool(tool, { resource: 'record/1' }, {
+      callId: 'call-context-guard',
+      context: { tenantId: 'tenant-a', environment: 'test' },
+      globalToolGuard(request) {
+        order.push(`global:${request.context.tenantId}`)
+        return { decision: 'deny', reason: '测试环境禁止写入' }
+      },
+    })
+
+    expect(order).toEqual(['tool:tenant-a', 'global:tenant-a'])
+    expect(result).toMatchObject({
+      ok: false,
+      attempts: 0,
+      error: { code: 'TOOL_PERMISSION_DENIED', message: '测试环境禁止写入' },
+    })
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('passes the same run context to the allowed tool implementation', async () => {
+    interface RunContext { readonly userId: string }
+    const inputSchema = z.strictObject({})
+    const outputSchema = z.string()
+    const tool = defineTool<typeof inputSchema, typeof outputSchema, RunContext>({
+      name: 'read_context',
+      description: '读取当前运行上下文',
+      inputSchema,
+      outputSchema,
+      execute: (_input, context) => context.context.userId,
+    })
+
+    await expect(executeTool(tool, {}, {
+      callId: 'call-context-execute',
+      context: { userId: 'user-1' },
+    })).resolves.toMatchObject({ ok: true, value: 'user-1' })
   })
 
   it('treats a missing approval channel as denial', async () => {
@@ -179,15 +285,12 @@ describe('executeTool', () => {
       description: '写入记录',
       inputSchema: z.strictObject({ value: z.string() }),
       outputSchema: z.strictObject({ saved: z.boolean() }),
-      security: { risk: 'write', idempotent: false },
       execute: () => ({ saved: true }),
     })
 
     const result = await executeTool(tool, { value: 'hello' }, {
       callId: 'call-5',
-      policy: {
-        evaluate: () => ({ decision: 'ask', reason: '该操作会写入数据' }),
-      },
+      globalToolGuard: () => ({ decision: 'ask', reason: '该操作会写入数据' }),
       onEvent: event => events.push(event),
     })
 
@@ -207,8 +310,7 @@ describe('executeTool', () => {
       description: '等待到调用信号取消',
       inputSchema: z.strictObject({}),
       outputSchema: z.string(),
-      timeoutMs: 5,
-      security: { risk: 'safe', idempotent: true },
+      execution: { timeoutMs: 5 },
       execute(_input, context) {
         return new Promise((_resolve, reject) => {
           context.signal.addEventListener('abort', () => {
@@ -233,7 +335,6 @@ describe('executeTool', () => {
       description: '验证观察器不会改变业务结果',
       inputSchema: z.strictObject({}),
       outputSchema: z.string(),
-      security: { risk: 'safe', idempotent: true },
       execute: () => 'ok',
     })
 

@@ -1,462 +1,349 @@
-# 工具审批全链路：从风险评估到继续 AgentLoop
+# 工具审批全链路：局部 Guard、全局 Guard 与用户确认
 
-> 文档类型：学习文档；当前实现以 [Agent 门面协议](../standards/protocols/agent.md) 和
-> [工具协议](../standards/protocols/tool.md) 为准。
+> 文档类型：学习文档；当前实现以可信第一方工具为前提。
 
-## 1. 先建立正确的心智模型
+## 1. 最重要的心智模型
 
-CraftAgent 把“工具是否可以执行”拆成两个问题：
+CraftAgent 把“判断风险”和“等待用户”拆开：
 
-1. `toolGuard.evaluate()` 根据工具和本次参数返回 `allow`、`deny` 或 `ask`。
-2. 只有返回 `ask` 时，Agent 内部才创建一次性审批并等待用户决定。
+- 开发者只实现评估函数，返回 `allow`、`deny` 或 `ask`。
+- Agent 实例固定实现审批 ID、等待、超时、取消和重复提交控制。
+- Runtime 只把 Agent 标准事件送往前端，并把用户决定交回同一个 Agent 实例。
+- AgentLoop 不理解按钮或 HTTP。它只看到工具成功或失败，再把结果写回模型。
 
-应用开发者只实现风险评估方法和传输层接线。审批 ID、等待中的 Promise、超时、取消、重复提交和
-一次性决定都由 `Agent` 实例管理，不需要再创建 Broker。
+`deny` 不终止整个 AgentLoop。它只拒绝本次工具调用；模型会收到明确的工具失败消息，并有机会解释、
+改用别的工具或给出普通回答。
 
-最重要的语义是：`deny` 不会终止整个 AgentLoop。它只阻止当前工具实现执行，产生一条失败的
-`role=tool` 消息，然后让模型在下一 Step 解释拒绝或改用其他方案。用户在审批卡片中选择“拒绝”也相同。
+## 2. 四个参与层
+
+| 层         | 负责什么                                         | 不负责什么                |
+| ---------- | ------------------------------------------------ | ------------------------- |
+| 工具定义   | Schema、metadata、局部 Guard、执行策略和业务实现 | 用户登录、页面传输        |
+| CraftAgent | 两层 Guard 合并、审批生命周期、AgentLoop         | Fastify、数据库用户表、UI |
+| Runtime    | 从可信认证结果构造 context；转发事件和决定       | 重写审批状态机            |
+| 前端/CLI   | 展示 ask/deny；提交 approvalId 与决定            | 直接执行工具              |
+
+## 3. 完整数据流
 
 ```mermaid
-flowchart LR
-  Call[模型产生工具调用] --> Validate[Harness 校验 inputSchema]
-  Validate --> Guard[toolGuard.evaluate]
-  Guard -->|allow| Execute[执行工具]
-  Guard -->|deny| Failure[生成工具失败结果]
-  Guard -->|ask| Manager[Agent 内部 ApprovalManager]
-  Manager --> UI[通过 onEvent 发送审批请求]
-  UI -->|allow| Execute
-  UI -->|deny / 超时 / 取消| Failure
-  Execute --> ToolMessage[写入 role=tool 消息]
-  Failure --> ToolMessage
-  ToolMessage --> Loop[AgentLoop 下一 Model Step]
+flowchart TD
+  Model[模型产生 Tool Call] --> Validate[inputSchema 校验]
+  Validate -->|失败| ToolResult[失败结果写回 AgentLoop]
+  Validate --> Local{工具级 toolGuard}
+  Local --> Global{全局 toolGuard.evaluate}
+  Context[run context: 租户/用户/环境] --> Local
+  Context --> Global
+  Metadata[工具 metadata] --> Local
+  Metadata --> Global
+  Local --> Merge[deny > ask > allow]
+  Global --> Merge
+  Merge -->|allow| Execute[execute]
+  Merge -->|deny| ToolResult
+  Merge -->|ask| Manager[Agent ApprovalManager]
+  Manager --> Event[tool.approval.requested]
+  Event --> Runtime[HTTP/SSE/WebSocket Runtime]
+  Runtime --> UI[确认卡片]
+  UI --> Submit[提交 approvalId + allow/deny]
+  Submit --> Manager
+  Manager -->|allow once| Execute
+  Manager -->|deny/超时/取消| ToolResult
+  Execute --> ToolResult
+  ToolResult --> ModelStep[下一 Model Step]
 ```
 
-## 2. 四层职责
+## 4. 定义工具自己的规则
 
-| 层级           | 做什么                                                                  | 不做什么                                   |
-| -------------- | ----------------------------------------------------------------------- | ------------------------------------------ |
-| 应用风险评估器 | 根据工具信息、已校验参数和业务上下文决定 `allow/deny/ask`               | 不等待前端，不执行工具                     |
-| CraftAgent     | 校验评估结果；管理 pending 审批、ID、超时、取消和首个终态；恢复 Harness | 不依赖 HTTP、Fastify 或 Vue                |
-| Server Runtime | 把 Agent 事件写入 SSE；把审批 POST 转给 `agent.resolveToolApproval()`   | 不保存 pending Promise，不决定风险         |
-| 前端           | 展示卡片和倒计时；提交一次 `allow/deny`；按终态更新 UI                  | 不直接执行工具，不把按钮状态当成服务端事实 |
-
-底层 `ToolPolicy` 和 `ToolApprovalHandler` 仍是 Tool Harness/AgentLoop 的高级协议。普通 Agent 使用者不需要
-组装它们；`Agent` 会把 `toolGuard` 自动适配到底层协议。
-
-## 3. 定义风险评估规则
-
-### 3.1 最小配置
+工具级 Guard 适合只由工具和参数决定的规则。下面的 read 自动允许，write 询问用户，受保护资源删除自动
+拒绝：
 
 ```ts
-import Agent from 'craft-agent'
+const resourceTool = defineTool({
+  name: 'manage_resource',
+  description: '读取、写入或删除资源。',
+  inputSchema: z.strictObject({
+    operation: z.enum(['read', 'write', 'delete']),
+    resource: z.string(),
+    content: z.string().nullable(),
+  }),
+  outputSchema: z.strictObject({ ok: z.boolean() }),
+  metadata: {
+    risk: 'destructive',
+    capabilities: ['resource:manage'],
+  },
+  toolGuard(request) {
+    const { operation, resource } = request.input
+    if (operation === 'read')
+      return { decision: 'allow' }
+    if (operation === 'delete' && resource.startsWith('protected/')) {
+      return {
+        decision: 'deny',
+        reason: `受保护资源 ${resource} 禁止删除`,
+      }
+    }
+    return {
+      decision: 'ask',
+      reason: `工具将${operation === 'write' ? '写入' : '删除'} ${resource}`,
+      title: '确认资源操作',
+      details: { operation, resource },
+      approvalTimeoutMs: 45_000,
+    }
+  },
+  execute(input) {
+    // 只有最终决定 allow 或用户 allowed-once 才能到达这里。
+    return { ok: true }
+  },
+})
+```
 
-const agent = new Agent({
+`metadata` 的字段完全由应用定义。CraftAgent 只要求它是 JSON 对象，不会自动理解 `risk` 或
+`capabilities`。
+
+## 5. 用全局 Guard 判断租户、用户和环境
+
+先定义当前应用的运行上下文：
+
+```ts
+interface AppRunContext {
+  tenantId: string
+  user: {
+    id: string
+    roles: readonly string[]
+  }
+  permissions: readonly string[]
+  environment: 'development' | 'staging' | 'production'
+}
+```
+
+再把这个类型交给 Agent：
+
+```ts
+const agent = new Agent<AppRunContext>({
   model,
-  tools: { additional: [manageResourceTool] },
+  tools: { additional: [resourceTool] },
   toolGuard: {
     approvalTimeoutMs: 120_000,
     evaluate(request) {
-      if (request.tool.security.risk === 'safe')
-        return { decision: 'allow' }
-
-      return {
-        decision: 'ask',
-        reason: `工具 ${request.tool.name} 需要用户确认`,
+      // 工具信息、已校验参数和当前可信请求上下文都在同一个输入中。
+      if (!request.context.tenantId || !request.context.user.id) {
+        return { decision: 'deny', reason: '缺少可信身份上下文' }
       }
+      if (request.context.environment === 'production'
+        && !request.context.permissions.includes('tools:execute')) {
+        return { decision: 'deny', reason: '当前用户没有生产环境工具权限' }
+      }
+      return { decision: 'allow' }
     },
   },
 })
 ```
 
-如果不配置 `toolGuard`，默认评估器只允许 `risk: 'safe'` 且没有 capability 的工具，其余调用自动
-`deny`。这是最小权限默认值，不是沙箱。
-
-### 3.2 evaluate 的输入
-
-```ts
-interface ToolGuardRequest {
-  runId: string
-  sessionId: string
-  callId: string
-  tool: {
-    name: string
-    description: string
-    inputSchema: JsonSchema
-    security: ToolSecurityMetadata
-  }
-  input: unknown
-  signal: AbortSignal
-}
-```
-
-- `input` 已通过工具的 `inputSchema` 校验，可以用于参数级风险判断。
-- `tool.security` 是工具作者声明的最大风险和能力需求，不代表已经授权。
-- `callId` 标识模型的当前工具调用；同一个 Session 可以有很多 callId。
-- `runId/sessionId` 可用于读取宿主自己的租户、角色或业务策略，但 CraftAgent 不定义用户权限模型。
-- 异步评估若访问外部服务，必须把 `signal` 继续传给下游请求。
-
-### 3.3 evaluate 的输出
-
-```ts
-type ToolGuardDecision
-  = | { decision: 'allow', metadata?: JsonObject }
-    | { decision: 'deny', reason: string, metadata?: JsonObject }
-    | {
-      decision: 'ask'
-      reason: string
-      title?: string
-      details?: JsonObject
-      // -1 表示不自动过期
-      approvalTimeoutMs?: number
-      metadata?: JsonObject
-    }
-```
-
-- `allow`：当前调用直接进入工具执行阶段。
-- `deny`：当前调用不执行；拒绝原因作为工具失败交回 AgentLoop。
-- `ask`：Agent 创建一次性审批并暂停当前工具 Promise。
-- `title/details`：必须是可安全发送给 UI 的已脱敏信息。
-- `metadata`：用于轨迹上下文，不改变控制流。
-
-评估器返回普通 TypeScript 对象即可。CraftAgent 会在运行时检查决定值、必填原因、JSON 数据和超时，
-无效返回不会降级为允许。
-
-### 3.4 参数级评估示例
-
-一个工具可以声明最大风险为 `destructive`，再根据本次参数细分：
-
-```ts
-const toolGuard = {
-  approvalTimeoutMs: 120_000,
-  evaluate(request) {
-    if (request.tool.name !== 'manage_resource') {
-      return {
-        decision: 'deny',
-        reason: `未配置工具 ${request.tool.name} 的规则`,
-      }
-    }
-
-    const input = request.input as {
-      operation: 'read' | 'write' | 'delete'
-      resource: string
-    }
-
-    if (input.operation === 'read')
-      return { decision: 'allow' }
-
-    if (input.operation === 'delete' && input.resource.startsWith('protected/')) {
-      return {
-        decision: 'deny',
-        reason: '受保护资源不能删除',
-      }
-    }
-
-    return {
-      decision: 'ask',
-      title: input.operation === 'write' ? '确认写入' : '确认删除',
-      reason: `即将${input.operation}资源 ${input.resource}`,
-      details: { operation: input.operation, resource: input.resource },
-      approvalTimeoutMs: 45_000,
-    }
-  },
-} satisfies ToolGuardConfig
-```
-
-最终超时优先级为：
-
-```text
-本次 ask.approvalTimeoutMs
-  > toolGuard.approvalTimeoutMs
-  > CraftAgent 默认值 120000ms
-```
-
-因此上例的读操作直接执行，受保护删除直接失败，普通写入/删除等待 45 秒，而不是通用的 120 秒。
-如果任一生效配置为 `-1`，Agent 会一直等待明确决定或 Run 取消。
-
-## 4. Agent 内部发生了什么
-
-`Agent` 构造时完成两项内部组装：
-
-```text
-toolGuard.evaluate
-  -> 内部 ToolPolicy 适配器
-
-Agent 内部 ApprovalManager.requestApproval
-  -> AgentLoop / Tool Harness
-```
-
-当评估结果为 `ask` 时，ApprovalManager：
-
-1. 生成唯一 `approvalId`。
-2. 先登记 pending，再发送 requested 事件，避免极快提交先于登记到达。
-3. 计算 `requestedAt/expiresAt`；时限不是 `-1` 时才启动定时器。
-4. 等待首个 `allow`、`deny`、超时或 Run 取消。
-5. 删除 pending、发送 resolved 事件，并恢复等待中的 Harness Promise。
-
-```mermaid
-stateDiagram-v2
-  [*] --> Pending: ask + requested
-  Pending --> Allowed: 首次 allow
-  Pending --> Denied: 首次 deny
-  Pending --> Expired: 到达 expiresAt
-  Pending --> Pending: timeout=-1 时不自动过期
-  Pending --> Aborted: Run 取消或事件出口失效
-  Allowed --> [*]
-  Denied --> [*]
-  Expired --> [*]
-  Aborted --> [*]
-```
-
-每个 `approvalId` 只能从 Pending 进入一个终态。后到的重复请求、未知 ID、已超时 ID都返回：
-
-```ts
-const duplicateResult = {
-  accepted: false,
-  reason: 'not-found-or-settled',
-}
-```
-
-这一规则保证双击、网络重试或两个页面同时提交都不会使工具执行两次。
-
-## 5. Agent 输出事件
-
-### 5.1 请求用户审批
-
-```json
-{
-  "type": "tool.approval.requested",
-  "sessionId": "session-1",
-  "runId": "run-1",
-  "approvalId": "approval-1",
-  "callId": "call-1",
-  "toolName": "manage_resource",
-  "title": "确认写入",
-  "reason": "即将写入资源 demo/a",
-  "details": { "operation": "write", "resource": "demo/a" },
-  "input": { "operation": "write", "resource": "demo/a" },
-  "risk": "destructive",
-  "approvalTimeoutMs": 45000,
-  "requestedAt": "2026-09-10T02:00:00.000Z",
-  "expiresAt": "2026-09-10T02:00:45.000Z"
-}
-```
-
-前端应以 `expiresAt` 为准显示倒计时。`approvalTimeoutMs` 方便诊断，但客户端本地计时误差不应改变
-服务端终态。
-
-永久等待事件使用固定组合：
-
-```json
-{
-  "approvalTimeoutMs": -1,
-  "expiresAt": null
-}
-```
-
-前端对此显示“无过期时间”，不要尝试构造一个很远的虚假日期。
-
-### 5.2 审批终态
-
-```json
-{
-  "type": "tool.approval.resolved",
-  "sessionId": "session-1",
-  "runId": "run-1",
-  "approvalId": "approval-1",
-  "callId": "call-1",
-  "toolName": "manage_resource",
-  "outcome": "allowed",
-  "resolvedAt": "2026-09-10T02:00:06.000Z"
-}
-```
-
-公开终态有：
-
-| outcome   | 含义                     | 是否执行工具      |
-| --------- | ------------------------ | ----------------- |
-| `allowed` | 用户允许当前审批         | 是，仅当前 callId |
-| `denied`  | 用户拒绝                 | 否                |
-| `expired` | 服务端审批定时器到期     | 否                |
-| `aborted` | Run 取消或审批出口不可用 | 否                |
-
-### 5.3 自动拒绝
-
-评估器直接返回 `deny` 时没有审批卡片和 `approvalId`，Agent 发送：
-
-```json
-{
-  "type": "tool.guard.denied",
-  "sessionId": "session-1",
-  "runId": "run-1",
-  "callId": "call-1",
-  "toolName": "manage_resource",
-  "reason": "受保护资源不能删除"
-}
-```
-
-前端可以显示只读拒绝提示。这个事件不是整个 Run 的 `error`；模型仍会收到工具失败并继续。
-
-## 6. 前后端交互
-
-CraftAgent 不规定 HTTP URL。`AgentOutputEvent` 已经是标准应用事件，当前 Fastify Runtime 默认原样写入
-SSE；只有使用者要兼容自己的既有协议时才增加投影。交互仍使用两个方向的通道：
-
-- Agent → 前端：聊天 SSE 中发送 `tool.approval.requested/resolved` 和 `tool.guard.denied`。
-- 前端 → Agent：HTTP POST 把用户决定提交给 Server，Server 调用 `agent.resolveToolApproval()`。
-
-```mermaid
-sequenceDiagram
-  participant M as Model
-  participant A as CraftAgent
-  participant S as Server
-  participant U as UI
-
-  M->>A: tool_call
-  A->>A: evaluate() = ask
-  A-->>S: onEvent(requested + expiresAt)
-  S-->>U: SSE requested
-  U->>S: POST decision=allow/deny
-  S->>A: resolveToolApproval()
-  A-->>S: accepted=true
-  S-->>U: HTTP 200
-  A-->>S: onEvent(resolved)
-  S-->>U: SSE resolved
-  alt allow
-    A->>A: 执行工具并写入成功 tool 消息
-  else deny / expired / aborted
-    A->>A: 跳过执行并写入失败 tool 消息
-  end
-  A->>M: 下一 Model Step
-```
-
-Server 伪代码：
+每次请求从认证结果构造 context：
 
 ```ts
 fastify.post('/api/chat', async (request, reply) => {
-  await agent.run({ input: request.body.message }, {
-    onEvent: event => writeSse(reply, event),
-  })
-})
+  const identity = await authenticate(request) // 服务端验证 Token/Session
 
-fastify.post('/api/tool-approvals/:approvalId', async (request, reply) => {
-  const result = agent.resolveToolApproval({
-    approvalId: request.params.approvalId,
-    decision: request.body.decision, // 'allow' | 'deny'
+  return await agent.run({
+    input: request.body.message,
+    sessionId: request.body.sessionId,
+    context: {
+      tenantId: identity.tenantId,
+      user: { id: identity.userId, roles: identity.roles },
+      permissions: identity.permissions,
+      environment: process.env.NODE_ENV === 'production'
+        ? 'production'
+        : 'development',
+    },
+  }, {
+    onEvent: event => sendToClient(event),
   })
-
-  if (!result.accepted)
-    return reply.code(404).send(result)
-  return result
 })
 ```
 
-前端伪代码：
+不要直接相信浏览器提交的 `tenantId`、角色或权限。浏览器可以提交业务输入，但 Runtime 必须从已经认证的
+服务端状态构造 context。
 
-```ts
-function onAgentEvent(event: AgentOutputEvent) {
-  if (event.type === 'tool.approval.requested') {
-    approvalCard.value = {
-      ...event,
-      status: 'pending',
-      remainingMs: event.expiresAt === null
-        ? undefined
-        : Math.max(0, Date.parse(event.expiresAt) - Date.now()),
-    }
-  }
-
-  if (event.type === 'tool.approval.resolved') {
-    approvalCard.value.status = event.outcome
-    stopCountdown()
-  }
-}
-
-async function decide(decision: 'allow' | 'deny') {
-  disableButtons()
-  const response = await fetch(`/api/tool-approvals/${approvalId}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ decision }),
-  })
-
-  // HTTP 只表示提交是否被 Agent 接受；最终展示以 SSE resolved 为准。
-  if (response.status === 404)
-    showAlreadySettled()
-}
-```
-
-## 7. deny 为什么仍然继续循环
-
-模型消息协议要求每个 assistant tool call 都有对应的 `role=tool` 响应。如果策略拒绝后直接终止 Run，历史中会
-留下悬空工具调用，而且模型没有机会告诉用户发生了什么。
-
-因此固定数据流是：
+### context 的生命周期
 
 ```text
-deny / 用户拒绝 / 审批超时
-  -> Harness: TOOL_PERMISSION_DENIED, attempts=0
-  -> AgentLoop: append role=tool failure
-  -> 下一 Model Step
-  -> 模型解释拒绝、询问新方案或完成回答
+认证结果
+  -> agent.run({ context })
+     -> AgentLoop 当前 Run
+        -> 工具级 Guard
+        -> 全局 Guard
+        -> 每次 execute 的 ToolRunContext.context
+  -> Run 结束后释放引用
 ```
 
-例如用户拒绝时模型看到的工具消息类似：
+它不会进入：
+
+- 模型 messages 或工具 JSON Schema；
+- Session Log；
+- AgentOutputEvent；
+- Agent 单例字段；
+- 下一位用户的 Run。
+
+如果希望把用户信息写入业务数据库，应由工具通过 `context` 传给自己的 Store；如果希望记录审计信息，
+应在后续 Trace/Diagnostic 适配层显式脱敏后处理。
+
+## 6. 两层结果如何合并
+
+两层都配置时总会先运行工具级，再运行全局级：
+
+| 工具级       | 全局级       | 最终结果              |
+| ------------ | ------------ | --------------------- |
+| 缺省/allow   | 缺省/allow   | allow                 |
+| ask          | allow        | ask                   |
+| allow        | ask          | ask                   |
+| ask          | ask          | ask，有限时限取较小值 |
+| deny         | 任意有效结果 | deny                  |
+| 任意有效结果 | deny         | deny                  |
+
+两层都缺省不是错误，而是直接允许。这适合当前“工具由可信开发者静态注册”的阶段。需要统一部署约束时才配置
+全局 Guard，需要参数级规则时才配置工具 Guard。
+
+任一评估器抛错或返回非法决定时，CraftAgent 返回 `TOOL_GUARD_FAILED`，不会把异常降级成 allow。
+
+## 7. ask 以后 Agent 内部发生什么
+
+```mermaid
+sequenceDiagram
+  participant H as Tool Harness
+  participant A as Agent ApprovalManager
+  participant R as Runtime
+  participant U as 前端/用户
+
+  H->>A: requestApproval(Guard request)
+  A->>A: 生成 approvalId 并先登记 pending
+  A-->>R: tool.approval.requested
+  R-->>U: SSE/WebSocket 推送确认卡片
+  U->>R: POST approvalId + allow/deny
+  R->>A: agent.resolveToolApproval(...)
+  A-->>R: accepted true/false
+  A-->>R: tool.approval.resolved
+  A-->>H: allowed-once/rejected
+```
+
+“先登记 pending，再发送 requested”很重要：即使 UI 极快返回，也不会发生决定先于等待项创建的竞态。
+
+### requested 标准事件
+
+```ts
+const event = {
+  type: 'tool.approval.requested',
+  sessionId,
+  runId,
+  approvalId,
+  callId,
+  toolName,
+  reason,
+  title,
+  details,
+  input,
+  toolMetadata,
+  approvalTimeoutMs,
+  requestedAt,
+  expiresAt,
+}
+```
+
+`toolMetadata` 是原工具 metadata，前端可以选择展示自己认识的字段。它不应被当作服务端授权证明。
+
+### 审批时限
+
+优先级为：
+
+```text
+两层 ask 合并后的最严格单次值
+  > Agent toolGuard.approvalTimeoutMs
+  > 默认 120 秒
+```
+
+- 正整数：毫秒时限，事件携带绝对 `expiresAt`。
+- `-1`：不创建审批超时定时器，`expiresAt: null`。
+- `-1` 仍响应 Run 的 AbortSignal 和 `execution.limits.maxDurationMs`。
+
+## 8. 前后端接口
+
+流式聊天可直接把每个 `AgentOutputEvent` 序列化为 SSE。收到 requested 后，前端用确认卡片替换输入框，
+但继续读取原 SSE，因为同一个 `agent.run()` 仍在等待。
+
+提交接口只需要：
 
 ```json
 {
-  "role": "tool",
-  "tool_call_id": "call-1",
-  "content": "Error: 工具审批结果：rejected"
+  "approvalId": "approval-...",
+  "decision": "allow"
 }
 ```
 
-只有 Run 自己被取消、达到预算、模型失败或 Session 写入失败等 Run 级条件才会真正结束 AgentLoop。
+Runtime 调用：
 
-## 8. 超时、断连与进程重启
+```ts
+const result = agent.resolveToolApproval(request.body)
+reply.send(result)
+```
 
-- 超时由 Agent 的服务端定时器裁决；前端倒计时只是展示。
-- `approvalTimeoutMs: -1` 不创建审批定时器，但 pending 仍会被用户决定、调用方取消、
-  `execution.limits.maxDurationMs` 和进程退出收口；真正无限等待还需要不配置 Run 时限。
-- 永久等待会持续占用当前 Run 和一个内存 pending 项，应由宿主保证最终决定或主动取消。
-- 浏览器断开聊天 SSE 时，Server 应取消同一个 Run 的 `AbortSignal`。
-- Run 清理会把仍 pending 的审批收口为 `aborted`，避免遗留 Promise。
-- pending 审批目前只存在于 Agent 实例内；进程重启后不会恢复，旧 approvalId 必须视为失效。
-- 若未来需要跨进程审批恢复，需要单独设计持久化状态机和认领协议，不能只把 Map 换成数据库表。
+`approvalId` 只接受首个终态。重复、未知、已超时、已取消或进程重启后的提交返回：
 
-## 9. 安全边界
+```json
+{ "accepted": false, "reason": "not-found-or-settled" }
+```
 
-`ToolGuard` 是执行前决策点，不是 Node.js 沙箱。工具代码与 Agent 同进程运行时，恶意工具可以谎报 risk，
-也可以绕过声明直接调用文件、网络或进程 API。当前项目假定工具由应用开发者静态注册且经过审查。
+因此重复点击、请求重放和迟到响应不会执行第二次工具。
 
-实践中还应注意：
+非流式普通 JSON 响应不能在一个未完成请求中主动推送确认卡片。当前 Runtime 在非流式模式不提供交互出口，
+ask 会按 unavailable 拒绝当前工具调用。若未来需要非流式人工审批，应设计异步任务/轮询协议，而不是阻塞
+一个无法通知用户的 HTTP 响应。
 
-- `input/title/details/reason` 可能进入浏览器和轨迹，必须脱敏。
-- 租户、角色、资源所有权由使用者自己的服务和 Store 决定，CraftAgent 不内置业务权限体系。
-- 审批允许的是一个 `callId`，不能缓存成永久权限。
-- 对外部副作用工具，即使用户允许，也应在业务系统继续校验资源权限和幂等键。
+## 9. deny、用户拒绝和异常的后续
 
-## 10. 推荐源码阅读顺序
+```text
+deny / rejected / expired / unavailable
+  -> execute() 不运行
+  -> ToolExecutionFailure
+  -> 追加 role=tool 错误消息
+  -> AgentLoop 进入下一 Model Step
+  -> 模型解释拒绝、换工具或直接回答
+```
 
-1. `src/craft-agent/agent/tool-guard.ts`：公共输入、输出和配置归一化。
-2. `src/craft-agent/agent/tool-approval-manager.ts`：pending、超时、取消和首个终态。
-3. `src/craft-agent/agent/agent.ts`：Agent 如何组装 Guard、Manager 和 AgentLoop。
-4. `src/craft-agent/tools/execute-tool.ts`：底层 Harness 如何在执行前处理 allow/deny/ask。
-5. `src/craft-agent/core/agent-loop.ts`：工具失败如何写成消息并继续下一 Step。
-6. `src/server/agent-tools.ts`：参数级评估示例。
-7. `src/server/app.ts`：SSE 与审批 POST 的薄适配。
-8. `src/pages/index.vue`：卡片、倒计时和终态 UI。
+只有 Run 预算、取消、模型错误或 Session 错误等 Agent 级条件才形成 Run 的 stopped/failed。工具权限拒绝不是
+Agent 级崩溃。
 
-对应测试：
+## 10. 修改内置工具 Guard
 
-- `test/tool-approval-manager.test.ts`：一次性决定、重复提交和取消。
-- `test/agent-facade.test.ts`：Agent 公开 API、单次超时覆盖和恢复执行。
-- `test/server-runtime.test.ts`：真实 HTTP/SSE 的允许、用户拒绝和自动拒绝。
-- `test/chat-page.test.ts`：前端卡片、倒计时和提交协议。
+```ts
+const agent = new Agent<AppRunContext>({
+  model,
+  tools: {
+    guardOverrides: {
+      calculator: request =>
+        request.context.environment === 'production'
+          ? { decision: 'deny', reason: '生产环境禁用计算器' }
+          : { decision: 'allow' },
+      get_current_time: null,
+    },
+  },
+  toolGuard: globalGuard,
+})
+```
 
-## 11. 动手练习
+函数替换该内置工具的局部 Guard；`null` 明确移除。无论如何，全局 Guard 仍执行。
 
-1. 为 `read/write/delete` 分别返回 `allow/ask/deny`，观察工具实现是否执行。
-2. 把通用超时设为 60 秒、某次 ask 设为 5 秒，确认事件中的 `expiresAt` 使用 5 秒。
-3. 把超时设为 `-1`，确认一天后仍 pending 且事件 `expiresAt` 为 `null`。
-4. 连续两次提交同一 approvalId，确认只有第一次 `accepted=true`。
-5. 用户拒绝后检查下一次模型请求，确认包含对应的失败 `role=tool` 消息。
-6. 在 pending 时断开 SSE，确认工具不执行且审批终态为 `aborted`。
+## 11. 调试顺序
+
+建议按以下顺序打断点：
+
+1. `tools/execute-tool.ts`：输入校验和两层 Guard 合并。
+2. `agent/tool-guard.ts`：全局 Guard 适配与默认审批时限。
+3. `agent/tool-approval-manager.ts`：pending、超时和一次性决定。
+4. `core/agent-loop.ts`：工具失败消息如何回到下一 Model Step。
+5. Runtime 聊天与审批接口。
+6. 前端 requested/resolved/denied 事件分支。
+
+配套测试：
+
+- `test/craft-agent-tools.test.ts`：两层优先级和 context。
+- `test/agent-facade.test.ts`：从 Agent.run 到 Guard/execute 的 context。
+- `test/tool-approval-manager.test.ts`：重复提交、超时和取消。
+- `test/server-runtime.test.ts`、`test/chat-page.test.ts`：接口与 UI。

@@ -11,7 +11,13 @@ import type {
   ModelAdapter,
   ModelReasoningOptions,
   SessionStore,
+  ToolExecutionConfig,
   ToolGuardConfig,
+  ToolGuardDecision,
+  ToolGuardEvaluator,
+  ToolGuardRequest,
+  ToolGuardToolInfo,
+  ToolRunContext,
 } from '../src/craft-agent'
 import { describe, expect, it } from 'vitest'
 import Agent, {
@@ -40,6 +46,12 @@ function acceptsPublicTypes(_value: {
   model?: ModelAdapter
   store?: SessionStore
   guard?: ToolGuardConfig
+  toolExecution?: ToolExecutionConfig
+  guardDecision?: ToolGuardDecision
+  guardEvaluator?: ToolGuardEvaluator
+  guardRequest?: ToolGuardRequest
+  guardTool?: ToolGuardToolInfo
+  toolRunContext?: ToolRunContext
 }): void {}
 
 describe('craft-agent public API', () => {
@@ -87,5 +99,28 @@ describe('craft-agent public API', () => {
     expect(DeepSeekModelAdapter).toBeTypeOf('function')
     expect(OpenAICompatibleModelAdapter).toBeTypeOf('function')
     expect('DeepSeekModelAdapter' in publicApi).toBe(false)
+  })
+
+  it('types trusted per-run context at the Agent boundary', () => {
+    interface AppContext {
+      readonly tenantId: string
+      readonly environment: 'test'
+    }
+    const config: AgentConfigInput<AppContext> = {
+      model: new ScriptedModelAdapter({ script: [] }),
+      toolGuard: {
+        evaluate: request => request.context.tenantId
+          ? { decision: 'allow' }
+          : { decision: 'deny', reason: '缺少租户' },
+      },
+    }
+    const agent = new Agent<AppContext>(config)
+    const request: Parameters<typeof agent.run>[0] = {
+      input: '测试上下文类型',
+      context: { tenantId: 'tenant-a', environment: 'test' },
+    }
+
+    expect(agent).toBeInstanceOf(Agent)
+    expect(request.context.tenantId).toBe('tenant-a')
   })
 })

@@ -18,6 +18,7 @@ import type {
 } from '../core'
 import type {
   ToolEventListener,
+  ToolGuardEvaluator,
 } from '../tools'
 import type { AgentToolInput } from './normalize-tools'
 import type { DefinedToolGuardConfig, ToolGuardConfig } from './tool-guard'
@@ -57,21 +58,29 @@ export type AgentModelInput
     | ModelAdapter
 
 /** 保留默认内置工具，并允许对它们进行显式调整和追加。 */
-export interface ExtendAgentToolsConfig {
+export interface ExtendAgentToolsConfig<TContext = undefined> {
   readonly mode?: 'extend'
   readonly disabledBuiltins?: readonly BuiltinToolName[]
-  readonly overrides?: Readonly<Partial<Record<BuiltinToolName, AgentToolInput>>>
-  readonly additional?: readonly AgentToolInput[]
+  readonly overrides?: Readonly<Partial<Record<BuiltinToolName, AgentToolInput<TContext>>>>
+  readonly additional?: readonly AgentToolInput<TContext>[]
+  /**
+   * 只替换内置工具自身的局部 Guard。传函数表示替换，传 null 表示移除；全局 Guard 始终照常执行。
+   */
+  readonly guardOverrides?: Readonly<Partial<Record<
+    BuiltinToolName,
+    ToolGuardEvaluator<TContext> | null
+  >>>
 }
 
 /** 完全跳过默认内置工具，仅注册调用方给出的工具集合。 */
-export interface ReplaceAgentToolsConfig {
+export interface ReplaceAgentToolsConfig<TContext = undefined> {
   readonly mode: 'replace'
-  readonly tools: readonly AgentToolInput[]
+  readonly tools: readonly AgentToolInput<TContext>[]
 }
 
 /** Agent 工具配置：默认扩展内置集合，也可以显式整体替换。 */
-export type AgentToolsInput = ExtendAgentToolsConfig | ReplaceAgentToolsConfig
+export type AgentToolsInput<TContext = undefined>
+  = ExtendAgentToolsConfig<TContext> | ReplaceAgentToolsConfig<TContext>
 
 /** CraftAgent 生成运行、轮次、事件和审批标识时使用的稳定种类。 */
 export type AgentIdKind = 'run' | 'turn' | 'event' | 'approval'
@@ -108,14 +117,14 @@ export interface AgentObservabilityConfig {
 }
 
 /** 创建 CraftAgent 时由开发者提供的单一配置根。 */
-export interface AgentConfigInput {
+export interface AgentConfigInput<TContext = undefined> {
   readonly model: AgentModelInput
   /** Agent 的系统指令，不属于模型供应商连接配置。 */
   readonly systemPrompt?: string
   /** 未配置时自动装载全部内置工具。 */
-  readonly tools?: AgentToolsInput
-  /** 工具风险评估与通用审批时限的唯一配置入口；等待用户由 Agent 内部完成。 */
-  readonly toolGuard?: ToolGuardConfig
+  readonly tools?: AgentToolsInput<TContext>
+  /** 全局工具约束与通用审批时限；工具自己的参数级 Guard 随 defineTool() 配置。 */
+  readonly toolGuard?: ToolGuardConfig<TContext>
   /** Session Store 和会话标识配置。 */
   readonly session?: AgentSessionConfig
   /** AgentLoop 模型调用方式、预算、时钟和运行标识配置。 */
@@ -145,11 +154,11 @@ export interface DefinedAgentObservabilityConfig {
 }
 
 /** defineAgentConfig() 返回的已归一化、只读配置。 */
-export interface DefinedAgentConfig {
+export interface DefinedAgentConfig<TContext = undefined> {
   readonly model: ModelAdapter
-  readonly tools: readonly AgentTool[]
+  readonly tools: readonly AgentTool<TContext>[]
   readonly systemPrompt?: string
-  readonly toolGuard: DefinedToolGuardConfig
+  readonly toolGuard: DefinedToolGuardConfig<TContext>
   readonly session: DefinedAgentSessionConfig
   readonly execution: DefinedAgentExecutionConfig
   readonly observability: DefinedAgentObservabilityConfig
@@ -161,7 +170,9 @@ export interface DefinedAgentConfig {
  * 直接 `new Agent(config)` 会自动调用本函数；显式调用适合在应用启动阶段提前暴露配置错误。
  * 本函数不读取环境变量，密钥和部署配置仍由外部 Runtime 负责提供。
  */
-export function defineAgentConfig(input: AgentConfigInput): DefinedAgentConfig {
+export function defineAgentConfig<TContext = undefined>(
+  input: AgentConfigInput<TContext>,
+): DefinedAgentConfig<TContext> {
   if (typeof input !== 'object' || input === null)
     throw new TypeError('Agent 配置必须是对象')
   assertKnownConfigFields(
@@ -201,7 +212,7 @@ export function defineAgentConfig(input: AgentConfigInput): DefinedAgentConfig {
   }
 
   const model = createModelAdapter(input.model)
-  const tools = createTools(input.tools)
+  const tools = createTools<TContext>(input.tools)
   const limits = createLimits(input.execution?.limits)
   const modelExecution = defineAgentModelExecutionOptions(input.execution?.model)
   const toolGuard = defineToolGuardConfig(input.toolGuard)
@@ -263,22 +274,30 @@ function assertKnownConfigFields(
 }
 
 /** 将工具选择配置解析为 AgentLoop 可直接消费的最终只读集合。 */
-function createTools(input: AgentToolsInput | undefined): readonly AgentTool[] {
+function createTools<TContext = undefined>(
+  input: AgentToolsInput<TContext> | undefined,
+): readonly AgentTool<TContext>[] {
   if (input === undefined)
-    return createBuiltinTools()
+    return createBuiltinTools<TContext>()
   if (typeof input !== 'object' || input === null || Array.isArray(input))
     throw new TypeError('Agent config.tools 必须是工具配置对象')
 
   if (input.mode === 'replace') {
+    assertKnownConfigFields(input, ['mode', 'tools'], 'Agent config.tools')
     rejectReplaceOnlyFields(input)
     if (!Array.isArray(input.tools))
       throw new TypeError('Agent config.tools.tools 必须是数组')
-    return freezeUniqueTools(normalizeAgentToolDefinitions(input.tools))
+    return freezeUniqueTools(normalizeAgentToolDefinitions<TContext>(input.tools))
   }
   if (input.mode !== undefined && input.mode !== 'extend')
     throw new TypeError('Agent config.tools.mode 必须是 extend 或 replace')
 
-  const extend = input as ExtendAgentToolsConfig
+  const extend = input as ExtendAgentToolsConfig<TContext>
+  assertKnownConfigFields(
+    extend,
+    ['mode', 'disabledBuiltins', 'overrides', 'additional', 'guardOverrides'],
+    'Agent config.tools',
+  )
   if (extend.disabledBuiltins !== undefined
     && !Array.isArray(extend.disabledBuiltins)) {
     throw new TypeError('Agent config.tools.disabledBuiltins 必须是数组')
@@ -291,6 +310,12 @@ function createTools(input: AgentToolsInput | undefined): readonly AgentTool[] {
       || Array.isArray(extend.overrides))) {
     throw new TypeError('Agent config.tools.overrides 必须是对象')
   }
+  if (extend.guardOverrides !== undefined
+    && (typeof extend.guardOverrides !== 'object'
+      || extend.guardOverrides === null
+      || Array.isArray(extend.guardOverrides))) {
+    throw new TypeError('Agent config.tools.guardOverrides 必须是对象')
+  }
 
   const builtinNames = new Set<string>(builtinToolNames)
   const disabled = new Set<string>()
@@ -301,7 +326,7 @@ function createTools(input: AgentToolsInput | undefined): readonly AgentTool[] {
   }
 
   const overrides = extend.overrides ?? {}
-  const normalizedOverrides: Partial<Record<BuiltinToolName, AgentTool>> = {}
+  const normalizedOverrides: Partial<Record<BuiltinToolName, AgentTool<TContext>>> = {}
   for (const name of Object.keys(overrides)) {
     if (!builtinNames.has(name))
       throw new TypeError(`不能覆盖未知的内置工具：${name}`)
@@ -309,13 +334,24 @@ function createTools(input: AgentToolsInput | undefined): readonly AgentTool[] {
       throw new TypeError(`内置工具不能同时禁用和覆盖：${name}`)
     const builtinName = name as BuiltinToolName
     const source = overrides[builtinName]
-    const tool = source ? normalizeAgentToolDefinitions([source])[0] : undefined
+    const tool = source ? normalizeAgentToolDefinitions<TContext>([source])[0] : undefined
     if (!tool || tool.name !== name)
       throw new TypeError(`内置工具 ${name} 的覆盖实现必须使用相同名称`)
     normalizedOverrides[builtinName] = tool
   }
 
-  const builtins = createBuiltinTools()
+  const guardOverrides = extend.guardOverrides ?? {}
+  for (const name of Object.keys(guardOverrides)) {
+    if (!builtinNames.has(name))
+      throw new TypeError(`不能覆盖未知内置工具的 Guard：${name}`)
+    if (disabled.has(name))
+      throw new TypeError(`内置工具不能同时禁用和覆盖 Guard：${name}`)
+    const guard = guardOverrides[name as BuiltinToolName]
+    if (guard !== null && guard !== undefined && typeof guard !== 'function')
+      throw new TypeError(`内置工具 ${name} 的 Guard 覆盖必须是函数或 null`)
+  }
+
+  const builtins = createBuiltinTools<TContext>()
   const resolved = builtins.flatMap((tool) => {
     if (disabled.has(tool.name))
       return []
@@ -323,28 +359,47 @@ function createTools(input: AgentToolsInput | undefined): readonly AgentTool[] {
     const override = Object.hasOwn(normalizedOverrides, name)
       ? normalizedOverrides[name]
       : undefined
-    return [override ?? tool]
+    const selected = override ?? tool
+    if (!Object.hasOwn(guardOverrides, name))
+      return [selected]
+    const toolGuard = guardOverrides[name] ?? null
+    const execute: AgentTool<TContext>['execute'] = (rawInput, options) => (
+      selected.execute(rawInput, {
+        ...options,
+        toolGuardOverride: toolGuard,
+      })
+    )
+    return [Object.freeze({
+      ...selected,
+      toolGuard,
+      // 将覆盖收进注册项本身，直接调用 AgentTool.execute() 与经 AgentLoop 调用保持一致。
+      execute,
+    })]
   })
-  const additional = normalizeAgentToolDefinitions(extend.additional ?? [])
+  const additional = normalizeAgentToolDefinitions<TContext>(extend.additional ?? [])
   return freezeUniqueTools([...resolved, ...additional])
 }
 
 /** replace 是互斥模式，运行时也拒绝混入 extend 专属字段。 */
-function rejectReplaceOnlyFields(input: ReplaceAgentToolsConfig): void {
-  const value = input as ReplaceAgentToolsConfig & {
+function rejectReplaceOnlyFields<TContext>(input: ReplaceAgentToolsConfig<TContext>): void {
+  const value = input as ReplaceAgentToolsConfig<TContext> & {
     readonly disabledBuiltins?: unknown
     readonly overrides?: unknown
     readonly additional?: unknown
+    readonly guardOverrides?: unknown
   }
   if (value.disabledBuiltins !== undefined
     || value.overrides !== undefined
-    || value.additional !== undefined) {
+    || value.additional !== undefined
+    || value.guardOverrides !== undefined) {
     throw new TypeError('Agent config.tools 的 replace 模式不能配置禁用、覆盖或追加字段')
   }
 }
 
 /** 冻结工具集合，并在 Agent 启动阶段拒绝空名称和任何重复注册。 */
-function freezeUniqueTools(tools: readonly AgentTool[]): readonly AgentTool[] {
+function freezeUniqueTools<TContext>(
+  tools: readonly AgentTool<TContext>[],
+): readonly AgentTool<TContext>[] {
   const names = new Set<string>()
   for (const tool of tools) {
     if (typeof tool !== 'object' || tool === null || typeof tool.name !== 'string' || !tool.name.trim())

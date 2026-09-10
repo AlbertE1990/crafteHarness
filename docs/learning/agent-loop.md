@@ -53,10 +53,9 @@ const weather = defineTool({
   description: '查询指定城市天气',
   inputSchema: z.strictObject({ city: z.string() }),
   outputSchema: z.strictObject({ summary: z.string() }),
-  security: {
+  metadata: {
     risk: 'read',
     capabilities: ['network:public'],
-    idempotent: true,
   },
   async execute(input, context) {
     // 真实实现应把 context.signal 传给 fetch。
@@ -69,7 +68,6 @@ const loop = new AgentLoop({
   store: new MemorySessionStore(),
   tools: [createAgentTool(weather)],
   systemPrompt: '你是一个可靠的助手。',
-  toolPolicy: { evaluate: () => ({ decision: 'allow' }) },
   limits: {
     maxModelSteps: 8,
     maxToolCalls: 16,

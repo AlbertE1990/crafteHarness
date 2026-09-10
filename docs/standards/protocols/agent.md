@@ -98,12 +98,12 @@ const agent = new Agent({
 ```
 
 配置内部先把每个原始定义转换为 `AgentTool`，再检查名称并冻结最终数组。执行仍经过 Tool Harness 的
-输入输出校验、策略、超时和重试。已经转换的 `AgentTool` 是 Core 执行结构，不属于 Agent 配置输入。
+输入输出校验、两层 Guard、审批、超时和重试。已经转换的 `AgentTool` 是 Core 执行结构，不属于 Agent 配置输入。
 
 `AgentConfigInput.tools` 使用两种互斥模式：
 
 - 省略 `mode` 或使用 `mode: 'extend'`：以全部内置工具为基础，可以通过 `disabledBuiltins` 禁用、
-  通过 `overrides` 覆盖，并通过 `additional` 追加应用工具。
+  通过 `overrides` 覆盖，通过 `guardOverrides` 单独修改内置工具 Guard，并通过 `additional` 追加应用工具。
 - 使用 `mode: 'replace'`：完全跳过内置工具，只注册 `tools` 指定的集合。
 
 ```ts
@@ -113,6 +113,9 @@ const agent = new Agent({
     disabledBuiltins: ['get_current_time'],
     overrides: {
       calculator: customCalculator,
+    },
+    guardOverrides: {
+      get_current_time: request => ({ decision: 'allow' }),
     },
     additional: [weatherTool],
   },
@@ -129,7 +132,8 @@ const isolatedAgent = new Agent({
 
 解析顺序固定为“默认内置 → 禁用 → 覆盖 → 追加”。同一内置工具不能同时禁用和覆盖；覆盖实现必须使用
 被覆盖工具的同一名称；追加工具不能与最终集合重名。需要同名替换时必须使用 `overrides`，禁止静默覆盖。
-`replace` 模式不能混入禁用、覆盖或追加字段。
+`guardOverrides` 的函数替换内置工具自身 Guard，`null` 明确移除；全局 Guard 不受影响。
+`replace` 模式不能混入禁用、覆盖、Guard 覆盖或追加字段。
 
 ## 5. 运行与事件
 
@@ -137,6 +141,7 @@ const isolatedAgent = new Agent({
 const result = await agent.run({
   input: '杭州天气怎么样？',
   sessionId: 'optional-session-id',
+  context: appRunContext,
 }, {
   model: {
     stream: false,
@@ -156,6 +161,9 @@ const result = await agent.run({
 在进入 AgentLoop 前只解析一次设置，因此工具调用后的后续 Model Step 不会自行切换流式方式或推理等级。
 `reasoning.effort` 是开放字符串，CraftAgent 核心不假设固定枚举；具体 Adapter 必须转换并校验当前模型
 支持的值。显式 `reasoning.enabled: false` 时不会继承默认 effort。
+
+当 Agent 声明为 `new Agent<AppRunContext>()` 时，`run()` 的 `context` 为必填。它只传给当前 Run 的工具级
+Guard、全局 Guard 和 `execute()`，不进入模型、Session Log、标准前端事件或 Agent 单例。
 
 `onEvent` 输出以下稳定应用事件：
 
@@ -179,27 +187,36 @@ const result = await agent.run({
 
 ## 6. 风险评估与用户审批
 
-Agent 门面只暴露一个 `toolGuard` 配置入口。使用者实现 `evaluate()` 决定当前调用是 `allow`、`deny`
-还是 `ask`；Agent 内部负责把它适配为 Tool Harness 策略，并管理一次性审批。
+工具可在 `defineTool()` 中配置局部 `toolGuard` 处理参数级规则；Agent 根配置的 `toolGuard.evaluate()` 处理
+部署、租户、用户和环境约束。缺少任一层等价于该层 allow，两层都存在时按工具级、全局级顺序执行，并按
+`deny > ask > allow` 合并。Agent 内部负责适配 Harness 并管理一次性审批。
 
 ```ts
-const agent = new Agent({
+interface AppRunContext {
+  tenantId: string
+  permissions: readonly string[]
+  environment: 'development' | 'production'
+}
+
+const agent = new Agent<AppRunContext>({
   model,
   tools: { additional: [businessTool] },
   toolGuard: {
     approvalTimeoutMs: 120_000,
     evaluate(request) {
-      if (request.tool.security.risk === 'safe')
+      if (request.context.permissions.includes('tools:execute'))
         return { decision: 'allow' }
       return {
-        decision: 'ask',
-        reason: `是否允许 ${request.tool.name}？`,
-        approvalTimeoutMs: 45_000,
+        decision: 'deny',
+        reason: `当前用户无权执行 ${request.tool.name}`,
       }
     },
   },
 })
 ```
+
+工具 `metadata` 是任意 JSON 安全标签，由两层 Guard 自行解释；CraftAgent 不提供固定 risk 枚举，也不根据
+metadata 自动授权。任一 Guard 抛错或返回非法结构时 fail-closed 为当前工具失败。
 
 单次 `ask.approvalTimeoutMs` 优先于通用 `toolGuard.approvalTimeoutMs`，均未提供时默认 120 秒。正整数表示
 等待毫秒数；`-1` 表示永久等待用户决定。永久等待不会创建超时定时器，并在标准事件中输出

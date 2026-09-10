@@ -8,7 +8,7 @@
 - 每个阶段先在当前单一项目中测试验证，不提前拆分 npm packages。
 - CraftAgent 核心继续保持与模型 SDK、HTTP 框架、数据库驱动和前端解耦。
 - 当前使用者是能够修改并运行服务端代码的第一方开发者，暂不支持不可信第三方工具注入。
-- 工具默认不重试；开发者声明幂等并提供重试策略即可，暂不实现第三方幂等性审查。
+- 工具默认不重试；配置重试即表示开发者允许重复调用，真实幂等性由业务实现保证。
 - 安全信任、插件沙箱和第三方代码治理放在核心功能完成后的长期强化阶段。
 
 ## 2. 阶段总览
@@ -29,7 +29,8 @@ flowchart LR
   P46 --> P47[阶段 4.7<br/>ToolGuard 与内置审批管理<br/>已完成]
   P47 --> P48[阶段 4.8<br/>配置分组与公共 API 收口<br/>已完成]
   P48 --> P49[阶段 4.9<br/>单次模型设置与非流式 JSON<br/>已完成]
-  P49 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
+  P49 --> P410[阶段 4.10<br/>分层 Guard 与运行上下文<br/>已完成]
+  P410 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -41,7 +42,7 @@ flowchart LR
 - `defineTool()` 将 Schema、实现和执行元数据放在一起。
 - Zod 输入/输出校验及 Draft 7 JSON Schema 投影。
 - allow/deny/ask 策略与单次审批。
-- 幂等重试、随机退避、协作式超时和取消。
+- 显式重试、随机退避、协作式超时和取消。
 - `ToolError`、`ToolExecutionResult` 和工具轨迹事件。
 - `get_current_time`、`calculator` 安全内置工具。
 
@@ -251,7 +252,20 @@ flowchart LR
 
 详细交付见[阶段 4.9 记录](./deliveries/delivery-015-run-model-options-and-json.md)。
 
-## 18. 阶段 5：轨迹持久化与查询（下一阶段）
+## 18. 阶段 4.10：分层 Guard、metadata 与运行上下文（已完成）
+
+已完成范围：
+
+- 删除无法由框架证明且与 retry 重复的 `security/idempotent`，工具改用任意 JSON 安全 `metadata`。
+- 超时与重试收进 `execution`；配置 retry 本身表示工具作者允许重复调用。
+- 工具级 Guard 和 Agent 全局 Guard 固定执行，按 `deny > ask > allow` 合并；缺省 Guard 直接允许。
+- `new Agent<TContext>()` 与 `run({ context })` 将租户、用户和环境数据只传给当前 Guard 与工具执行。
+- 内置工具可通过 `tools.guardOverrides` 替换或移除局部 Guard，全局 Guard 始终执行。
+- 审批标准事件使用通用 `toolMetadata`，不再固化 risk 枚举。
+
+详细交付见[阶段 4.10 记录](./deliveries/delivery-016-layered-tool-guards.md)。
+
+## 19. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -261,7 +275,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 CraftAgent 核心协议。
 
-## 19. 阶段 6：异常诊断
+## 20. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -270,11 +284,11 @@ flowchart LR
 - 定义供应商无关、可注入的 `DiagnosticSink` 或最小 `AgentLogger`。
 - 在原始异常归一化前记录 `stack`、`cause` 和安全的 Node 错误字段。
 - 使用 `errorId` 关联公开错误、轨迹和服务端诊断。
-- 覆盖工具、策略、审批、模型 Adapter 和事件输出异常。
+- 覆盖工具、Guard、审批、模型 Adapter 和事件输出异常。
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 20. 阶段 7：长期安全与扩展（最低优先级）
+## 21. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

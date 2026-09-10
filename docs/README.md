@@ -44,10 +44,10 @@
 
 当前已完成 Tool Harness、ModelAdapter、官方 Adapter、Session Log、Agent Loop 和统一 Agent 门面：
 
-- 工具具有 Zod 输入输出边界、权限、审批、超时、幂等重试和执行事件。
+- 工具具有 Zod 输入输出边界、两层 Guard、审批、超时、显式重试和执行事件。
 - 模型具有供应商无关消息、OpenAI 兼容标准 chunk、非流式结果、用量和错误协议。
 - OpenAI SDK 仅存在于官方 Adapter；Core 不依赖 SDK，DeepSeek 只维护供应商差异。
-- `new Agent(config)` 可直接组装内置模型、自定义 Adapter、Store、预算和事件观察器，并自动装载安全内置工具。
+- `new Agent(config)` 可直接组装内置模型、自定义 Adapter、Store、预算和事件观察器，并自动装载内置工具。
 - 工具配置支持禁用或覆盖指定内置工具、整体替换内置集合，以及只追加应用工具。
 - `defineAgentConfig()` 可显式提前校验配置；`defineTool()` 结果可直接传入 Agent，由内部统一归一化。
 - Scripted Adapter 与契约探针位于仓库 `test/support`，为本项目提供无网络验证，不扩大生产 API。
@@ -57,7 +57,9 @@
 - Agent Loop 以 Run/Turn/Step 串联模型、工具和 Session，并提供预算、取消、稳定终态和实时事件。
 - Agent 门面自动处理 Session ID，分离标准应用输出与完整轨迹，并提供会话读取和分页列表。
 - Runtime 可直接输出标准 `AgentOutputEvent`；只有兼容自有外部协议时才增加应用侧 Adapter。
-- Agent 门面通过单一 ToolGuard 接收风险评估规则，并内置一次性审批、超时、取消和重复提交控制。
+- 工具级与 Agent 全局 ToolGuard 按 `deny > ask > allow` 合并；缺省 Guard 直接允许。
+- `agent.run({ context })` 可把可信租户、用户和环境数据仅传给本次 Guard 与工具执行。
+- Agent 内置一次性审批、超时、取消和重复提交控制。
 - 真实 DeepSeek 冒烟仍需在配置 API Key 后执行。
 - Fastify 已迁移到 Agent 门面；持久化轨迹查询接口是下一阶段。
 

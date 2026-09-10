@@ -2,49 +2,60 @@
 
 > 文档类型：协议规范；状态：Accepted。
 
-## 设计目标
+## 1. 设计目标
 
-工具定义必须把名称、描述、输入 Schema、成功输出 Schema 和实现放在一起。这样可以消除独立 JSON 文件、TypeScript interface 与执行函数之间的协议漂移。
+工具定义把名称、模型描述、输入 Schema、成功输出 Schema、业务标签、局部 Guard、执行策略和实现放在
+一起。普通应用只调用 `defineTool()`，再把结果交给 `new Agent({ tools })`；Schema 编译、类型擦除、
+Guard 合并、审批、重试和结果归一化都由 CraftAgent 内部完成。
 
-工具协议分为三部分：
+模型只能看到 `name`、`description` 和 `inputSchema`。以下内容永远不会发送给模型：
 
-- 模型可见定义：名称、描述和输入 JSON Schema。
-- Host 执行定义：Zod Schema、`execute()`、超时、重试和安全元数据。
-- 规范执行结果：成功业务值、模型内容或结构化错误。
+- `outputSchema` 和 `execute()`；
+- `metadata` 与 `toolGuard`；
+- `execution.timeoutMs/retry`；
+- 当前 `agent.run().context`。
 
-## 定义工具
+## 2. 定义工具
 
 ```ts
+import { defineTool, ToolError } from 'craft-agent'
 import { z } from 'zod'
-import { defineTool, ToolError } from '../src/craft-agent'
 
 export const getWeatherTool = defineTool({
   name: 'get_weather',
   description: '查询指定城市的当前天气。',
-
   inputSchema: z.strictObject({
     city: z.string().min(1).describe('城市名称，例如杭州。'),
   }),
-
   outputSchema: z.strictObject({
     city: z.string(),
     temperatureC: z.number(),
     weather: z.string(),
   }),
 
-  timeoutMs: 8_000,
-  retry: {
-    maxAttempts: 3,
-    baseDelayMs: 250,
-    maxDelayMs: 2_000,
-    backoff: 'exponential',
-    jitterRatio: 0.2,
-  },
-
-  security: {
+  // 任意 JSON 安全业务标签。CraftAgent 不解释 risk/capabilities 的含义。
+  metadata: {
     risk: 'read',
     capabilities: ['network:public'],
-    idempotent: true,
+    domain: 'weather',
+  },
+
+  // 工具固有且依赖本次参数的规则写在这里；缺省表示这一层 allow。
+  toolGuard(request) {
+    return request.input.city === '内部机房'
+      ? { decision: 'deny', reason: '该位置不允许通过公共天气服务查询' }
+      : { decision: 'allow' }
+  },
+
+  execution: {
+    timeoutMs: 8_000,
+    retry: {
+      maxAttempts: 3,
+      baseDelayMs: 250,
+      maxDelayMs: 2_000,
+      backoff: 'exponential',
+      jitterRatio: 0.2,
+    },
   },
 
   async execute(input, context) {
@@ -68,45 +79,122 @@ export const getWeatherTool = defineTool({
 })
 ```
 
-示例中的 `fetchWeather()` 由应用实现；工具应通过闭包注入网络或数据库依赖，不能从 CraftAgent 获取万能 service locator。
+工具通过闭包接收网络、数据库或领域服务，不能从 CraftAgent 获取万能 service locator。
 
-## Schema 规范
+## 3. Schema 与 metadata
 
-- 输入根节点及所有嵌套对象必须使用 `z.strictObject()`；输出中的对象同样如此。
-- 未知字段必须被拒绝，不能静默保留或剥离；第一阶段不支持动态键 record。
-- 输入和输出只能包含可无损表示为 JSON 的类型。
-- 禁止在工具协议中使用 `Date`、`bigint`、`Map`、`Set`、函数和无法转换的 transform。
-- `defineTool()` 在注册阶段将 Schema 转换为 Draft 7 JSON Schema；转换失败立即拒绝注册。
+- 输入根节点及所有嵌套对象必须使用 `z.strictObject()`，输出中的对象同样如此。
+- 输入输出只能包含可无损表示为 JSON 的类型；动态键 record 暂不属于支持子集。
 - `inputSchema` 是模型参数、TypeScript 输入类型和运行时校验的唯一来源。
-- `outputSchema` 只验证成功业务值，第一阶段不发送给模型。
+- `outputSchema` 用于发现实现或上游协议错误、推导成功值类型并稳定轨迹结构；当前不发送给模型。
+- `defineTool()` 在注册期转换 Draft 7 JSON Schema，并检查所有对象拒绝未知字段。
+- `metadata` 必须是无循环引用的普通 JSON 对象；未配置时归一化为冻结的空对象。
+- metadata 的字段名和嵌套结构由应用决定。CraftAgent 不根据 `risk`、`capabilities` 等字段自动授权。
 
-`outputSchema` 的作用是发现实现或上游协议错误、保证结果可序列化、推导返回类型，并为轨迹和组合工具提供稳定结构。工具失败使用独立的 `ToolExecutionFailure`，不需要满足业务输出 Schema。
+## 4. 运行上下文
 
-## 内容投影
-
-工具成功结果包含：
-
-- `value`：通过 `outputSchema` 校验后的业务值。
-- `content`：写给模型的文本。
-- `attempts`：实际执行次数。
-- `durationMs`：整个逻辑调用耗时。
-
-默认投影规则是字符串原样保留，其他 JSON 值使用 `JSON.stringify()`。工具可以通过 `renderOutput()` 自定义模型内容，但不能绕过 `outputSchema`。
-
-模型内容默认限制为 256 KiB。调用方可以降低限制，不应通过提高限制解决上下文过大的问题；大型工具应主动分页或摘要。
-
-## 错误规范
-
-业务工具使用 `ToolError` 表达预期错误：
+`ToolRunContext<TContext>` 包含：
 
 ```ts
-throw new ToolError({
-  code: 'UPSTREAM_TIMEOUT',
-  message: '上游服务请求超时',
-  retryable: true,
-  details: { provider: 'example' },
+interface ToolRunContext<TContext> {
+  callId: string
+  runId?: string
+  sessionId?: string
+  attempt: number
+  context: TContext
+  signal: AbortSignal
+}
+```
+
+`context` 来自当前 `agent.run({ context })`。它用于传递租户、用户、角色、部署环境或请求级服务，
+只在本次 Run 内存在；CraftAgent 不会把它发送给模型、写入 Session Log、发给前端或保存在 Agent 单例。
+
+## 5. 两层 Tool Guard
+
+每次已通过输入校验的调用最多经过两层 Guard：
+
+1. 工具级 `defineTool({ toolGuard })`：判断工具固有、参数相关的风险。
+2. Agent 全局 `toolGuard.evaluate()`：判断部署、租户、用户、角色和环境约束。
+
+缺少某一层等价于该层返回 `allow`；两层都缺少时工具直接执行。配置了两层时，两层按“工具级 → 全局”
+顺序执行，最终结果按以下固定优先级合并：
+
+```text
+deny > ask > allow
+```
+
+- 任一层 deny：拒绝当前工具调用。
+- 没有 deny、任一层 ask：创建一次用户审批。
+- 两层均 allow 或均缺省：进入执行尝试。
+- 两层同时 ask：有限审批时限取较小值；`-1` 只在没有有限时限时生效。
+- 两层同时给出 reason/details/metadata 时，CraftAgent 使用来源命名空间合并。
+- 任一 Guard 抛错或返回非法结构：产生 `TOOL_GUARD_FAILED`，业务 `execute()` 不运行。
+
+Guard 只返回 `allow | deny | ask`，不直接执行工具，也不自己等待前端。Agent 内部负责审批 ID、pending
+Promise、超时、取消和重复提交。
+
+### 5.1 修改内置工具 Guard
+
+```ts
+const agent = new Agent({
+  model,
+  tools: {
+    guardOverrides: {
+      calculator: request =>
+        request.context.environment === 'production'
+          ? { decision: 'deny', reason: '生产环境禁用计算器' }
+          : { decision: 'allow' },
+      // null 明确移除内置工具自己的 Guard；全局 Guard 仍会执行。
+      get_current_time: null,
+    },
+  },
 })
 ```
+
+`guardOverrides` 只改变内置工具的局部 Guard，不替换实现，不跳过全局 Guard。
+
+## 6. 审批决定
+
+```ts
+type ToolGuardDecision
+  = | { decision: 'allow', metadata?: JsonObject }
+    | { decision: 'deny', reason: string, metadata?: JsonObject }
+    | {
+      decision: 'ask'
+      reason: string
+      title?: string
+      details?: JsonObject
+      approvalTimeoutMs?: number
+      metadata?: JsonObject
+    }
+```
+
+单次 `approvalTimeoutMs` 高于 Agent 通用值；正整数表示毫秒，`-1` 表示不自动过期。用户拒绝、
+自动拒绝和审批不可用都只形成当前工具的失败结果，由 AgentLoop 写回 `role=tool` 后继续下一 Model Step。
+
+## 7. 重试、超时与取消
+
+工具默认不重试。配置 `execution.retry` 即表示工具作者明确授权 CraftAgent 对同一 `callId` 重复调用
+`execute()`。框架不再要求或验证单独的 `idempotent` 声明，因为它无法证明实际业务副作用。
+
+一次重试必须同时满足：
+
+- 已配置 `execution.retry`；
+- 本次规范错误的 `retryable === true`；
+- 尚未达到 `maxAttempts`；
+- Run 没有取消。
+
+写操作若启用重试，工具作者必须自行使用 `callId` 幂等键、上游幂等协议或数据库唯一约束消除重复副作用。
+`maxAttempts` 包含首次执行；审批发生在 attempt 循环之前，不会因重试重复询问。
+
+`execution.timeoutMs` 是协作式超时。Harness 会中止 `context.signal`，工具必须观察该信号或传给下游。
+JavaScript 无法强杀忽略信号的同进程同步代码。
+
+## 8. 结果、错误与轨迹
+
+成功结果包含经过 `outputSchema` 校验的 `value`、模型可见 `content`、`attempts` 和
+`durationMs`。字符串默认原样投影，其余 JSON 值使用 `JSON.stringify()`；`renderOutput()` 可改变
+投影但不能绕过输出校验。
 
 稳定内置错误码包括：
 
@@ -114,80 +202,18 @@ throw new ToolError({
 - `INVALID_TOOL_OUTPUT`
 - `TOOL_OUTPUT_RENDER_FAILED`
 - `TOOL_OUTPUT_TOO_LARGE`
-- `TOOL_POLICY_FAILED`
+- `TOOL_GUARD_FAILED`
 - `TOOL_PERMISSION_DENIED`
 - `TOOL_TIMEOUT`
 - `TOOL_EXECUTION_FAILED`
 - `ABORTED`
 
-未知异常默认映射成不可重试的 `TOOL_EXECUTION_FAILED`。错误详情不能包含 API Key、授权头或完整敏感输入。
+`ToolErrorInfo` 是面向模型和公开轨迹的安全错误，不包含 stack/cause。完整异常诊断出口仍列在后续阶段。
 
-当前 `ToolErrorInfo` 是可返回给模型、公开轨迹和未来会话事件的安全错误，因此不包含
-`stack` 和原始 `cause`。可注入的服务端诊断日志出口尚未实现，已经列入
-[分阶段开发路线图](../../product/roadmap.md)。在该能力完成前，不能把
-`ToolErrorInfo` 当成完整的服务端故障日志。
-
-## 重试规范
-
-工具默认不重试。配置重试必须满足：
-
-- `security.idempotent` 为 `true`。
-- 本次 `ToolError.retryable` 为 `true`。
-- 尚未达到 `maxAttempts`。
-- 调用方没有取消 Run。
-
-参数错误、权限拒绝、审批拒绝、取消和输出校验失败不会重试。写操作即使业务上可重试，也必须通过稳定 callId 实现幂等键后才能声明 `idempotent: true`。
-
-同一个逻辑调用的 `callId` 在重试期间保持不变，`context.attempt` 从 1 递增。审批发生在尝试循环之前，同一调用不会因为重试而重复询问用户。
-
-## 超时与取消
-
-`timeoutMs` 是协作式超时。Harness 会中止 `context.signal`，工具必须观察它或传给 `fetch` 等下游 API。
-
-JavaScript 无法安全强杀同进程同步代码。如果工具忽略信号，Harness 只能在工具最终返回后识别超时，因此禁止在工具中执行长时间同步阻塞任务；此类任务未来应放入 worker、子进程或沙箱。
-
-## 权限与审批
-
-工具只声明风险和所需能力，不能给自己授权。Schema 只能验证声明的形状，无法证明工具的真实行为；
-当前实现假定工具注册代码来自可信的第一方开发者。普通应用通过 Agent 的 `toolGuard.evaluate()` 返回：
-
-- `allow`：允许当前调用。
-- `deny`：拒绝当前调用。
-- `ask`：请求一次性审批。
-
-没有自定义 ToolGuard 时，只自动允许 `risk: safe` 且不申请外部能力的工具。没有应用事件出口、审批通道
-异常或无法得到明确结果时一律拒绝。Agent 会把 ToolGuard 适配为底层 `ToolPolicy`，并用内置
-ApprovalManager 把公开 `allow/deny` 决定转换成 Harness 的一次性结果；直接使用 AgentLoop 时仍可注入
-底层 `ToolPolicy/ToolApprovalHandler`。
-
-权限结果进入 AgentLoop 后遵循固定语义：
-
-| 结果                 | 是否执行工具实现    | Harness 结果                           | AgentLoop 后续行为                                          |
-| -------------------- | ------------------- | -------------------------------------- | ----------------------------------------------------------- |
-| `allow`              | 是                  | 正常进入尝试、重试和输出校验           | 把成功或业务失败写成 `role=tool`，继续下一 Model Step       |
-| `ask → allowed-once` | 是，仅当前 `callId` | 与 `allow` 相同                        | 当前调用结束后授权立即失效，继续下一 Model Step             |
-| `ask → rejected`     | 否                  | `TOOL_PERMISSION_DENIED`，`attempts=0` | 持久化失败 `tool` 消息，让模型解释拒绝或选择其他方案        |
-| `ask → unavailable`  | 否                  | `TOOL_PERMISSION_DENIED`，`attempts=0` | 持久化失败 `tool` 消息，让模型继续；不会把不可用当成同意    |
-| `ask → aborted`      | 否                  | `ABORTED`，`attempts=0`                | 若整个 Run 已取消则按取消收口，否则该结果仍作为 `tool` 消息 |
-| `deny`               | 否                  | `TOOL_PERMISSION_DENIED`，`attempts=0` | 持久化失败 `tool` 消息，让模型解释策略拒绝或选择其他方案    |
-
-审批是执行前的暂停点，不是新的 Session 状态，也不是可复用权限。Agent 为每次 ask 生成一次性
-`approvalId`，管理等待中的 Promise、超时、取消和重复提交；交互层只通过 Agent 事件与
-`resolveToolApproval()` 桥接 UI、CLI 或外部系统。拒绝、超时、断连或进程重启必须 fail-closed。
-审批时限可使用正整数毫秒，或使用 `-1` 明确永久等待；永久等待仍响应 Run 取消，不能理解成不可中止。
-
-`safeToolPolicy` 不是 JavaScript 沙箱。恶意同进程工具可以谎报 `risk`，也可以直接使用 Node.js
-文件和进程 API。未审查第三方工具必须通过部署侧可信注册、受控能力及独立进程或容器隔离，不能依赖
-工具自己的 `security` 声明。完整边界见[安全与信任模型](../security/trust-model.md)。
-
-网络、文件、数据库、进程和 secret 能力必须显式授权。参数级、资源级和租户级授权仍由业务工具或其服务依赖完成。
-
-## 轨迹事件
-
-Tool Harness 按顺序发送：
+Tool Harness 按实际路径发出以下事件：
 
 - `tool.call.started`
-- `tool.policy.decided`
+- `tool.guard.decided`
 - `tool.approval.requested`
 - `tool.approval.decided`
 - `tool.attempt.started`
@@ -196,41 +222,12 @@ Tool Harness 按顺序发送：
 - `tool.call.completed`
 - `tool.call.failed`
 
-事件监听器异常会被隔离，不能改变工具执行结果。事件目前是进程内实时事件；写入未来 Session Log 前必须经过大小限制和敏感字段脱敏。
+观察器属于旁路，抛错不能改变工具结果。
 
-以上是 Harness 完整轨迹。Agent 门面另行投影稳定的 `tool.approval.requested`、
-`tool.approval.resolved` 和 `tool.guard.denied` 应用事件，二者不能按同名猜测字段。完整映射见
-[Agent 门面协议](./agent.md#6-风险评估与用户审批)。
+## 9. 安全边界与测试
 
-## 内置工具
+Tool Guard 是可信代码中的执行前决策点，不是 Node.js 沙箱。metadata 是应用自定义数据，也不是能力证明。
+本阶段以可信第一方开发者为前提；第三方插件隔离、来源签名和 OS 级能力控制保持低优先级。
 
-`Agent` 默认自动注册两个无外部服务依赖的安全工具：
-
-```ts
-const agent = new Agent({ model })
-```
-
-- `get_current_time`：支持 IANA 时区，可注入 Clock 做确定性测试。
-- `calculator`：使用结构化运算，不使用 `eval()` 或动态代码执行。
-
-应用可以通过 `AgentConfigInput.tools` 禁用、覆盖或整体替换内置集合，也可以使用 `additional` 只追加工具。
-这些字段只接受 `defineTool()` 结果，工具数组可以直接传入 Agent。
-`createCurrentTimeTool()` 和 `createCalculatorTool()` 继续导出，用于直接使用 Tool Harness、编写测试或构造
-同名覆盖实现，但应用 Runtime 不需要为了启用默认能力而手动导入它们。具体配置见
-[Agent 门面协议](./agent.md#4-工具组装)。
-
-天气和 IP 定位依赖外部服务且存在隐私语义，保留为应用示例而不是通用内置工具。文件、网络和 Shell 工具将在权限与沙箱边界稳定后再考虑。
-
-## 测试要求
-
-每个工具至少覆盖：
-
-- 正常成功结果。
-- 输入 Schema 拒绝。
-- 输出 Schema 拒绝。
-- 业务错误映射。
-- 取消和超时行为。
-- 若配置重试，覆盖成功重试和不可重试错误。
-- 若需要外部能力，覆盖权限拒绝和审批路径。
-
-核心测试不得调用真实模型、网络或数据库。
+每个工具至少测试：合法输入、非法输入零执行、错误输出、Guard 三种决定、上下文传递、超时取消，以及配置
+重试时的 retryable/non-retryable 分支。两层 Guard 还应测试执行顺序和 `deny > ask > allow`。

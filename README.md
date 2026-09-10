@@ -24,6 +24,9 @@ const result = await agent.run({ input: '你好' }, {
 })
 ```
 
+需要租户、用户或环境级约束时，使用 `new Agent<AppRunContext>()`，并在每次 `run({ context })` 中传入
+由服务端认证结果构造的上下文；它只会进入当前 Run 的 Guard 和工具执行函数。
+
 完整架构、使用方式与开发规范见[中文项目文档](./docs/README.md)。下方暂时保留原前端模板说明，前端只用于联调。
 
 <p align='center'>

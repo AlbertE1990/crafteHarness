@@ -146,7 +146,6 @@ describe('agent loop', () => {
       description: '返回输入',
       inputSchema: z.strictObject({ value: z.string() }),
       outputSchema: z.strictObject({ value: z.string() }),
-      security: { risk: 'safe', capabilities: [], idempotent: true },
       execute: input => input,
     })
     const adapter = new ScriptedModelAdapter({
@@ -266,7 +265,6 @@ describe('agent loop', () => {
       description: '把文本转换成大写',
       inputSchema: z.strictObject({ text: z.string() }),
       outputSchema: z.strictObject({ text: z.string() }),
-      security: { risk: 'safe', idempotent: true },
       execute,
     }))
     const store = createStore()
@@ -377,13 +375,13 @@ describe('agent loop', () => {
   it.each([
     {
       name: 'user rejection',
-      policyDecision: { decision: 'ask' as const, reason: '写操作需要确认' },
+      guardDecision: { decision: 'ask' as const, reason: '写操作需要确认' },
       expectedMessage: '工具审批结果：rejected',
       expectedApprovalCalls: 1,
     },
     {
       name: 'automatic policy denial',
-      policyDecision: { decision: 'deny' as const, reason: '受保护资源禁止删除' },
+      guardDecision: { decision: 'deny' as const, reason: '受保护资源禁止删除' },
       expectedMessage: '受保护资源禁止删除',
       expectedApprovalCalls: 0,
     },
@@ -394,7 +392,6 @@ describe('agent loop', () => {
       description: '修改测试资源',
       inputSchema: z.strictObject({ resource: z.string() }),
       outputSchema: z.strictObject({ changed: z.boolean() }),
-      security: { risk: 'write', idempotent: false },
       execute,
     }))
     const requestToolApproval = vi.fn(async () => 'rejected' as const)
@@ -418,7 +415,7 @@ describe('agent loop', () => {
       model: adapter,
       store: createStore(),
       tools: [mutatingTool],
-      toolPolicy: { evaluate: () => scenario.policyDecision },
+      toolGuard: () => scenario.guardDecision,
       requestToolApproval,
     })
 
@@ -446,7 +443,6 @@ describe('agent loop', () => {
       description: '测试预算',
       inputSchema: z.strictObject({}),
       outputSchema: z.string(),
-      security: { risk: 'safe', idempotent: true },
       execute,
     }))
     const store = createStore()
@@ -488,7 +484,6 @@ describe('agent loop', () => {
       description: '返回完成',
       inputSchema: z.strictObject({}),
       outputSchema: z.string(),
-      security: { risk: 'safe', idempotent: true },
       execute: () => 'done',
     }))
     const store = createStore()
@@ -530,7 +525,6 @@ describe('agent loop', () => {
       description: '返回完成',
       inputSchema: z.strictObject({}),
       outputSchema: z.string(),
-      security: { risk: 'safe', idempotent: true },
       execute: () => 'done',
     }))
     const adapter = new ScriptedModelAdapter({
@@ -724,7 +718,6 @@ describe('agent loop', () => {
       description: '重复工具',
       inputSchema: z.strictObject({}),
       outputSchema: z.string(),
-      security: { risk: 'safe', idempotent: true },
       execute: () => 'ok',
     })
     const tool = createAgentTool(defined)

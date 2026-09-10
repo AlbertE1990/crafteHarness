@@ -1,5 +1,5 @@
 import type { ToolErrorInfo } from './errors'
-import type { ToolApprovalOutcome, ToolPolicyDecision } from './policy'
+import type { ToolApprovalOutcome, ToolGuardDecision } from './guard'
 
 /** 工具事件共有的关联字段。 */
 export interface ToolEventBase {
@@ -13,7 +13,7 @@ export interface ToolEventBase {
 /** Tool Harness 输出的实时轨迹事件。 */
 export type ToolExecutionEvent = ToolEventBase & (
   | { readonly type: 'tool.call.started', readonly input: unknown }
-  | { readonly type: 'tool.policy.decided', readonly result: ToolPolicyDecision }
+  | { readonly type: 'tool.guard.decided', readonly result: ToolGuardDecision }
   | { readonly type: 'tool.approval.requested', readonly reason: string }
   | { readonly type: 'tool.approval.decided', readonly outcome: ToolApprovalOutcome }
   | { readonly type: 'tool.attempt.started', readonly attempt: number }

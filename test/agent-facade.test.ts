@@ -191,7 +191,6 @@ describe('agent facade', () => {
       description: '写入演示数据',
       inputSchema: z.strictObject({ value: z.string() }),
       outputSchema: z.strictObject({ saved: z.boolean() }),
-      security: { risk: 'write', idempotent: false },
       execute: () => ({ saved: true }),
     })
     const adapter = new ScriptedModelAdapter({
@@ -269,5 +268,81 @@ describe('agent facade', () => {
       approvalId: 'approval-facade',
       decision: 'deny',
     })).toEqual({ accepted: false, reason: 'not-found-or-settled' })
+  })
+
+  it('passes one trusted run context through the global Guard and tool execution', async () => {
+    interface AppContext {
+      readonly tenantId: string
+      readonly user: { readonly id: string }
+      readonly environment: 'test'
+    }
+    const inputSchema = z.strictObject({ key: z.string() })
+    const outputSchema = z.strictObject({ owner: z.string() })
+    const guardedContexts: AppContext[] = []
+    const executedContexts: AppContext[] = []
+    const tool = defineTool<typeof inputSchema, typeof outputSchema, AppContext>({
+      name: 'read_tenant_record',
+      description: '读取当前租户的数据',
+      inputSchema,
+      outputSchema,
+      metadata: { domain: 'tenant-records' },
+      execute(_input, context) {
+        executedContexts.push(context.context)
+        return { owner: context.context.user.id }
+      },
+    })
+    const adapter = new ScriptedModelAdapter({
+      script: [
+        {
+          method: 'stream',
+          chunks: [{
+            id: 'chunk-context-tool',
+            choices: [{
+              index: 0,
+              finish_reason: 'tool_calls',
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: 'call-context-tool',
+                  type: 'function',
+                  function: { name: tool.name, arguments: '{"key":"record-1"}' },
+                }],
+              },
+            }],
+            created: 1_788_748_800,
+            model: 'scripted-model',
+            object: 'chat.completion.chunk',
+          }],
+        },
+        { method: 'stream', chunks: [chunk('上下文调用完成')] },
+      ],
+    })
+    const agent = new Agent<AppContext>({
+      model: adapter,
+      tools: { mode: 'replace', tools: [tool] },
+      toolGuard: {
+        evaluate(request) {
+          guardedContexts.push(request.context)
+          return request.context.tenantId === 'tenant-a'
+            ? { decision: 'allow' }
+            : { decision: 'deny', reason: '租户不匹配' }
+        },
+      },
+    })
+    const context: AppContext = {
+      tenantId: 'tenant-a',
+      user: { id: 'user-1' },
+      environment: 'test',
+    }
+
+    const result = await agent.run({
+      sessionId: 'context-facade',
+      input: '读取记录',
+      context,
+    })
+
+    expect(result).toMatchObject({ status: 'completed', content: '上下文调用完成' })
+    expect(guardedContexts).toEqual([context])
+    expect(executedContexts).toEqual([context])
   })
 })

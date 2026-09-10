@@ -43,11 +43,6 @@ export function createCurrentTimeTool(options: CurrentTimeToolOptions = {}) {
       weekday: z.string(),
       utcOffset: z.string(),
     }),
-    security: {
-      risk: 'safe',
-      capabilities: [],
-      idempotent: true,
-    },
     execute(input) {
       const timezone = validateTimezone(input.timezone ?? defaultTimezone)
       const now = clock.now()

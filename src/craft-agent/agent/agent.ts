@@ -26,7 +26,7 @@ import { defineAgentModelExecutionOptions } from '../core/model-options'
 import { readSessionSnapshot } from '../sessions'
 import { defineAgentConfig } from './config'
 import { ToolApprovalManager } from './tool-approval-manager'
-import { createToolGuardPolicy } from './tool-guard'
+import { createGlobalToolGuard } from './tool-guard'
 
 /**
  * CraftAgent 的开发者门面。
@@ -34,15 +34,15 @@ import { createToolGuardPolicy } from './tool-guard'
  * 本类统一包装模型配置、工具、Session Store、AgentLoop 和标准应用事件；它不读取环境变量，
  * 也不依赖 Fastify、数据库驱动或前端协议。
  */
-export class Agent {
-  readonly config: DefinedAgentConfig
+export class Agent<TContext = undefined> {
+  readonly config: DefinedAgentConfig<TContext>
   readonly store: SessionStore
   readonly limits: DefinedAgentConfig['execution']['limits']
 
-  private readonly approvalManager: ToolApprovalManager
-  private readonly loop: AgentLoop
+  private readonly approvalManager: ToolApprovalManager<TContext>
+  private readonly loop: AgentLoop<TContext>
 
-  constructor(config: AgentConfigInput) {
+  constructor(config: AgentConfigInput<TContext>) {
     this.config = defineAgentConfig(config)
     this.store = this.config.session.store
     const createId = this.config.execution.createId
@@ -53,18 +53,14 @@ export class Agent {
         ? { createApprovalId: () => createId('approval') }
         : {}),
     })
-    const toolPolicy = createToolGuardPolicy(
-      this.config.toolGuard,
-      this.config.tools,
-      (request, decision) => this.approvalManager.notifyDenied(request, decision),
-    )
+    const globalToolGuard = createGlobalToolGuard(this.config.toolGuard)
     this.loop = new AgentLoop({
       model: this.config.model,
       store: this.store,
       tools: this.config.tools,
       ...(this.config.systemPrompt ? { systemPrompt: this.config.systemPrompt } : {}),
       limits: this.config.execution.limits,
-      toolPolicy,
+      ...(globalToolGuard ? { toolGuard: globalToolGuard } : {}),
       requestToolApproval: this.approvalManager.requestApproval,
       ...(this.config.observability.onToolEvent
         ? { onToolEvent: this.config.observability.onToolEvent }
@@ -84,7 +80,7 @@ export class Agent {
    * 回调异常不会改变模型、工具或 Session 的执行结果。
    */
   async run(
-    request: AgentRequest,
+    request: AgentRequest<TContext>,
     options: AgentExecutionOptions = {},
   ): Promise<AgentRunResult> {
     if (typeof request !== 'object' || request === null)
@@ -125,6 +121,7 @@ export class Agent {
       return await this.loop.run({
         sessionId,
         input,
+        context: request.context as TContext,
         ...(request.sessionMetadata
           ? { sessionMetadata: request.sessionMetadata }
           : {}),
@@ -195,9 +192,9 @@ export class Agent {
 }
 
 /** Agent 必须在进入 AgentLoop 前确定 runId，审批管理器才能提前注册对应事件出口。 */
-function createRunId(
+function createRunId<TContext>(
   value: string | undefined,
-  config: DefinedAgentConfig,
+  config: DefinedAgentConfig<TContext>,
 ): string {
   const runId = value === undefined
     ? config.execution.createId?.('run') ?? `run-${randomUUID()}`
@@ -279,6 +276,20 @@ function createOutputProjector(
       return
     }
 
+    if (event.type === 'agent.tool.event'
+      && event.event.type === 'tool.guard.decided'
+      && event.event.result.decision === 'deny') {
+      await emit(listener, {
+        type: 'tool.guard.denied',
+        sessionId,
+        runId: event.runId,
+        callId: event.event.callId,
+        toolName: event.event.toolName,
+        reason: event.event.result.reason,
+      })
+      return
+    }
+
     if (event.type === 'agent.run.completed') {
       await emit(listener, {
         type: 'message.completed',
@@ -316,7 +327,7 @@ async function emit(
 
 /** 完整轨迹观察器同样隔离异常，避免调试设施改变业务结果。 */
 async function emitTrace(
-  listener: DefinedAgentConfig['observability']['onTrace'] | AgentExecutionOptions['onTrace'],
+  listener: DefinedAgentConfig<unknown>['observability']['onTrace'] | AgentExecutionOptions['onTrace'],
   event: AgentEvent,
 ): Promise<void> {
   try {
