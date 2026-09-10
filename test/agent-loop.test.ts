@@ -18,6 +18,8 @@ import {
 } from '../src/craft-agent'
 import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
+const SCOPE_ID = 'scope-agent-loop'
+
 /** 构造只包含候选 0 的标准流块，让测试关注 Agent 控制流而不是供应商 SDK。 */
 function chunk(
   delta: ModelStreamChunk['choices'][number]['delta'],
@@ -103,6 +105,7 @@ describe('agent loop', () => {
     const loop = new AgentLoop({ model: adapter, store: createStore() })
 
     const result = await loop.run({
+      scopeId: SCOPE_ID,
       sessionId: 'session-non-stream',
       input: '使用普通响应',
     }, {
@@ -161,6 +164,7 @@ describe('agent loop', () => {
     })
 
     const result = await loop.run({
+      scopeId: SCOPE_ID,
       sessionId: 'session-non-stream-tool',
       input: '调用工具',
     }, { model: { stream: false } })
@@ -205,7 +209,9 @@ describe('agent loop', () => {
     })
 
     const result = await loop.run({
+      scopeId: SCOPE_ID,
       sessionId: 'session-final',
+      sessionName: '最终回答会话',
       input: ' 你好 ',
       sessionMetadata: { owner: 'test' },
     }, { onEvent: event => events.push(event) })
@@ -242,7 +248,10 @@ describe('agent loop', () => {
       'agent.run.completed',
     ])
 
-    const snapshot = await readSessionSnapshot('session-final', store)
+    const snapshot = await readSessionSnapshot(
+      { scopeId: SCOPE_ID, sessionId: 'session-final' },
+      store,
+    )
     expect(snapshot.events.map(event => event.type)).toEqual([
       'session.created',
       'message.appended',
@@ -301,7 +310,7 @@ describe('agent loop', () => {
     const loop = new AgentLoop({ model: adapter, store, tools: [echo] })
 
     const result = await loop.run(
-      { sessionId: 'session-tool', input: '转成大写' },
+      { scopeId: SCOPE_ID, sessionId: 'session-tool', input: '转成大写' },
       { runId: 'run-tool', turnId: 'turn-tool', onEvent: event => events.push(event) },
     )
 
@@ -360,7 +369,7 @@ describe('agent loop', () => {
     })
     const loop = new AgentLoop({ model: adapter, store })
 
-    const result = await loop.run({ sessionId: 'session-missing', input: '调用工具' })
+    const result = await loop.run({ scopeId: SCOPE_ID, sessionId: 'session-missing', input: '调用工具' })
 
     expect(result.status).toBe('completed')
     expect(adapter.calls[1]?.request.messages).toEqual(expect.arrayContaining([
@@ -419,7 +428,7 @@ describe('agent loop', () => {
       requestToolApproval,
     })
 
-    const result = await loop.run({ sessionId: `session-${scenario.name}`, input: '修改资源' })
+    const result = await loop.run({ scopeId: SCOPE_ID, sessionId: `session-${scenario.name}`, input: '修改资源' })
 
     expect(result).toMatchObject({
       status: 'completed',
@@ -466,7 +475,7 @@ describe('agent loop', () => {
       limits: { maxToolCalls: 1 },
     })
 
-    const result = await loop.run({ sessionId: 'session-tool-budget', input: '运行两次' })
+    const result = await loop.run({ scopeId: SCOPE_ID, sessionId: 'session-tool-budget', input: '运行两次' })
 
     expect(result).toMatchObject({
       status: 'stopped',
@@ -474,7 +483,7 @@ describe('agent loop', () => {
       toolCalls: 0,
     })
     expect(execute).not.toHaveBeenCalled()
-    expect(deriveModelMessages((await readSessionSnapshot('session-tool-budget', store)).events))
+    expect(deriveModelMessages((await readSessionSnapshot({ scopeId: SCOPE_ID, sessionId: 'session-tool-budget' }, store)).events))
       .toEqual([{ role: 'user', content: '运行两次' }])
   })
 
@@ -507,7 +516,7 @@ describe('agent loop', () => {
       limits: { maxModelSteps: 1 },
     })
 
-    const result = await loop.run({ sessionId: 'session-step-budget', input: '调用一次' })
+    const result = await loop.run({ scopeId: SCOPE_ID, sessionId: 'session-step-budget', input: '调用一次' })
 
     expect(result).toMatchObject({
       status: 'stopped',
@@ -515,7 +524,7 @@ describe('agent loop', () => {
       steps: 1,
       toolCalls: 1,
     })
-    expect(deriveModelMessages((await readSessionSnapshot('session-step-budget', store)).events)
+    expect(deriveModelMessages((await readSessionSnapshot({ scopeId: SCOPE_ID, sessionId: 'session-step-budget' }, store)).events)
       .map(message => message.role)).toEqual(['user', 'assistant', 'tool'])
   })
 
@@ -551,7 +560,7 @@ describe('agent loop', () => {
       limits: { maxTotalTokens: 10 },
     })
 
-    const result = await loop.run({ sessionId: 'session-token-budget', input: '测试 token' })
+    const result = await loop.run({ scopeId: SCOPE_ID, sessionId: 'session-token-budget', input: '测试 token' })
 
     expect(result).toMatchObject({
       status: 'stopped',
@@ -571,13 +580,13 @@ describe('agent loop', () => {
     const loop = new AgentLoop({ model: adapter, store })
 
     const result = await loop.run(
-      { sessionId: 'session-cancelled', input: '不会请求模型' },
+      { scopeId: SCOPE_ID, sessionId: 'session-cancelled', input: '不会请求模型' },
       { signal: controller.signal },
     )
 
     expect(result).toMatchObject({ status: 'stopped', stopReason: 'cancelled', steps: 0 })
     expect(adapter.calls).toHaveLength(0)
-    expect((await readSessionSnapshot('session-cancelled', store)).events.at(-1)?.type)
+    expect((await readSessionSnapshot({ scopeId: SCOPE_ID, sessionId: 'session-cancelled' }, store)).events.at(-1)?.type)
       .toBe('turn.cancelled')
   })
 
@@ -602,7 +611,7 @@ describe('agent loop', () => {
       limits: { maxDurationMs: 5 },
     })
 
-    const result = await loop.run({ sessionId: 'session-duration', input: '等待' })
+    const result = await loop.run({ scopeId: SCOPE_ID, sessionId: 'session-duration', input: '等待' })
 
     expect(result).toMatchObject({
       status: 'stopped',
@@ -619,7 +628,7 @@ describe('agent loop', () => {
     })
     const loop = new AgentLoop({ model: adapter, store })
 
-    const result = await loop.run({ sessionId: 'session-model-error', input: '请求模型' })
+    const result = await loop.run({ scopeId: SCOPE_ID, sessionId: 'session-model-error', input: '请求模型' })
 
     expect(result).toMatchObject({
       status: 'failed',
@@ -630,7 +639,7 @@ describe('agent loop', () => {
         details: { provider: 'broken-provider' },
       },
     })
-    expect((await readSessionSnapshot('session-model-error', store)).events.at(-1))
+    expect((await readSessionSnapshot({ scopeId: SCOPE_ID, sessionId: 'session-model-error' }, store)).events.at(-1))
       .toMatchObject({ type: 'turn.failed', error: { code: 'MODEL_CALL_FAILED' } })
   })
 
@@ -641,13 +650,14 @@ describe('agent loop', () => {
     let inserted = false
 
     const result = await loop.run(
-      { sessionId: 'session-conflict', input: '触发冲突' },
+      { scopeId: SCOPE_ID, sessionId: 'session-conflict', input: '触发冲突' },
       {
         onEvent: async (event) => {
           if (event.type !== 'agent.step.started' || inserted)
             return
           inserted = true
           await store.append({
+            scopeId: SCOPE_ID,
             sessionId: event.sessionId,
             expectedVersion: 3,
             events: [{ type: 'message.appended', message: { role: 'system', content: '并发写入' } }],
@@ -669,23 +679,23 @@ describe('agent loop', () => {
     let reads = 0
     const store: SessionStore = {
       append: request => memory.append(request),
-      async read(sessionId, options) {
+      async read(request) {
         reads += 1
         if (reads > 1) {
           throw new SessionStoreError({
             code: 'SESSION_OPERATION_FAILED',
             message: '数据库暂时不可用',
-            sessionId,
+            sessionId: request.sessionId,
             operation: 'read',
           })
         }
-        return await memory.read(sessionId, options)
+        return await memory.read(request)
       },
     }
     const adapter = new ScriptedModelAdapter({ script: [] })
     const loop = new AgentLoop({ model: adapter, store })
 
-    const result = await loop.run({ sessionId: 'session-storage-error', input: '触发存储错误' })
+    const result = await loop.run({ scopeId: SCOPE_ID, sessionId: 'session-storage-error', input: '触发存储错误' })
 
     expect(result).toMatchObject({
       status: 'failed',
@@ -705,7 +715,7 @@ describe('agent loop', () => {
     const loop = new AgentLoop({ model: adapter, store: createStore() })
 
     const result = await loop.run(
-      { sessionId: 'session-observer', input: '继续' },
+      { scopeId: SCOPE_ID, sessionId: 'session-observer', input: '继续' },
       { onEvent: () => { throw new Error('observer unavailable') } },
     )
 

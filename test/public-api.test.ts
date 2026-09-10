@@ -117,6 +117,7 @@ describe('craft-agent public API', () => {
     }
     const agent = new Agent<AppContext>(config)
     const request: Parameters<typeof agent.invoke>[0] = {
+      scopeId: 'scope-public-api',
       input: '测试上下文类型',
       context: { tenantId: 'tenant-a', environment: 'test' },
     }

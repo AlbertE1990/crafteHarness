@@ -16,7 +16,7 @@ import type {
   AgentRequest,
   AgentSessionDetail,
   AgentSessionMessage,
-  GetAgentSessionOptions,
+  GetAgentSessionRequest,
 } from './types'
 import { randomUUID } from 'node:crypto'
 import { AgentLoop } from '../core'
@@ -101,6 +101,16 @@ export class Agent<TContext = undefined> {
     const input = typeof request.input === 'string' ? request.input.trim() : ''
     if (!input)
       throw new TypeError('Agent request.input 不能为空')
+    const scopeId = typeof request.scopeId === 'string' ? request.scopeId.trim() : ''
+    if (!scopeId)
+      throw new TypeError('Agent request.scopeId 不能为空')
+    const sessionName = request.sessionName === undefined
+      ? undefined
+      : typeof request.sessionName === 'string'
+        ? request.sessionName.trim()
+        : ''
+    if (sessionName === '')
+      throw new TypeError('Agent request.sessionName 必须是非空字符串')
 
     const generatedSessionId = request.sessionId === undefined
       ? `session-${randomUUID()}`
@@ -133,9 +143,11 @@ export class Agent<TContext = undefined> {
       const project = createOutputProjector(sessionId, output)
 
       return await this.loop.run({
+        scopeId,
         sessionId,
         input,
         context: request.context as TContext,
+        ...(sessionName ? { sessionName } : {}),
         ...(request.sessionMetadata
           ? { sessionMetadata: request.sessionMetadata }
           : {}),
@@ -204,14 +216,22 @@ export class Agent<TContext = undefined> {
 
   /** 读取一个 Session 的一致快照并返回带事件上下文的消息详情。 */
   async getSession(
-    sessionId: string,
-    options: GetAgentSessionOptions = {},
+    request: GetAgentSessionRequest,
   ): Promise<AgentSessionDetail | undefined> {
-    const normalizedId = typeof sessionId === 'string' ? sessionId.trim() : ''
+    if (typeof request !== 'object' || request === null)
+      throw new TypeError('Agent getSession request 必须是对象')
+    const scopeId = typeof request.scopeId === 'string' ? request.scopeId.trim() : ''
+    if (!scopeId)
+      throw new TypeError('scopeId 不能为空')
+    const normalizedId = typeof request.sessionId === 'string' ? request.sessionId.trim() : ''
     if (!normalizedId)
       throw new TypeError('sessionId 不能为空')
 
-    const snapshot = await readSessionSnapshot(normalizedId, this.store, options)
+    const snapshot = await readSessionSnapshot(
+      { scopeId, sessionId: normalizedId },
+      this.store,
+      { pageSize: request.pageSize },
+    )
     if (snapshot.version === 0)
       return undefined
     const created = snapshot.events[0]
@@ -219,7 +239,9 @@ export class Agent<TContext = undefined> {
       throw new Error(`Session ${normalizedId} 缺少 session.created`)
 
     return Object.freeze({
+      scopeId,
       sessionId: normalizedId,
+      ...(snapshot.sessionName ? { sessionName: snapshot.sessionName } : {}),
       createdAt: created.timestamp,
       version: snapshot.version,
       ...(created.metadata ? { metadata: created.metadata } : {}),
@@ -232,11 +254,16 @@ export class Agent<TContext = undefined> {
    *
    * 自定义 Store 若未实现 SessionCatalogStore，Agent 仍可运行，但本方法会明确拒绝调用。
    */
-  async listSessions(options: ListSessionsOptions = {}): Promise<SessionListPage> {
+  async listSessions(options: ListSessionsOptions): Promise<SessionListPage> {
+    if (typeof options !== 'object' || options === null)
+      throw new TypeError('Agent listSessions options 必须是对象')
+    const scopeId = typeof options.scopeId === 'string' ? options.scopeId.trim() : ''
+    if (!scopeId)
+      throw new TypeError('scopeId 不能为空')
     if (!isSessionCatalogStore(this.store))
       throw new TypeError('当前 SessionStore 未实现 list() 会话目录能力')
 
-    return await this.store.list(options)
+    return await this.store.list({ ...options, scopeId })
   }
 }
 

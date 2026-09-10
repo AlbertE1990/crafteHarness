@@ -12,6 +12,9 @@ import type {
 } from '../craft-agent'
 import Fastify from 'fastify'
 
+/** 当前参考 Runtime 是单用户部署，仍显式组装固定 Session 作用域。 */
+const SINGLE_USER_SCOPE_ID = 'default'
+
 /** 前端会话列表需要的展示消息；工具和系统消息不会进入该投影。 */
 export interface DisplayMessage {
   readonly role: 'user' | 'assistant'
@@ -102,14 +105,17 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
       },
     },
   }, async () => {
-    const page = await options.agent.listSessions()
+    const page = await options.agent.listSessions({ scopeId: SINGLE_USER_SCOPE_ID })
     return { data: page.sessions.map(createConversationSummary) }
   })
 
   fastify.get<{
     Params: { sessionId: string }
   }>('/api/conversation/:sessionId', async (request, reply) => {
-    const session = await options.agent.getSession(request.params.sessionId)
+    const session = await options.agent.getSession({
+      scopeId: SINGLE_USER_SCOPE_ID,
+      sessionId: request.params.sessionId,
+    })
     if (!session) {
       await reply.code(404)
       return {
@@ -153,6 +159,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     const abortController = new AbortController()
     const useStream = request.body.stream ?? true
     const agentRequest = {
+      scopeId: SINGLE_USER_SCOPE_ID,
       input: request.body.message,
       ...(request.body.conversationId
         ? { sessionId: request.body.conversationId }
@@ -161,8 +168,8 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
         ? {
             sessionMetadata: {
               source: 'server-runtime',
-              name: createConversationTitle(request.body.message),
             },
+            sessionName: createConversationTitle(request.body.message),
           }
         : {}),
       ...(request.body.model ? { model: request.body.model } : {}),
@@ -218,7 +225,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
 function createConversationSummary(session: SessionSummary): ConversationSummary {
   return Object.freeze({
     id: session.sessionId,
-    name: getMetadataName(session) ?? '新对话',
+    name: session.sessionName ?? '新对话',
     createAt: session.createdAt,
   })
 }
@@ -231,12 +238,6 @@ function createConversationDetail(session: AgentSessionDetail): ConversationDeta
     history,
     displayHistory: createDisplayHistory(session.messages),
   })
-}
-
-/** 读取创建 Session 时写入的可选标题。 */
-function getMetadataName(session: SessionSummary): string | undefined {
-  const name = session.metadata?.name
-  return typeof name === 'string' && name.trim() ? name.trim() : undefined
 }
 
 /** 从第一条用户输入生成稳定短标题，不额外调用模型。 */

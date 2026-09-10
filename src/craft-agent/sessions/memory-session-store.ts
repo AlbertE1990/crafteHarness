@@ -2,7 +2,7 @@ import type {
   AppendSessionEventsRequest,
   AppendSessionEventsResult,
   ListSessionsOptions,
-  ReadSessionEventsOptions,
+  ReadSessionEventsRequest,
   SessionCatalogStore,
   SessionEvent,
   SessionEventDraft,
@@ -28,7 +28,7 @@ export interface MemorySessionStoreOptions {
  * 并通过 expectedVersion 阻止两个调用方基于同一旧版本同时提交。
  */
 export class MemorySessionStore implements SessionCatalogStore {
-  private readonly logs = new Map<string, SessionEvent[]>()
+  private readonly logsByScope = new Map<string, Map<string, SessionEvent[]>>()
   private readonly eventIds = new Set<string>()
   private readonly now: () => Date
   private readonly createEventId: () => string
@@ -40,6 +40,7 @@ export class MemorySessionStore implements SessionCatalogStore {
 
   /** 原子追加一批事实；任一事件无效时整批都不会写入。 */
   async append(request: AppendSessionEventsRequest): Promise<AppendSessionEventsResult> {
+    validateIdentifier(request.scopeId, 'scopeId')
     validateIdentifier(request.sessionId, 'sessionId')
     validateNonNegativeInteger(request.expectedVersion, 'expectedVersion', request.sessionId)
     if (!Array.isArray(request.events) || request.events.length === 0) {
@@ -48,7 +49,8 @@ export class MemorySessionStore implements SessionCatalogStore {
         'events 至少包含一个 Session Event',
       )
     }
-    const currentEvents = this.logs.get(request.sessionId) ?? []
+    const scopeLogs = this.logsByScope.get(request.scopeId)
+    const currentEvents = scopeLogs?.get(request.sessionId) ?? []
     const currentVersion = currentEvents.length
     if (request.expectedVersion !== currentVersion) {
       throw new SessionStoreError({
@@ -87,6 +89,7 @@ export class MemorySessionStore implements SessionCatalogStore {
       return deepFreeze({
         ...draft,
         eventId,
+        scopeId: request.scopeId,
         sessionId: request.sessionId,
         sequence: currentVersion + index + 1,
         timestamp,
@@ -95,10 +98,14 @@ export class MemorySessionStore implements SessionCatalogStore {
 
     // 只有整批事件都构造成功后才修改内部状态，避免部分写入。
     const nextEvents = [...currentEvents, ...appended]
-    this.logs.set(request.sessionId, nextEvents)
+    const nextScopeLogs = scopeLogs ?? new Map<string, SessionEvent[]>()
+    nextScopeLogs.set(request.sessionId, nextEvents)
+    if (!scopeLogs)
+      this.logsByScope.set(request.scopeId, nextScopeLogs)
     batchIds.forEach(eventId => this.eventIds.add(eventId))
 
     return deepFreeze({
+      scopeId: request.scopeId,
       sessionId: request.sessionId,
       previousVersion: currentVersion,
       version: nextEvents.length,
@@ -107,21 +114,20 @@ export class MemorySessionStore implements SessionCatalogStore {
   }
 
   /** 按 sequence 分页读取一个固定版本的 Session 快照。 */
-  async read(
-    sessionId: string,
-    options: ReadSessionEventsOptions = {},
-  ): Promise<SessionEventPage> {
+  async read(request: ReadSessionEventsRequest): Promise<SessionEventPage> {
+    const { scopeId, sessionId } = request
+    validateIdentifier(scopeId, 'scopeId')
     validateIdentifier(sessionId, 'sessionId')
-    const afterSequence = options.afterSequence ?? 0
-    const limit = options.limit ?? DEFAULT_PAGE_SIZE
+    const afterSequence = request.afterSequence ?? 0
+    const limit = request.limit ?? DEFAULT_PAGE_SIZE
     validateNonNegativeInteger(afterSequence, 'afterSequence', sessionId)
     validatePositiveInteger(limit, 'limit', sessionId)
     if (limit > MAX_PAGE_SIZE)
       throw invalidArgument(sessionId, `limit 不能超过 ${MAX_PAGE_SIZE}`)
 
-    const allEvents = this.logs.get(sessionId) ?? []
+    const allEvents = this.logsByScope.get(scopeId)?.get(sessionId) ?? []
     const latestVersion = allEvents.length
-    const snapshotVersion = options.throughVersion ?? latestVersion
+    const snapshotVersion = request.throughVersion ?? latestVersion
     validateNonNegativeInteger(snapshotVersion, 'throughVersion', sessionId)
     if (snapshotVersion > latestVersion) {
       throw invalidArgument(
@@ -136,7 +142,11 @@ export class MemorySessionStore implements SessionCatalogStore {
     const nextAfterSequence = events.at(-1)?.sequence ?? afterSequence
 
     return deepFreeze({
+      scopeId,
       sessionId,
+      ...(allEvents[0]?.type === 'session.created' && allEvents[0].sessionName
+        ? { sessionName: allEvents[0].sessionName }
+        : {}),
       snapshotVersion,
       latestVersion,
       events: [...events],
@@ -146,13 +156,14 @@ export class MemorySessionStore implements SessionCatalogStore {
   }
 
   /** 按首次写入顺序分页列出已有 Session，不复制完整事件历史。 */
-  async list(options: ListSessionsOptions = {}): Promise<SessionListPage> {
+  async list(options: ListSessionsOptions): Promise<SessionListPage> {
+    validateIdentifier(options.scopeId, 'scopeId')
     const limit = options.limit ?? DEFAULT_PAGE_SIZE
     validatePositiveInteger(limit, 'limit', '')
     if (limit > MAX_PAGE_SIZE)
       throw invalidArgument('', `limit 不能超过 ${MAX_PAGE_SIZE}`)
 
-    const entries = [...this.logs.entries()]
+    const entries = [...(this.logsByScope.get(options.scopeId)?.entries() ?? [])]
     let startIndex = 0
     if (options.afterSessionId !== undefined) {
       validateIdentifier(options.afterSessionId, 'afterSessionId')
@@ -164,13 +175,23 @@ export class MemorySessionStore implements SessionCatalogStore {
       startIndex = cursorIndex + 1
     }
 
-    const selected = entries.slice(startIndex, startIndex + limit)
+    const search = normalizeSearch(options.search)
+    const matching = entries.slice(startIndex).filter(([, events]) => {
+      if (!search)
+        return true
+      const created = events[0]
+      return created?.type === 'session.created'
+        && created.sessionName?.toLowerCase().includes(search)
+    })
+    const selected = matching.slice(0, limit)
     const sessions = selected.map(([sessionId, events]) => {
       const created = events[0]
       if (!created || created.type !== 'session.created')
         throw invalidArgument(sessionId, 'Session 日志缺少 session.created')
       return deepFreeze({
+        scopeId: options.scopeId,
         sessionId,
+        ...(created.sessionName ? { sessionName: created.sessionName } : {}),
         createdAt: created.timestamp,
         version: events.length,
         ...(created.metadata ? { metadata: created.metadata } : {}),
@@ -180,7 +201,7 @@ export class MemorySessionStore implements SessionCatalogStore {
 
     return deepFreeze({
       sessions,
-      hasMore: startIndex + selected.length < entries.length,
+      hasMore: selected.length < matching.length,
       ...(nextAfterSessionId ? { nextAfterSessionId } : {}),
     })
   }
@@ -220,9 +241,20 @@ function validateDraft(event: SessionEventDraft, sessionId: string): void {
     validateIdentifier(event.runId, 'runId')
   if ('turnId' in event && event.turnId !== undefined)
     validateIdentifier(event.turnId, 'turnId')
+  if (event.type === 'session.created' && event.sessionName !== undefined)
+    validateIdentifier(event.sessionName, 'sessionName')
 
   if (!['session.created', 'message.appended', 'turn.started', 'turn.completed', 'turn.failed', 'turn.cancelled'].includes(event.type))
     throw invalidArgument(sessionId, '不支持的 Session Event type')
+}
+
+/** 将可选名称搜索归一化为大小写不敏感的非空子串。 */
+function normalizeSearch(value: string | undefined): string | undefined {
+  if (value === undefined)
+    return undefined
+  if (typeof value !== 'string' || !value.trim())
+    throw invalidArgument('', 'search 必须是非空字符串')
+  return value.trim().toLowerCase()
 }
 
 /** 通过 JSON 往返复制并拒绝循环引用、BigInt、函数及非有限数字。 */

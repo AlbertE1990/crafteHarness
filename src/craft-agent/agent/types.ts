@@ -1,5 +1,6 @@
 import type {
   ModelMessage,
+  SessionIdentity,
   SessionSummary,
 } from '../contracts'
 import type { AgentRunResult } from '../core'
@@ -26,8 +27,12 @@ export interface DefinedAgentModelExecutionOptions {
 
 /** 所有 Agent 请求共有的业务字段。 */
 interface AgentRequestBase {
+  /** Session 数据分区；单用户 Runtime 也应显式组装固定值。 */
+  readonly scopeId: string
   readonly input: string
   readonly sessionId?: string
+  /** 仅在创建新 Session 时写入标准可搜索名称。 */
+  readonly sessionName?: string
   readonly sessionMetadata?: JsonObject
   /** 覆盖本次请求的模型默认值；流式方式由 invoke()/stream() 决定。 */
   readonly model?: AgentModelExecutionOptions
@@ -83,8 +88,8 @@ export interface AgentSessionDetail extends SessionSummary {
   readonly messages: readonly AgentSessionMessage[]
 }
 
-/** Agent.getSession() 的可选查询参数。 */
-export interface GetAgentSessionOptions {
+/** Agent.getSession() 的作用域身份和可选分页参数。 */
+export interface GetAgentSessionRequest extends SessionIdentity {
   /** 读取完整快照时每页的事件数。 */
   readonly pageSize?: number
 }

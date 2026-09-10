@@ -52,6 +52,7 @@
 - `defineAgentConfig()` 可显式提前校验配置；`defineTool()` 结果可直接传入 Agent，由内部统一归一化。
 - Scripted Adapter 与契约探针位于仓库 `test/support`，为本项目提供无网络验证，不扩大生产 API。
 - Session 使用 append-only 事件、乐观并发和一致性分页，并可确定性推导模型历史。
+- 所有 Session 操作显式携带 scope；标准 sessionName 可持久化并在 scope 内搜索，业务扩展字段留给应用投影。
 - 外部 SessionStore 通过统一持久化语义和独立契约探针接入 SQL、ORM、Service 或 API。
 - MemorySessionStore 只用于零数据库开发和测试；长期运行服务应显式注入持久化 Store。
 - Agent Loop 以 Run/Turn/Step 串联模型、工具和 Session，并提供预算、取消、稳定终态和实时事件。

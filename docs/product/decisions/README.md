@@ -11,6 +11,7 @@ ADR 记录重要技术选择及其背景、备选方案和后果。
 - [ADR-0007：外部持久化只通过 SessionStore Port 接入](./adr-0007-session-store-persistence-port.md)
 - [ADR-0008：Agent 调用采用意图优先的 invoke/stream API](./adr-0008-intent-first-agent-invocation.md)
 - [ADR-0009：Agent 配置按使用意图减负并统一 Guard 协议](./adr-0009-agent-config-and-guard-context.md)
+- [ADR-0010：建立可搜索、可隔离的多用户 Session Catalog](./adr-0010-searchable-multi-user-session-catalog.md)
 
 状态使用：
 

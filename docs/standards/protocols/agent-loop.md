@@ -46,6 +46,7 @@ const loop = new AgentLoop({
 })
 
 const result = await loop.run({
+  scopeId,
   sessionId,
   input,
   sessionMetadata,

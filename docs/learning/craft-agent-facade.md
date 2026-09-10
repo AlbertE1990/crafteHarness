@@ -46,11 +46,13 @@ const agent = new Agent({
 })
 
 const result = await agent.invoke({
+  scopeId: 'default',
   input: '给出一份完整答案',
   model: { reasoningEffort: 'max' },
 }, signal)
 
 for await (const event of agent.stream({
+  scopeId: 'default',
   input: '边生成边显示答案',
 }, signal)) {
   if (event.type === 'message.delta')
@@ -140,7 +142,7 @@ const agent = new Agent<AppContext>({
 调用方不配置 ID 工厂。Agent 使用 `session-/run-/turn-/event-/approval-` 加 UUID 生成可诊断标识；确定性 ID
 注入只保留在需要精细测试的低层组件中。
 
-`listSessions()` 从 Store 分页读取摘要；`getSession()` 按需读取一个一致快照。自定义 Store 只实现
+`listSessions({ scopeId, search? })` 从 Store 分页读取摘要；`getSession({ scopeId, sessionId })` 按需读取一个一致快照。自定义 Store 只实现
 `append/read` 仍可运行 Agent，但调用 `listSessions()` 前还需实现 `SessionCatalogStore`。
 
 ## 8. 练习

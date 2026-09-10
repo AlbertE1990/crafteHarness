@@ -32,6 +32,7 @@ Session Log 是 CraftAgent 的持久事实边界。它使用 append-only 事件�
 interface SessionEventEnvelope {
   /** 事件身份；由产生方写入，缺省时由 Store 生成。 */
   eventId: string
+  scopeId: string
   sessionId: string
   sequence: number
   /** 事实发生时刻；由产生方写入，缺省时由 Store 在接受时生成。 */
@@ -67,10 +68,11 @@ events[0].type = session.created
 
 ```ts
 await store.append({
+  scopeId: 'default',
   sessionId: 'session-1',
   expectedVersion: 0,
   events: [
-    { type: 'session.created' },
+    { type: 'session.created', sessionName: '第一次对话' },
     {
       type: 'message.appended',
       message: { role: 'system', content: '你是一个 AI 助手。' },
@@ -80,6 +82,26 @@ await store.append({
 ```
 
 这样不会出现“Session 已创建，但初始系统事实尚未写入”的中间状态。
+
+### 4.1 scopeId、sessionName、sessionMetadata 与运行 context
+
+`scopeId + sessionId` 构成持久化空间中的完整 Session 身份。每个 `append/read/list` 以及 Agent 的
+`invoke/stream/getSession/listSessions` 都必须由调用方显式携带 scope。单用户 Runtime 传固定 `default`；多用户
+Runtime 从可信身份和业务关系确定 scope。Store 必须在数据源查询中直接约束 scope，禁止全局读取后在内存过滤。
+
+`sessionName` 是 `session.created` 的标准字段，也是目录的可搜索列。`ListSessionsOptions.search` 对名称执行忽略
+大小写的字面子串匹配；它不搜索 metadata。当前名称是不可变创建事实，重命名需要后续新增事件与原子目录投影。
+
+`sessionMetadata` 是 `session.created` 的可选 JSON 创建事实。Agent 仅在读到零版本 Session 时写入一次；已有
+Session 不能再次写 `session.created`，因此后续请求携带的新 metadata 不会覆盖原值。Store 必须持久化它，
+目录 Store 可把它投影进摘要，`Agent.getSession()` 也会从创建事件返回它。
+
+运行 `context` 不属于 Session Event。它在每次 `invoke/stream` 时由 Runtime 重新组装，只供局部 Guard、全局
+Guard 和工具执行使用，不进入 Store、模型或标准输出。Session 所有权、当前权限和请求级 Service 不能仅靠
+metadata 恢复；多用户 Runtime 必须用当前认证结果建立 context，并在读取 Session 前独立校验访问权限。
+
+当前 `metadata` 是不透明扩展，不具备标准搜索、更新或授权语义。Store 可以为已知应用字段建立自定义投影，
+但这不会自动扩大 `SessionCatalogStore` 协议。
 
 ## 5. 乐观并发
 
@@ -156,14 +178,11 @@ interface SessionStore {
     request: AppendSessionEventsRequest,
   ) => Promise<AppendSessionEventsResult>
 
-  read: (
-    sessionId: string,
-    options?: ReadSessionEventsOptions,
-  ) => Promise<SessionEventPage>
+  read: (request: ReadSessionEventsRequest) => Promise<SessionEventPage>
 }
 
 interface SessionCatalogStore extends SessionStore {
-  list: (options?: ListSessionsOptions) => Promise<SessionListPage>
+  list: (options: ListSessionsOptions) => Promise<SessionListPage>
 }
 ```
 
@@ -171,11 +190,13 @@ interface SessionCatalogStore extends SessionStore {
 
 - `append()` 的版本比较、sequence 分配和整批写入必须处于同一原子边界。
 - `eventId` 在 Store 范围内唯一。
-- 相同 Session 的事件按 sequence 返回。
+- 相同 `scopeId + sessionId` 的事件按 sequence 返回；不同 scope 可以使用相同 sessionId。
 - `throughVersion` 不能读取超过指定版本的事件。
 - 未找到的 Session 读取为空快照，version 为 0；创建仍必须显式追加 `session.created`。
-- `list()` 属于 `SessionCatalogStore` 目录能力，按首次创建顺序使用 `afterSessionId` 和 `limit` 分页。
-- 列表只返回 sessionId、createdAt、version 和 metadata；完整消息仍由事件快照推导。
+- `list()` 属于 `SessionCatalogStore` 目录能力，必须先按 scope 隔离，再按首次创建顺序使用
+  `afterSessionId` 和 `limit` 分页。
+- 列表返回 scopeId、sessionId、sessionName、createdAt、version 和可选 metadata；完整消息仍由事件快照推导。
+- 标准 `search` 只匹配 sessionName。用户、租户之外的自定义查询字段由应用自己的投影或 Repository 管理。
 - 实现不得把数据库连接、ORM 类型或供应商异常泄漏到 Core 协议。
 - 只支持 Agent 执行的 Store 实现 `SessionStore`；同时支持会话列表的 Store 实现 `SessionCatalogStore`。
 
@@ -204,7 +225,7 @@ const agent = new Agent({ model, sessionStore: store })
 - 建库、建表和数据库迁移。
 - 建立或关闭连接池。
 - 历史数据批量导入、备份和恢复。
-- Session 删除、归档、搜索和展示投影。
+- Session 删除、归档和应用自定义查询投影。
 
 这些能力由部署生命周期或独立管理接口负责。历史导入若有需要，应定义独立的 `SessionLogImporter`，不能成为
 Agent 正常执行所依赖的方法。
@@ -215,19 +236,23 @@ Agent 正常执行所依赖的方法。
 
 ```text
 sessions
-  session_id      primary key
+  scope_id
+  session_id
+  session_name    nullable searchable text
   version         non-negative integer
   created_at      timestamp
   metadata_json   json
+  primary key (scope_id, session_id)
 
 session_events
+  scope_id
   session_id
   sequence
   event_id        unique
   timestamp
   type
   payload_json    json
-  primary key (session_id, sequence)
+  primary key (scope_id, session_id, sequence)
 ```
 
 一次 `append()` 必须在同一事务中完成：
@@ -274,7 +299,7 @@ await assertSessionStoreContract(store, {
 ```
 
 探针覆盖空会话、初始化、批量原子性、版本冲突、JSON 序列化、事件身份与连续顺序、调用方对象隔离、固定快照
-分页和可选目录分页。它会真实写入多个 Session，测试必须提供临时 schema、事务夹具、测试容器或独立命名空间；
+分页、同 ID 跨 scope 隔离、名称搜索和可选目录分页。它会真实写入多个 Session，测试必须提供临时 schema、事务夹具、测试容器或独立命名空间；
 不得对生产数据源运行。
 
 该探针是 CraftAgent 仓库自己的测试支持代码，不从生产包导出。外部开发者应按照本节列出的不变量在自己的
@@ -286,7 +311,8 @@ await assertSessionStoreContract(store, {
 ## 14. 当前明确不实现
 
 - 随 CraftAgent Core 内置具体数据库、ORM、Redis、文件或 API Store。
-- Session 删除、归档和搜索。
+- Session 删除、归档和名称重命名。
+- User、Role、所有权、成员关系和授权协议；scopeId 只提供持久化分区。
 - Session 压缩、摘要和历史裁剪。
 - 轨迹、指标和异常堆栈日志。
 - 将 Runtime 或前端展示字段写入 Core Session 协议。

@@ -16,7 +16,15 @@ export interface SessionEventOccurrence {
 /** 创建一个新 Session 时写入的第一个事实。 */
 export interface SessionCreatedEventDraft extends SessionEventOccurrence {
   readonly type: 'session.created'
+  /** Session 创建时的标准可搜索名称；缺省时由 Runtime 决定展示回退。 */
+  readonly sessionName?: string
   readonly metadata?: JsonObject
+}
+
+/** 一个 Session 在持久化空间中的完整身份。 */
+export interface SessionIdentity {
+  readonly scopeId: string
+  readonly sessionId: string
 }
 
 /** 把一条模型可见消息追加到 Session 历史。 */
@@ -75,6 +83,7 @@ export type SessionEventDraft
 export interface SessionEventEnvelope {
   /** 事件身份；由产生方写入，缺省时由 Store 生成。 */
   readonly eventId: string
+  readonly scopeId: string
   readonly sessionId: string
   /** Session 内从 1 开始严格递增且无空洞的顺序号。 */
   readonly sequence: number
@@ -86,8 +95,7 @@ export interface SessionEventEnvelope {
 export type SessionEvent = SessionEventEnvelope & SessionEventDraft
 
 /** 原子追加一批 Session Event 时使用的请求。 */
-export interface AppendSessionEventsRequest {
-  readonly sessionId: string
+export interface AppendSessionEventsRequest extends SessionIdentity {
   /** 调用方最后观察到的版本；新 Session 从 0 开始。 */
   readonly expectedVersion: number
   readonly events: readonly SessionEventDraft[]
@@ -95,6 +103,7 @@ export interface AppendSessionEventsRequest {
 
 /** 成功追加后返回的新版本和本次写入事件。 */
 export interface AppendSessionEventsResult {
+  readonly scopeId: string
   readonly sessionId: string
   readonly previousVersion: number
   readonly version: number
@@ -111,9 +120,13 @@ export interface ReadSessionEventsOptions {
   readonly throughVersion?: number
 }
 
+/** 读取一个作用域内 Session 事件页的完整请求。 */
+export interface ReadSessionEventsRequest extends SessionIdentity, ReadSessionEventsOptions {}
+
 /** Session Event 的一致性分页结果。 */
-export interface SessionEventPage {
-  readonly sessionId: string
+export interface SessionEventPage extends SessionIdentity {
+  /** 当前目录投影中的可搜索名称。 */
+  readonly sessionName?: string
   /** 当前页面所属的一致性快照版本。 */
   readonly snapshotVersion: number
   /** 读取发生时 Store 中的最新版本。 */
@@ -125,14 +138,18 @@ export interface SessionEventPage {
 }
 
 /** 一次完整、一致的 Session Event 快照。 */
-export interface SessionSnapshot {
-  readonly sessionId: string
+export interface SessionSnapshot extends SessionIdentity {
+  readonly sessionName?: string
   readonly version: number
   readonly events: readonly SessionEvent[]
 }
 
 /** 会话目录分页查询参数；游标使用上一页最后一个会话 ID。 */
 export interface ListSessionsOptions {
+  /** 必填的数据分区；单用户 Runtime 也应显式传入固定值。 */
+  readonly scopeId: string
+  /** 按 Session 标准名称搜索；匹配规则由协议统一定义。 */
+  readonly search?: string
   /** 只返回该会话之后创建的条目。 */
   readonly afterSessionId?: string
   /** 单页会话数，默认 100，最大 1000。 */
@@ -140,8 +157,8 @@ export interface ListSessionsOptions {
 }
 
 /** SessionStore 可枚举的最小会话摘要，不包含完整事件和模型消息。 */
-export interface SessionSummary {
-  readonly sessionId: string
+export interface SessionSummary extends SessionIdentity {
+  readonly sessionName?: string
   readonly createdAt: string
   readonly version: number
   readonly metadata?: JsonObject
@@ -164,13 +181,10 @@ export interface SessionStore {
   /** 原子追加一批事实，并以 expectedVersion 实现乐观并发。 */
   append: (request: AppendSessionEventsRequest) => Promise<AppendSessionEventsResult>
   /** 按 sequence 读取一个固定版本的事件页；不存在的 Session 返回零版本空页。 */
-  read: (
-    sessionId: string,
-    options?: ReadSessionEventsOptions,
-  ) => Promise<SessionEventPage>
+  read: (request: ReadSessionEventsRequest) => Promise<SessionEventPage>
 }
 
 /** 在基本读写能力之上明确提供会话目录分页的 SessionStore。 */
 export interface SessionCatalogStore extends SessionStore {
-  list: (options?: ListSessionsOptions) => Promise<SessionListPage>
+  list: (options: ListSessionsOptions) => Promise<SessionListPage>
 }

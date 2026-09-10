@@ -148,6 +148,7 @@ fastify.post('/api/chat', async (request, reply) => {
   const identity = await authenticate(request) // 服务端验证 Token/Session
 
   const agentRequest = {
+    scopeId: identity.tenantId,
     input: request.body.message,
     sessionId: request.body.sessionId,
     context: {

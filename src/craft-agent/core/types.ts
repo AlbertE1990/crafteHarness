@@ -52,11 +52,13 @@ export interface AgentLoopConfig<TContext = undefined> {
 
 /** 发起一次用户 Turn 的业务输入。 */
 export interface AgentRunRequest<TContext = undefined> {
+  readonly scopeId: string
   readonly sessionId: string
   readonly input: string
   /** 仅在本次 Run 内传给 Guard 和工具执行函数，不进入模型或 Session Log。 */
   readonly context?: TContext
   /** 仅在 Session 尚不存在时写入 session.created。 */
+  readonly sessionName?: string
   readonly sessionMetadata?: JsonObject
 }
 

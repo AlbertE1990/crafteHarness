@@ -5,6 +5,7 @@ import type { AgentTokenUsage } from './types'
 export interface MutableRunState {
   readonly runId: string
   readonly turnId: string
+  readonly scopeId: string
   readonly sessionId: string
   sessionVersion: number
   turnStarted: boolean

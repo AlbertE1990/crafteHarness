@@ -265,10 +265,11 @@ describe('server runtime HTTP boundary', () => {
   it('aggregates every assistant reasoning step within its own turn', async () => {
     const store = new MemorySessionStore()
     await store.append({
+      scopeId: 'default',
       sessionId: 'multi-step-reasoning',
       expectedVersion: 0,
       events: [
-        { type: 'session.created', metadata: { name: '多步思考' } },
+        { type: 'session.created', sessionName: '多步思考' },
         { type: 'turn.started', runId: 'run-1', turnId: 'turn-1' },
         {
           type: 'message.appended',

@@ -1,4 +1,4 @@
-import type { PoolConfig } from 'pg'
+import type { PoolClient, PoolConfig } from 'pg'
 import process from 'node:process'
 import { Pool } from 'pg'
 
@@ -49,9 +49,9 @@ export function createPostgresPool(config: PostgresRuntimeConfig): Pool {
 
 /** 执行只读探针，确认连接和 Session Log 表均可用。 */
 export async function inspectPostgresConnection(
-  pool: Pool,
+  database: Pool | PoolClient,
 ): Promise<PostgresConnectionInfo> {
-  const result = await pool.query<{
+  const result = await database.query<{
     database: string
     server_version: string
     sessions_table: string | null

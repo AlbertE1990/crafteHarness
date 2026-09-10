@@ -55,6 +55,10 @@ const app = createServerApp({ agent })
 Fastify 将 `message` 映射为 Agent 请求的 `input`，将 `conversationId` 映射为 `sessionId`。浏览器断开时，
 使用同一个 AbortSignal 取消 Agent Run；模型 Adapter 和 Tool Harness 会继续传播该信号。
 
+当前参考服务是单用户 Runtime，因此所有聊天、详情和目录请求都显式注入 `scopeId: 'default'`。新会话把第一条
+消息投影为标准 `sessionName`；`sessionMetadata` 只保存 `source` 等创建扩展。多用户服务必须改为从可信认证和
+业务路由组装 scope，并在进入 Agent 前完成访问校验，不能采用浏览器传入的 scope 作为授权证明。
+
 请求顶层的 `stream` 决定传输：`true`（默认）返回 `text/event-stream` 并调用 `agent.stream()`；`false`
 返回普通 `application/json` 并调用 `agent.invoke()`，其 `data` 是封闭的 `AgentRunResult`。`model` 只包含
 `reasoningEnabled/reasoningEffort`。传输方式由方法直接表达，不再维护第二个模型开关。
@@ -85,8 +89,8 @@ fail-closed 为本次工具失败并交回 AgentLoop；需要审批卡片时必�
 `approvalTimeoutMs` 为 `-1`，事件中的 `expiresAt` 为 `null`，页面应显示“无过期时间”，且 Run 仍可被取消。
 若 Runtime 同时配置了 `execution.limits.maxDurationMs`，该 Run 级预算仍然有效。
 
-会话列表调用 `agent.listSessions()`，只返回 `id/name/createAt` 摘要；进入某个会话后再通过
-`agent.getSession(sessionId)` 读取详情。标题在创建 Session 时写入 metadata，`displayHistory` 只在详情路由中
+会话列表调用 `agent.listSessions({ scopeId })`，只返回 `id/name/createAt` 摘要；进入某个会话后再通过
+`agent.getSession({ scopeId, sessionId })` 读取详情。标题在创建 Session 时写入标准 `sessionName`，`displayHistory` 只在详情路由中
 从通用 ModelMessage 投影，不写入 CraftAgent Session 协议，也不维护第二份会话 ID Map。
 
 完整调试轨迹可立即通过 `onTrace` 观察；轨迹的持久化、脱敏和分页 HTTP 查询仍属于下一阶段。

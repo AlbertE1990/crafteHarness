@@ -12,6 +12,8 @@ import { z } from 'zod'
 import Agent, { defineTool, MemorySessionStore } from '../src/craft-agent'
 import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
+const SCOPE_ID = 'scope-agent-facade'
+
 /** 构造门面测试使用的单候选标准流块。 */
 function chunk(content: string): ModelStreamChunk {
   return {
@@ -71,8 +73,9 @@ describe('agent facade', () => {
       },
     })
 
-    await agent.invoke({ sessionId: 'facade-default-model', input: '默认设置' })
+    await agent.invoke({ scopeId: SCOPE_ID, sessionId: 'facade-default-model', input: '默认设置' })
     await collectEvents(agent.stream({
+      scopeId: SCOPE_ID,
       sessionId: 'facade-run-model',
       input: '覆盖设置',
       model: { reasoningEffort: 'max' },
@@ -98,7 +101,7 @@ describe('agent facade', () => {
       },
     })
 
-    const output = await collectEvents(agent.stream({ input: '使用统一入口' }))
+    const output = await collectEvents(agent.stream({ scopeId: SCOPE_ID, input: '使用统一入口' }))
     const sessionId = output[0]?.sessionId
     expect(sessionId).toMatch(/^session-[0-9a-f-]{36}$/)
     expect(output).toEqual([
@@ -129,7 +132,7 @@ describe('agent facade', () => {
     const controller = new AbortController()
     controller.abort('caller-cancelled')
 
-    const invoke = invokeAgent.invoke({ input: '取消完整调用' }, controller.signal)
+    const invoke = invokeAgent.invoke({ scopeId: SCOPE_ID, input: '取消完整调用' }, controller.signal)
     await expect(invoke).resolves.toMatchObject({
       status: 'stopped',
       stopReason: 'cancelled',
@@ -137,7 +140,7 @@ describe('agent facade', () => {
 
     const streamAdapter = new ScriptedModelAdapter({ script: [] })
     const streamAgent = new Agent({ model: streamAdapter })
-    const stream = streamAgent.stream({ input: '停止读取事件' })
+    const stream = streamAgent.stream({ scopeId: SCOPE_ID, input: '停止读取事件' })
     expect(streamAdapter.calls).toHaveLength(0)
 
     const iterator = stream[Symbol.asyncIterator]()
@@ -156,24 +159,37 @@ describe('agent facade', () => {
     })
     const agent = new Agent({ model: adapter })
 
-    await collectEvents(agent.stream({ sessionId: 'session-a', input: '第一条问题' }))
-    await collectEvents(agent.stream({ sessionId: 'session-b', input: '第二条问题' }))
+    await collectEvents(agent.stream({
+      scopeId: SCOPE_ID,
+      sessionId: 'session-a',
+      sessionName: '第一条会话',
+      input: '第一条问题',
+    }))
+    await collectEvents(agent.stream({
+      scopeId: SCOPE_ID,
+      sessionId: 'session-b',
+      sessionName: '第二条会话',
+      input: '第二条问题',
+    }))
 
     const read = vi.spyOn(agent.store, 'read')
-    const firstPage = await agent.listSessions({ limit: 1 })
+    const firstPage = await agent.listSessions({ scopeId: SCOPE_ID, limit: 1 })
     const secondPage = await agent.listSessions({
+      scopeId: SCOPE_ID,
       limit: 1,
       afterSessionId: firstPage.nextAfterSessionId,
     })
 
     // 目录查询只读取摘要，不能退化成每个会话一次完整 read() 的 N+1 查询。
     expect(read).not.toHaveBeenCalled()
-    const session = await agent.getSession('session-b')
+    const session = await agent.getSession({ scopeId: SCOPE_ID, sessionId: 'session-b' })
+    const searched = await agent.listSessions({ scopeId: SCOPE_ID, search: '二条', limit: 10 })
+    const hidden = await agent.getSession({ scopeId: 'another-scope', sessionId: 'session-b' })
 
     expect(firstPage).toMatchObject({
       hasMore: true,
       nextAfterSessionId: 'session-a',
-      sessions: [{ sessionId: 'session-a' }],
+      sessions: [{ scopeId: SCOPE_ID, sessionId: 'session-a', sessionName: '第一条会话' }],
     })
     expect(secondPage).toMatchObject({
       hasMore: false,
@@ -189,20 +205,24 @@ describe('agent facade', () => {
         content: '第二条回答',
       },
     })
+    expect(searched.sessions).toMatchObject([
+      { scopeId: SCOPE_ID, sessionId: 'session-b', sessionName: '第二条会话' },
+    ])
+    expect(hidden).toBeUndefined()
   })
 
   it('requires the explicit SessionCatalogStore capability only when listing sessions', async () => {
     const memory = new MemorySessionStore()
     const executionStore: SessionStore = {
       append: request => memory.append(request),
-      read: (sessionId, options) => memory.read(sessionId, options),
+      read: request => memory.read(request),
     }
     const agent = new Agent({
       model: new ScriptedModelAdapter({ script: [] }),
       sessionStore: executionStore,
     })
 
-    await expect(agent.listSessions()).rejects.toThrow(
+    await expect(agent.listSessions({ scopeId: SCOPE_ID })).rejects.toThrow(
       '当前 SessionStore 未实现 list() 会话目录能力',
     )
   })
@@ -262,6 +282,7 @@ describe('agent facade', () => {
     let approvalId: string | undefined
 
     for await (const event of agent.stream({
+      scopeId: SCOPE_ID,
       sessionId: 'approval-facade',
       input: '写入',
     })) {
@@ -370,6 +391,7 @@ describe('agent facade', () => {
     }
 
     const events = await collectEvents(agent.stream({
+      scopeId: SCOPE_ID,
       sessionId: 'context-facade',
       input: '读取记录',
       context,

@@ -332,6 +332,7 @@ export class AgentLoop<TContext = undefined> {
     return {
       runId,
       turnId,
+      scopeId: request.scopeId,
       sessionId: request.sessionId,
       sessionVersion: 0,
       turnStarted: false,
@@ -353,7 +354,10 @@ export class AgentLoop<TContext = undefined> {
     input: string,
     state: MutableRunState,
   ): Promise<number> {
-    const snapshot = await readSessionSnapshot(state.sessionId, this.config.store)
+    const snapshot = await readSessionSnapshot(
+      { scopeId: state.scopeId, sessionId: state.sessionId },
+      this.config.store,
+    )
     const events: SessionEventDraft[] = []
 
     const occurredAt = this.getTimestamp()
@@ -363,6 +367,7 @@ export class AgentLoop<TContext = undefined> {
         type: 'session.created',
         eventId: this.createId('event'),
         timestamp: occurredAt,
+        ...(request.sessionName ? { sessionName: request.sessionName } : {}),
         ...(request.sessionMetadata ? { metadata: request.sessionMetadata } : {}),
       })
       if (this.config.systemPrompt) {
@@ -388,6 +393,7 @@ export class AgentLoop<TContext = undefined> {
     )
 
     const appended = await this.config.store.append({
+      scopeId: state.scopeId,
       sessionId: state.sessionId,
       expectedVersion: snapshot.version,
       events,
@@ -404,7 +410,10 @@ export class AgentLoop<TContext = undefined> {
     eventBase: () => AgentEventBase,
     listener?: AgentRunOptions['onEvent'],
   ): Promise<ModelStepResult> {
-    const snapshot = await readSessionSnapshot(state.sessionId, this.config.store)
+    const snapshot = await readSessionSnapshot(
+      { scopeId: state.scopeId, sessionId: state.sessionId },
+      this.config.store,
+    )
     if (snapshot.version !== state.sessionVersion) {
       throw new SessionStoreError({
         code: 'SESSION_VERSION_CONFLICT',
@@ -569,6 +578,7 @@ export class AgentLoop<TContext = undefined> {
     message: ModelMessage,
   ): Promise<void> {
     const appended = await this.config.store.append({
+      scopeId: state.scopeId,
       sessionId: state.sessionId,
       expectedVersion: state.sessionVersion,
       events: [{
@@ -591,6 +601,7 @@ export class AgentLoop<TContext = undefined> {
   ): Promise<AgentRunResult> {
     try {
       const appended = await this.config.store.append({
+        scopeId: state.scopeId,
         sessionId: state.sessionId,
         expectedVersion: state.sessionVersion,
         events: [{
@@ -652,6 +663,7 @@ export class AgentLoop<TContext = undefined> {
           }
       try {
         const appended = await this.config.store.append({
+          scopeId: state.scopeId,
           sessionId: state.sessionId,
           expectedVersion: state.sessionVersion,
           events: [event],
@@ -695,6 +707,7 @@ export class AgentLoop<TContext = undefined> {
     if (persist && state.turnStarted) {
       try {
         const appended = await this.config.store.append({
+          scopeId: state.scopeId,
           sessionId: state.sessionId,
           expectedVersion: state.sessionVersion,
           events: [{
@@ -750,6 +763,9 @@ function validateRequest<TContext>(request: AgentRunRequest<TContext>): string {
   if (!request || typeof request !== 'object')
     throw new TypeError('AgentRunRequest 必须是对象')
   validateIdentifier(request.sessionId, 'sessionId')
+  validateIdentifier(request.scopeId, 'scopeId')
+  if (request.sessionName !== undefined)
+    validateIdentifier(request.sessionName, 'sessionName')
   if (typeof request.input !== 'string' || !request.input.trim())
     throw new TypeError('input 必须是非空字符串')
   return request.input.trim()

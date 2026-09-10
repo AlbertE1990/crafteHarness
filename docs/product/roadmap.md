@@ -30,7 +30,10 @@ flowchart LR
   P47 --> P48[阶段 4.8<br/>配置分组与公共 API 收口<br/>已完成]
   P48 --> P49[阶段 4.9<br/>单次模型设置与非流式 JSON<br/>已完成]
   P49 --> P410[阶段 4.10<br/>分层 Guard 与运行上下文<br/>已完成]
-  P410 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
+  P410 --> P411[阶段 4.11<br/>意图优先调用 API<br/>已完成]
+  P411 --> P412[阶段 4.12<br/>配置减负与统一 Guard<br/>已完成]
+  P412 --> P413[阶段 4.13<br/>多用户 Session Catalog<br/>已完成]
+  P413 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -290,7 +293,25 @@ flowchart LR
 
 详细交付见[阶段 4.12 记录](./deliveries/delivery-018-agent-config-and-guard-context.md)。
 
-## 21. 阶段 5：轨迹持久化与查询（下一阶段）
+## 21. 阶段 4.13：可搜索、多用户 Session Catalog（已完成）
+
+已完成范围：
+
+- 将 `sessionName` 从不透明 metadata 提升为标准 Session 字段和可索引目录列。
+- 引入不解释业务身份的稳定 `scopeId`，让个人、租户、团队或项目使用同一隔离协议。
+- 不增加 Agent 配置项；由调用方在 `invoke/stream/get/list` 的请求中组装 `scopeId`。单用户传固定
+  默认值，多用户从可信认证结果确定。
+- 所有 Session 读写和目录搜索同时约束作用域，且不同 scope 可以使用相同 sessionId。
+- Memory/PostgreSQL Store 使用相同的大小写不敏感字面子串名称搜索语义。
+- 当前身份和权限仍由可信 Runtime 放入 context；scope 只负责持久化分区，不作为授权证明。
+- 新增 002 数据库迁移、迁移版本记录和旧 metadata 名称回填；真实开发库及 PostgreSQL 契约均已验证。
+- 应用自定义查询字段放在应用自己的投影表或 Repository，不继续扩大 CraftAgent 目录表。
+- 名称重命名留作后续独立协议，不在本阶段引入不完整的覆盖式更新。
+
+详细交付见[阶段 4.13 记录](./deliveries/delivery-019-searchable-multi-user-session-catalog.md)，设计依据见
+[ADR-0010](./decisions/adr-0010-searchable-multi-user-session-catalog.md)。
+
+## 22. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -300,7 +321,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 CraftAgent 核心协议。
 
-## 22. 阶段 6：异常诊断
+## 23. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -313,7 +334,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 23. 阶段 7：长期安全与扩展（最低优先级）
+## 24. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

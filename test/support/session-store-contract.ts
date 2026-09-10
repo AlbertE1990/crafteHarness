@@ -17,6 +17,7 @@ export interface SessionStoreContractOptions {
 
 /** 契约探针成功后返回的写入标识，便于测试夹具清理隔离数据。 */
 export interface SessionStoreContractResult {
+  readonly scopeId: string
   readonly sessionIds: readonly string[]
   readonly catalogChecked: boolean
 }
@@ -33,6 +34,8 @@ export async function assertSessionStoreContract(
 ): Promise<SessionStoreContractResult> {
   assertStoreShape(store)
   const prefix = normalizePrefix(options.sessionIdPrefix)
+  const scopeId = `${prefix}:scope`
+  const otherScopeId = `${prefix}:other-scope`
   const sessionIds = Object.freeze([
     `${prefix}:primary`,
     `${prefix}:secondary`,
@@ -41,35 +44,38 @@ export async function assertSessionStoreContract(
   ])
   const [primaryId, secondaryId, invalidBatchId, serializationId] = sessionIds
 
-  const empty = await store.read(primaryId)
-  assertEmptyPage(empty, primaryId)
+  const empty = await store.read({ scopeId, sessionId: primaryId })
+  assertEmptyPage(empty, scopeId, primaryId)
 
   await assertStoreError(async () => {
     await store.append({
+      scopeId,
       sessionId: invalidBatchId,
       expectedVersion: 0,
       events: [{ type: 'session.created' }, { type: 'session.created' }],
     })
   }, 'SESSION_INVALID_EVENT_SEQUENCE')
-  assertEmptyPage(await store.read(invalidBatchId), invalidBatchId)
+  assertEmptyPage(await store.read({ scopeId, sessionId: invalidBatchId }), scopeId, invalidBatchId)
 
   const circular: Record<string, unknown> = {}
   circular.self = circular
   await assertStoreError(async () => {
     await store.append({
+      scopeId,
       sessionId: serializationId,
       expectedVersion: 0,
       events: [{ type: 'session.created', metadata: circular as never }],
     })
   }, 'SESSION_SERIALIZATION_FAILED')
-  assertEmptyPage(await store.read(serializationId), serializationId)
+  assertEmptyPage(await store.read({ scopeId, sessionId: serializationId }), scopeId, serializationId)
 
   const metadata = { source: 'before' }
   const created = await store.append({
+    scopeId,
     sessionId: primaryId,
     expectedVersion: 0,
     events: [
-      { type: 'session.created', metadata },
+      { type: 'session.created', sessionName: 'Primary % Contract Session', metadata },
       {
         type: 'message.appended',
         turnId: 'contract-turn',
@@ -79,13 +85,15 @@ export async function assertSessionStoreContract(
   })
   metadata.source = 'after'
   assert(created.sessionId === primaryId, 'append result.sessionId 不匹配')
+  assert(created.scopeId === scopeId, 'append result.scopeId 不匹配')
   assert(created.previousVersion === 0, '首次 append.previousVersion 必须为 0')
   assert(created.version === 2, '首次批量追加后的 version 必须为 2')
   assert(created.events.length === 2, 'append 必须返回本批次的全部事件')
 
   const eventIds = new Set<string>()
-  assertEventEnvelopes(created.events, primaryId, 1, eventIds)
-  const persisted = await store.read(primaryId)
+  assertEventEnvelopes(created.events, scopeId, primaryId, 1, eventIds)
+  const persisted = await store.read({ scopeId, sessionId: primaryId })
+  assert(persisted.sessionName === 'Primary % Contract Session', 'read() 必须返回标准 Session 名称')
   assert(persisted.events[0]?.type === 'session.created', '首个持久事件必须是 session.created')
   if (persisted.events[0]?.type === 'session.created') {
     assert(
@@ -96,6 +104,7 @@ export async function assertSessionStoreContract(
 
   await assertStoreError(async () => {
     await store.append({
+      scopeId,
       sessionId: primaryId,
       expectedVersion: 0,
       events: [{
@@ -104,14 +113,25 @@ export async function assertSessionStoreContract(
       }],
     })
   }, 'SESSION_VERSION_CONFLICT', { expectedVersion: 0, actualVersion: 2 })
-  assert((await store.read(primaryId)).latestVersion === 2, '版本冲突不能产生部分写入')
+  assert((await store.read({ scopeId, sessionId: primaryId })).latestVersion === 2, '版本冲突不能产生部分写入')
+  assert((await store.read({ scopeId: otherScopeId, sessionId: primaryId })).latestVersion === 0, '其他 scope 不得读取当前 Session')
 
-  const firstPage = await store.read(primaryId, { afterSequence: 0, limit: 1 })
+  const sameIdInOtherScope = await store.append({
+    scopeId: otherScopeId,
+    sessionId: primaryId,
+    expectedVersion: 0,
+    events: [{ type: 'session.created', sessionName: 'Other Scope Session' }],
+  })
+  assert(sameIdInOtherScope.version === 1, '不同 scope 必须允许使用相同 sessionId')
+  assert((await store.read({ scopeId, sessionId: primaryId })).latestVersion === 2, '其他 scope 的同名 Session 不得影响当前 scope')
+
+  const firstPage = await store.read({ scopeId, sessionId: primaryId, afterSequence: 0, limit: 1 })
   assert(firstPage.snapshotVersion === 2, '第一页必须固定当前 snapshotVersion')
   assert(firstPage.hasMore, '固定快照还有事件时 hasMore 必须为 true')
   assert(firstPage.nextAfterSequence === 1, '分页游标必须推进到最后返回的 sequence')
 
   const appendedLater = await store.append({
+    scopeId,
     sessionId: primaryId,
     expectedVersion: 2,
     events: [{
@@ -120,9 +140,11 @@ export async function assertSessionStoreContract(
       message: { role: 'assistant', content: 'later message' },
     }],
   })
-  assertEventEnvelopes(appendedLater.events, primaryId, 3, eventIds)
+  assertEventEnvelopes(appendedLater.events, scopeId, primaryId, 3, eventIds)
 
-  const secondPage = await store.read(primaryId, {
+  const secondPage = await store.read({
+    scopeId,
+    sessionId: primaryId,
     afterSequence: firstPage.nextAfterSequence,
     limit: 1,
     throughVersion: firstPage.snapshotVersion,
@@ -133,25 +155,30 @@ export async function assertSessionStoreContract(
   assert(!secondPage.hasMore, '读完固定快照后 hasMore 必须为 false')
 
   const secondary = await store.append({
+    scopeId,
     sessionId: secondaryId,
     expectedVersion: 0,
-    events: [{ type: 'session.created', metadata: { source: 'secondary' } }],
+    events: [{ type: 'session.created', sessionName: 'Secondary Contract Session', metadata: { source: 'secondary' } }],
   })
-  assertEventEnvelopes(secondary.events, secondaryId, 1, eventIds)
+  assertEventEnvelopes(secondary.events, scopeId, secondaryId, 1, eventIds)
 
   const catalogChecked = await assertCatalogContract(
     store,
+    scopeId,
+    otherScopeId,
     primaryId,
     secondaryId,
     options.requireCatalog ?? false,
   )
 
-  return Object.freeze({ sessionIds, catalogChecked })
+  return Object.freeze({ scopeId, sessionIds, catalogChecked })
 }
 
 /** 检查可选 list() 能力的稳定创建顺序、版本和游标语义。 */
 async function assertCatalogContract(
   store: SessionStore,
+  scopeId: string,
+  otherScopeId: string,
   primaryId: string,
   secondaryId: string,
   required: boolean,
@@ -161,16 +188,26 @@ async function assertCatalogContract(
     return false
   }
 
-  const first = await store.list({ limit: 1 })
+  const first = await store.list({ scopeId, limit: 1 })
   assert(first.sessions.length === 1, 'list(limit=1) 必须只返回一个 Session')
   assert(first.sessions[0]?.sessionId === primaryId, 'list() 必须按 Session 首次创建顺序返回')
   assert(first.sessions[0]?.version === 3, 'SessionSummary.version 必须反映最新事件版本')
   assert(first.hasMore, '目录仍有 Session 时 hasMore 必须为 true')
   assert(first.nextAfterSessionId === primaryId, '目录游标必须指向本页最后一个 Session')
 
-  const second = await store.list({ limit: 1, afterSessionId: primaryId })
+  const second = await store.list({ scopeId, limit: 1, afterSessionId: primaryId })
   assert(second.sessions.length === 1 && second.sessions[0]?.sessionId === secondaryId, '目录下一页必须从 afterSessionId 之后继续')
   assert(!second.hasMore, '读完目录后 hasMore 必须为 false')
+  const searched = await store.list({ scopeId, search: 'secondary contract', limit: 10 })
+  assert(searched.sessions.length === 1 && searched.sessions[0]?.sessionId === secondaryId, '名称搜索必须忽略大小写并匹配子串')
+  const literalWildcard = await store.list({ scopeId, search: '%', limit: 10 })
+  assert(literalWildcard.sessions.length === 1 && literalWildcard.sessions[0]?.sessionId === primaryId, '名称搜索必须把 SQL 通配符视为普通字符')
+  await assertStoreError(async () => {
+    await store.list({ scopeId, search: '   ' })
+  }, 'SESSION_INVALID_ARGUMENT')
+  const isolated = await store.list({ scopeId: otherScopeId, limit: 10 })
+  assert(isolated.sessions.length === 1, '目录只能返回当前 scope 的 Session')
+  assert(isolated.sessions[0]?.sessionName === 'Other Scope Session', '目录不得混入其他 scope 的同名 Session')
   return true
 }
 
@@ -180,7 +217,8 @@ function isSessionCatalogStore(store: SessionStore): store is SessionCatalogStor
 }
 
 /** 验证不存在 Session 的统一零版本返回。 */
-function assertEmptyPage(page: SessionEventPage, sessionId: string): void {
+function assertEmptyPage(page: SessionEventPage, scopeId: string, sessionId: string): void {
+  assert(page.scopeId === scopeId, '空页 scopeId 不匹配')
   assert(page.sessionId === sessionId, '空页 sessionId 不匹配')
   assert(page.snapshotVersion === 0, '不存在的 Session snapshotVersion 必须为 0')
   assert(page.latestVersion === 0, '不存在的 Session latestVersion 必须为 0')
@@ -192,11 +230,13 @@ function assertEmptyPage(page: SessionEventPage, sessionId: string): void {
 /** 验证 Store 分配的身份、连续 sequence、时间和全局唯一事件 ID。 */
 function assertEventEnvelopes(
   events: readonly SessionEvent[],
+  scopeId: string,
   sessionId: string,
   firstSequence: number,
   eventIds: Set<string>,
 ): void {
   for (const [index, event] of events.entries()) {
+    assert(event.scopeId === scopeId, '持久事件 scopeId 不匹配')
     assert(event.sessionId === sessionId, '持久事件 sessionId 不匹配')
     assert(event.sequence === firstSequence + index, '持久事件 sequence 必须连续且无空洞')
     assert(Boolean(event.eventId.trim()), 'eventId 必须是非空字符串')

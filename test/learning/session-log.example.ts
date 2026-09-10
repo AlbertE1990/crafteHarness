@@ -24,6 +24,7 @@ import {
 } from '../../src/craft-agent/sessions'
 
 const SESSION_ID = 'learning-session-001'
+const SCOPE_ID = 'learning-scope'
 const RUN_ID = 'learning-run-001'
 
 /** 测试数据：业务代码先产生不带 eventId、sequence、timestamp 的事件草稿。 */
@@ -133,6 +134,7 @@ async function testAppendOnlyEventLog(store: MemorySessionStore): Promise<number
   console.dir(firstTurnDrafts, { depth: null })
 
   const result = await store.append({
+    scopeId: SCOPE_ID,
     sessionId: SESSION_ID,
     expectedVersion: 0,
     events: firstTurnDrafts,
@@ -158,6 +160,7 @@ async function testContinueConversation(
   console.log(`输入：expectedVersion=${expectedVersion}，追加第二轮事件（不重复创建 Session）`)
 
   const result = await store.append({
+    scopeId: SCOPE_ID,
     sessionId: SESSION_ID,
     expectedVersion,
     events: secondTurnDrafts,
@@ -175,7 +178,9 @@ async function testContinueConversation(
 async function testReadAndDeriveMessages(store: MemorySessionStore): Promise<void> {
   console.log('\n========== 测试 3：Event Log → Snapshot → Model Messages ==========')
   console.log('观察分页协议：')
-  const firstPage = await store.read(SESSION_ID, {
+  const firstPage = await store.read({
+    scopeId: SCOPE_ID,
+    sessionId: SESSION_ID,
     limit: 3,
     // afterSequence: 3, limit: 4,
     // throughVersion: 8,
@@ -191,7 +196,7 @@ async function testReadAndDeriveMessages(store: MemorySessionStore): Promise<voi
   printEvents(firstPage.events)
 
   console.log('\nreadSessionSnapshot 会自动翻页，并始终固定在首次看到的版本：')
-  const snapshot = await readSessionSnapshot(SESSION_ID, store, { pageSize: 3 })
+  const snapshot = await readSessionSnapshot({ scopeId: SCOPE_ID, sessionId: SESSION_ID }, store, { pageSize: 3 })
   console.log(`snapshot.version=${snapshot.version}, events.length=${snapshot.events.length}`)
   printEvents(snapshot.events)
 
@@ -222,6 +227,7 @@ async function testOptimisticConcurrency(
 
   try {
     await store.append({
+      scopeId: SCOPE_ID,
       sessionId: SESSION_ID,
       expectedVersion: 6,
       events: [{
@@ -245,7 +251,7 @@ async function testOptimisticConcurrency(
     })
   }
 
-  const pageAfterFailure = await store.read(SESSION_ID)
+  const pageAfterFailure = await store.read({ scopeId: SCOPE_ID, sessionId: SESSION_ID })
   assert.equal(pageAfterFailure.latestVersion, actualVersion)
   console.log('✅ 断言通过：冲突批次完全没有写入，Session 仍保持原版本。')
 }

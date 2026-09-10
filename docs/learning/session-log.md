@@ -88,13 +88,15 @@ flowchart TD
 import { MemorySessionStore } from '../../src/craft-agent'
 
 const store = new MemorySessionStore()
+const identity = { scopeId: 'default', sessionId: 'session-1' }
 
 const created = await store.append({
-  sessionId: 'session-1',
+  ...identity,
   expectedVersion: 0,
   events: [
     {
       type: 'session.created',
+      sessionName: '杭州天气',
       metadata: { channel: 'local-test' },
     },
     {
@@ -122,7 +124,7 @@ console.log(created.version) // 2
 
 ```ts
 const turn = await store.append({
-  sessionId: 'session-1',
+  ...identity,
   expectedVersion: 2,
   events: [
     {
@@ -166,7 +168,7 @@ Writer B 必须失败。若 Store 自动把它追加成 sequence 6，它的结�
 ```ts
 import { readSessionSnapshot } from '../../src/craft-agent'
 
-const snapshot = await readSessionSnapshot('session-1', store, {
+const snapshot = await readSessionSnapshot(identity, store, {
   pageSize: 100,
 })
 ```
@@ -186,7 +188,7 @@ const snapshot = await readSessionSnapshot('session-1', store, {
 ```ts
 import { loadModelMessages } from '../../src/craft-agent'
 
-const messages = await loadModelMessages('session-1', store)
+const messages = await loadModelMessages(identity, store)
 ```
 
 内部过程：
@@ -221,6 +223,7 @@ message.appended: assistant 最终回答
 const metadata = { source: 'before' }
 
 await store.append({
+  scopeId: 'default',
   sessionId: 'session-2',
   expectedVersion: 0,
   events: [{ type: 'session.created', metadata }],
@@ -302,8 +305,8 @@ class ServiceSessionStore implements SessionStore {
     }
   }
 
-  async read(sessionId: string, options?: ReadSessionEventsOptions) {
-    return await this.service.readEvents(sessionId, options)
+  async read(request: ReadSessionEventsRequest) {
+    return await this.service.readEvents(request)
   }
 }
 

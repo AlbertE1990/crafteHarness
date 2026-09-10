@@ -141,8 +141,10 @@ const isolatedAgent = new Agent({
 
 ```ts
 const result = await agent.invoke({
+  scopeId: 'tenant-42',
   input: '杭州天气怎么样？',
   sessionId: 'optional-session-id',
+  sessionName: '杭州天气',
   context: appRunContext,
   model: {
     reasoningEnabled: true,
@@ -151,6 +153,7 @@ const result = await agent.invoke({
 }, signal)
 
 for await (const event of agent.stream({
+  scopeId: 'tenant-42',
   input: '杭州天气怎么样？',
   model: { reasoningEffort: 'max' },
 }, signal)) {
@@ -170,6 +173,25 @@ for await (const event of agent.stream({
 
 当 Agent 声明为 `new Agent<AppRunContext>()` 时，请求的 `context` 为必填。它只传给当前 Run 的工具级
 Guard、全局 Guard 和 `execute()`，不进入模型、Session Log、标准前端事件或 Agent 单例。
+
+`scopeId`、`sessionName`、`sessionMetadata` 与 `context` 不可互换：
+
+| 字段              | 生命周期                        | 数据约束     | 当前消费者                                       |
+| ----------------- | ------------------------------- | ------------ | ------------------------------------------------ |
+| `scopeId`         | 每次 Session 操作显式提供       | 非空字符串   | Agent、SessionStore、数据库分区查询              |
+| `sessionName`     | 仅新 Session 创建时写入并持久化 | 非空字符串   | SessionStore、目录搜索、Runtime 展示             |
+| `sessionMetadata` | 仅新 Session 创建时写入并持久化 | `JsonObject` | SessionStore、`listSessions/getSession`、Runtime |
+| `context`         | 每次 `invoke/stream` 独立传入   | 任意应用类型 | 两层 Guard、工具 `execute()`                     |
+
+`sessionMetadata` 会成为 `session.created.metadata`；继续已有 Session 时再次提供不会更新原值。它适合来源、
+创建时快照和临时展示扩展，不进入模型、Guard 或工具执行。`context` 适合当前可信身份、实时权限、ORM、Service
+和 API Client，不会自动序列化或持久化。两者都应由可信 Runtime 组装，不能直接相信浏览器提交的身份字段；
+授权必须使用当前 context 或应用权限服务，不能把持久化 metadata 当作授权证明。
+
+`scopeId` 是持久化身份的一部分，不是权限凭证。调用方必须从可信认证或业务路由中组装它；即使单用户部署也要
+显式传固定值（例如 `default`）。CraftAgent 不在 AgentConfig 或 Store 中提供隐式默认 scope，所有数据库读写
+都必须同时约束 `scopeId + sessionId`。`sessionName` 是标准可搜索名称，应用自定义筛选字段仍保留在自己的表、
+投影或 Repository 中，不继续扩张 CraftAgent 的 Session 表。
 
 `stream()` 依次输出以下稳定应用事件：
 
@@ -253,11 +275,18 @@ Agent 实例只在当前进程中保存 pending 审批。`invoke()` 没有交互
 
 ## 7. Session 查询
 
-- `listSessions({ limit, afterSessionId })` 按创建顺序分页，只返回 `SessionSummary`，不得逐项加载完整事件。
-- `getSession(sessionId)` 按需读取一个一致快照，返回摘要和带 `eventId/sequence/timestamp/runId/turnId`
+- `listSessions({ scopeId, search?, limit?, afterSessionId? })` 只查询指定 scope，按创建顺序分页并返回摘要；
+  `search` 对 `sessionName` 做忽略大小写的字面子串匹配。
+- `getSession({ scopeId, sessionId, pageSize? })` 按需读取一个一致快照，返回摘要和带
+  `eventId/sequence/timestamp/runId/turnId`
   上下文的消息详情。
 - Agent 执行只要求 `SessionStore.append/read`；`listSessions()` 额外要求 Store 实现 `SessionCatalogStore`。
-- Core 不生成会话标题、展示消息或前端字段，这些属于 Runtime 投影。
+- Core 接受并持久化标准 `sessionName`，但不替应用生成标题、展示消息或其他前端字段。
+
+当前联调 Runtime 在新会话请求中生成 `sessionName`，并显式使用单用户 scope `default`；标题不再存入
+`sessionMetadata.name`。设计依据与迁移规则见
+[ADR-0010](../../product/decisions/adr-0010-searchable-multi-user-session-catalog.md)。名称重命名尚未进入本协议；
+需要时应新增不可变事件和目录投影规则，不能直接覆盖 `session.created`。
 
 默认 `MemorySessionStore` 支持列表，但进程退出后数据会丢失，且不会执行 TTL 或容量驱逐。生产环境应注入实现
 同一协议的持久化 Store，具体实践见[持久化 SessionStore 教程](../../learning/persistent-session-store.md)。

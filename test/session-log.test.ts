@@ -10,6 +10,8 @@ import {
   readSessionSnapshot,
 } from '../src/craft-agent'
 
+const SCOPE_ID = 'scope-session-log'
+
 /** 创建 ID 和时间稳定的内存 Store，避免测试依赖真实时钟与 UUID。 */
 function createStore() {
   let eventNumber = 0
@@ -23,6 +25,7 @@ describe('memorySessionStore', () => {
   it('appends facts atomically and derives only model-visible messages', async () => {
     const store = createStore()
     const result = await store.append({
+      scopeId: SCOPE_ID,
       sessionId: 'session-1',
       expectedVersion: 0,
       events: [
@@ -53,7 +56,7 @@ describe('memorySessionStore', () => {
     expect(result.events.every(event => event.timestamp === '2026-09-08T01:00:00.000Z'))
       .toBe(true)
 
-    const messages = await loadModelMessages('session-1', store)
+    const messages = await loadModelMessages({ scopeId: SCOPE_ID, sessionId: 'session-1' }, store)
     expect(messages).toEqual([
       { role: 'system', content: '系统指令' },
       { role: 'user', content: '你好' },
@@ -64,12 +67,14 @@ describe('memorySessionStore', () => {
   it('rejects stale expectedVersion without partially writing the batch', async () => {
     const store = createStore()
     await store.append({
+      scopeId: SCOPE_ID,
       sessionId: 'session-conflict',
       expectedVersion: 0,
       events: [{ type: 'session.created' }],
     })
 
     await expect(store.append({
+      scopeId: SCOPE_ID,
       sessionId: 'session-conflict',
       expectedVersion: 0,
       events: [{
@@ -82,7 +87,7 @@ describe('memorySessionStore', () => {
       actualVersion: 1,
     })
 
-    const page = await store.read('session-conflict')
+    const page = await store.read({ scopeId: SCOPE_ID, sessionId: 'session-conflict' })
     expect(page.latestVersion).toBe(1)
     expect(page.events).toHaveLength(1)
   })
@@ -91,6 +96,7 @@ describe('memorySessionStore', () => {
     const store = createStore()
 
     await expect(store.append({
+      scopeId: SCOPE_ID,
       sessionId: 'session-invalid-start',
       expectedVersion: 0,
       events: [{
@@ -100,6 +106,7 @@ describe('memorySessionStore', () => {
     })).rejects.toMatchObject({ code: 'SESSION_INVALID_EVENT_SEQUENCE' })
 
     await expect(store.append({
+      scopeId: SCOPE_ID,
       sessionId: 'session-duplicate-create',
       expectedVersion: 0,
       events: [
@@ -113,6 +120,7 @@ describe('memorySessionStore', () => {
     const store = createStore()
     const metadata = { owner: 'before' }
     const result = await store.append({
+      scopeId: SCOPE_ID,
       sessionId: 'session-immutable',
       expectedVersion: 0,
       events: [{ type: 'session.created', metadata }],
@@ -133,6 +141,7 @@ describe('memorySessionStore', () => {
     metadata.self = metadata
 
     await expect(store.append({
+      scopeId: SCOPE_ID,
       sessionId: 'session-circular',
       expectedVersion: 0,
       events: [{
@@ -141,7 +150,7 @@ describe('memorySessionStore', () => {
       }],
     })).rejects.toMatchObject({ code: 'SESSION_SERIALIZATION_FAILED' })
 
-    const page = await store.read('session-circular')
+    const page = await store.read({ scopeId: SCOPE_ID, sessionId: 'session-circular' })
     expect(page.latestVersion).toBe(0)
     expect(page.events).toEqual([])
   })
@@ -149,6 +158,7 @@ describe('memorySessionStore', () => {
   it('keeps a stable snapshot while later events are appended between pages', async () => {
     const store = createStore()
     await store.append({
+      scopeId: SCOPE_ID,
       sessionId: 'session-pages',
       expectedVersion: 0,
       events: [
@@ -162,12 +172,13 @@ describe('memorySessionStore', () => {
     let firstRead = true
     const interleavedStore: SessionStore = {
       append: request => store.append(request),
-      async read(sessionId, options) {
-        const page = await store.read(sessionId, options)
+      async read(request) {
+        const page = await store.read(request)
         if (firstRead) {
           firstRead = false
           await store.append({
-            sessionId,
+            scopeId: request.scopeId,
+            sessionId: request.sessionId,
             expectedVersion: 4,
             events: [{
               type: 'message.appended',
@@ -180,13 +191,13 @@ describe('memorySessionStore', () => {
       },
     }
 
-    const snapshot = await readSessionSnapshot('session-pages', interleavedStore, {
+    const snapshot = await readSessionSnapshot({ scopeId: SCOPE_ID, sessionId: 'session-pages' }, interleavedStore, {
       pageSize: 2,
     })
 
     expect(snapshot.version).toBe(4)
     expect(snapshot.events).toHaveLength(4)
-    expect((await store.read('session-pages')).latestVersion).toBe(5)
+    expect((await store.read({ scopeId: SCOPE_ID, sessionId: 'session-pages' })).latestVersion).toBe(5)
   })
 
   it('rejects duplicate event IDs without committing either event in the batch', async () => {
@@ -196,6 +207,7 @@ describe('memorySessionStore', () => {
     })
 
     await expect(store.append({
+      scopeId: SCOPE_ID,
       sessionId: 'session-id-conflict',
       expectedVersion: 0,
       events: [
@@ -204,12 +216,13 @@ describe('memorySessionStore', () => {
       ],
     })).rejects.toMatchObject({ code: 'SESSION_EVENT_ID_CONFLICT' })
 
-    expect((await store.read('session-id-conflict')).latestVersion).toBe(0)
+    expect((await store.read({ scopeId: SCOPE_ID, sessionId: 'session-id-conflict' })).latestVersion).toBe(0)
   })
 
   it('persists producer-provided eventId and occurrence timestamp', async () => {
     const store = createStore()
     const result = await store.append({
+      scopeId: SCOPE_ID,
       sessionId: 'session-producer-identity',
       expectedVersion: 0,
       events: [
@@ -237,6 +250,7 @@ describe('memorySessionStore', () => {
   it('falls back to store-generated eventId and acceptance time when omitted', async () => {
     const store = createStore()
     const result = await store.append({
+      scopeId: SCOPE_ID,
       sessionId: 'session-fallback',
       expectedVersion: 0,
       events: [{ type: 'session.created' }],
@@ -250,18 +264,20 @@ describe('memorySessionStore', () => {
     const store = createStore()
 
     await expect(store.append({
+      scopeId: SCOPE_ID,
       sessionId: 'session-bad-event-id',
       expectedVersion: 0,
       events: [{ type: 'session.created', eventId: '   ' }],
     })).rejects.toMatchObject({ code: 'SESSION_INVALID_ARGUMENT' })
-    expect((await store.read('session-bad-event-id')).latestVersion).toBe(0)
+    expect((await store.read({ scopeId: SCOPE_ID, sessionId: 'session-bad-event-id' })).latestVersion).toBe(0)
 
     await expect(store.append({
+      scopeId: SCOPE_ID,
       sessionId: 'session-bad-timestamp',
       expectedVersion: 0,
       events: [{ type: 'session.created', timestamp: 'not-a-time' }],
     })).rejects.toMatchObject({ code: 'SESSION_INVALID_ARGUMENT' })
-    expect((await store.read('session-bad-timestamp')).latestVersion).toBe(0)
+    expect((await store.read({ scopeId: SCOPE_ID, sessionId: 'session-bad-timestamp' })).latestVersion).toBe(0)
   })
 })
 
@@ -271,6 +287,7 @@ describe('deriveModelMessages', () => {
       {
         type: 'session.created',
         eventId: 'event-1',
+        scopeId: SCOPE_ID,
         sessionId: 'session-a',
         sequence: 1,
         timestamp: '2026-09-08T01:00:00.000Z',
@@ -278,6 +295,7 @@ describe('deriveModelMessages', () => {
       {
         type: 'message.appended',
         eventId: 'event-2',
+        scopeId: SCOPE_ID,
         sessionId: 'session-b',
         sequence: 3,
         timestamp: '2026-09-08T01:00:01.000Z',

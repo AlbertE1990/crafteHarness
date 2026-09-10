@@ -6,7 +6,7 @@ import type {
   JsonValue,
   ListSessionsOptions,
   ModelMessage,
-  ReadSessionEventsOptions,
+  ReadSessionEventsRequest,
   SessionCatalogStore,
   SessionEvent,
   SessionEventDraft,
@@ -24,10 +24,12 @@ const MAX_PAGE_SIZE = 1_000
 /** PostgreSQL bigint 默认以字符串返回；本类型明确记录数据库边界。 */
 interface SessionVersionRow {
   readonly version: string | number
+  readonly session_name?: string | null
 }
 
 /** 从事件表读取的原始行；payload 会在应用边界恢复为判别联合。 */
 interface SessionEventRow {
+  readonly scope_id: string
   readonly session_id: string
   readonly sequence: string | number
   readonly event_id: string
@@ -40,6 +42,7 @@ interface SessionEventRow {
 
 /** 从会话目录表读取的最小行，不包含事件历史。 */
 interface SessionSummaryRow extends SessionVersionRow {
+  readonly scope_id: string
   readonly session_id: string
   readonly metadata_json: unknown | null
   readonly created_at: Date | string
@@ -69,6 +72,7 @@ export class PostgresSessionStore implements SessionCatalogStore {
   async append(
     request: AppendSessionEventsRequest,
   ): Promise<AppendSessionEventsResult> {
+    validateIdentifier(request.scopeId, 'scopeId')
     validateIdentifier(request.sessionId, 'sessionId')
     validateNonNegativeInteger(request.expectedVersion, 'expectedVersion', request.sessionId)
     if (!Array.isArray(request.events) || request.events.length === 0)
@@ -82,6 +86,9 @@ export class PostgresSessionStore implements SessionCatalogStore {
     const metadata = sessionCreated?.type === 'session.created'
       ? (sessionCreated.metadata ?? null)
       : null
+    const sessionName = sessionCreated?.type === 'session.created'
+      ? (sessionCreated.sessionName ?? null)
+      : null
     const client = await connectForAppend(this.pool, request.sessionId)
 
     try {
@@ -90,22 +97,24 @@ export class PostgresSessionStore implements SessionCatalogStore {
       // 先尝试建立零版本目录行；若会话已存在，ON CONFLICT 不会覆盖原数据。
       await client.query(`
         INSERT INTO craft_agent_sessions (
+          scope_id,
           session_id,
+          session_name,
           version,
           metadata_json,
           created_at,
           updated_at
         )
-        VALUES ($1, 0, $2::jsonb, $3::timestamptz, $3::timestamptz)
-        ON CONFLICT (session_id) DO NOTHING
-      `, [request.sessionId, serializeJson(metadata), timestamps[0]])
+        VALUES ($1, $2, $3, 0, $4::jsonb, $5::timestamptz, $5::timestamptz)
+        ON CONFLICT (scope_id, session_id) DO NOTHING
+      `, [request.scopeId, request.sessionId, sessionName, serializeJson(metadata), timestamps[0]])
 
       const versionResult = await client.query<SessionVersionRow>(`
         SELECT version
         FROM craft_agent_sessions
-        WHERE session_id = $1
+        WHERE scope_id = $1 AND session_id = $2
         FOR UPDATE
-      `, [request.sessionId])
+      `, [request.scopeId, request.sessionId])
       const versionRow = versionResult.rows[0]
       if (!versionRow)
         throw operationFailed('append', request.sessionId, '创建或锁定 Session 失败')
@@ -133,6 +142,7 @@ export class PostgresSessionStore implements SessionCatalogStore {
         const sequence = currentVersion + index + 1
         const event = createPersistedEvent(
           draft,
+          request.scopeId,
           request.sessionId,
           eventIds[index]!,
           sequence,
@@ -145,12 +155,13 @@ export class PostgresSessionStore implements SessionCatalogStore {
       const nextVersion = currentVersion + appended.length
       await client.query(`
         UPDATE craft_agent_sessions
-        SET version = $2, updated_at = $3::timestamptz
-        WHERE session_id = $1
-      `, [request.sessionId, nextVersion, timestamps.at(-1)])
+        SET version = $3, updated_at = $4::timestamptz
+        WHERE scope_id = $1 AND session_id = $2
+      `, [request.scopeId, request.sessionId, nextVersion, timestamps.at(-1)])
       await client.query('COMMIT')
 
       return deepFreeze({
+        scopeId: request.scopeId,
         sessionId: request.sessionId,
         previousVersion: currentVersion,
         version: nextVersion,
@@ -178,26 +189,26 @@ export class PostgresSessionStore implements SessionCatalogStore {
   }
 
   /** 按 sequence 读取固定版本的事件页；每次调用都以数据库为事实源。 */
-  async read(
-    sessionId: string,
-    options: ReadSessionEventsOptions = {},
-  ): Promise<SessionEventPage> {
+  async read(request: ReadSessionEventsRequest): Promise<SessionEventPage> {
+    const { scopeId, sessionId } = request
+    validateIdentifier(scopeId, 'scopeId')
     validateIdentifier(sessionId, 'sessionId')
-    const afterSequence = options.afterSequence ?? 0
-    const limit = options.limit ?? DEFAULT_PAGE_SIZE
+    const afterSequence = request.afterSequence ?? 0
+    const limit = request.limit ?? DEFAULT_PAGE_SIZE
     validateNonNegativeInteger(afterSequence, 'afterSequence', sessionId)
     validatePageSize(limit, sessionId)
 
     try {
       const versionResult = await this.pool.query<SessionVersionRow>(`
-        SELECT version
+        SELECT version, session_name
         FROM craft_agent_sessions
-        WHERE session_id = $1
-      `, [sessionId])
-      const latestVersion = versionResult.rows[0]
-        ? parseDatabaseInteger(versionResult.rows[0].version, 'version', sessionId)
+        WHERE scope_id = $1 AND session_id = $2
+      `, [scopeId, sessionId])
+      const sessionRow = versionResult.rows[0]
+      const latestVersion = sessionRow
+        ? parseDatabaseInteger(sessionRow.version, 'version', sessionId)
         : 0
-      const snapshotVersion = options.throughVersion ?? latestVersion
+      const snapshotVersion = request.throughVersion ?? latestVersion
       validateNonNegativeInteger(snapshotVersion, 'throughVersion', sessionId)
       if (snapshotVersion > latestVersion) {
         throw invalidArgument(
@@ -208,6 +219,7 @@ export class PostgresSessionStore implements SessionCatalogStore {
 
       const eventResult = await this.pool.query<SessionEventRow>(`
         SELECT
+          scope_id,
           session_id,
           sequence,
           event_id,
@@ -217,17 +229,20 @@ export class PostgresSessionStore implements SessionCatalogStore {
           payload_json,
           created_at
         FROM craft_agent_session_events
-        WHERE session_id = $1
-          AND sequence > $2
-          AND sequence <= $3
+        WHERE scope_id = $1
+          AND session_id = $2
+          AND sequence > $3
+          AND sequence <= $4
         ORDER BY sequence ASC
-        LIMIT $4
-      `, [sessionId, afterSequence, snapshotVersion, limit])
-      const events = eventResult.rows.map(row => restoreEvent(row, sessionId))
+        LIMIT $5
+      `, [scopeId, sessionId, afterSequence, snapshotVersion, limit])
+      const events = eventResult.rows.map(row => restoreEvent(row, scopeId, sessionId))
       const nextAfterSequence = events.at(-1)?.sequence ?? afterSequence
 
       return deepFreeze({
+        scopeId,
         sessionId,
+        ...(sessionRow?.session_name ? { sessionName: sessionRow.session_name } : {}),
         snapshotVersion,
         latestVersion,
         events,
@@ -243,9 +258,11 @@ export class PostgresSessionStore implements SessionCatalogStore {
   }
 
   /** 使用不可变的 catalog_order 游标分页列出摘要，不读取事件表。 */
-  async list(options: ListSessionsOptions = {}): Promise<SessionListPage> {
+  async list(options: ListSessionsOptions): Promise<SessionListPage> {
+    validateIdentifier(options.scopeId, 'scopeId')
     const limit = options.limit ?? DEFAULT_PAGE_SIZE
     validatePageSize(limit, '')
+    const search = normalizeSearch(options.search)
 
     try {
       let afterCatalogOrder = 0
@@ -254,8 +271,8 @@ export class PostgresSessionStore implements SessionCatalogStore {
         const cursorResult = await this.pool.query<{ catalog_order: string | number }>(`
           SELECT catalog_order
           FROM craft_agent_sessions
-          WHERE session_id = $1
-        `, [options.afterSessionId])
+          WHERE scope_id = $1 AND session_id = $2
+        `, [options.scopeId, options.afterSessionId])
         const cursor = cursorResult.rows[0]
         if (!cursor)
           throw invalidArgument('', `afterSessionId ${options.afterSessionId} 不存在`)
@@ -269,15 +286,19 @@ export class PostgresSessionStore implements SessionCatalogStore {
 
       // 多取一行只用于判断 hasMore，不把额外行暴露给调用方。
       const result = await this.pool.query<SessionSummaryRow>(`
-        SELECT session_id, version, metadata_json, created_at
+        SELECT scope_id, session_id, session_name, version, metadata_json, created_at
         FROM craft_agent_sessions
-        WHERE catalog_order > $1
+        WHERE scope_id = $1
+          AND catalog_order > $2
+          AND ($3::text IS NULL OR session_name ILIKE '%' || $3 || '%' ESCAPE '\\')
         ORDER BY catalog_order ASC
-        LIMIT $2
-      `, [afterCatalogOrder, limit + 1])
+        LIMIT $4
+      `, [options.scopeId, afterCatalogOrder, search ?? null, limit + 1])
       const hasMore = result.rows.length > limit
       const sessions = result.rows.slice(0, limit).map(row => deepFreeze({
+        scopeId: row.scope_id,
         sessionId: row.session_id,
+        ...(row.session_name ? { sessionName: row.session_name } : {}),
         createdAt: toIsoTimestamp(row.created_at, row.session_id, 'list'),
         version: parseDatabaseInteger(row.version, 'version', row.session_id, 'list'),
         ...(row.metadata_json === null
@@ -323,6 +344,7 @@ async function insertEvent(client: PoolClient, event: SessionEvent): Promise<voi
   const turnId = 'turnId' in event ? (event.turnId ?? null) : null
   await client.query(`
     INSERT INTO craft_agent_session_events (
+      scope_id,
       session_id,
       sequence,
       event_id,
@@ -332,8 +354,9 @@ async function insertEvent(client: PoolClient, event: SessionEvent): Promise<voi
       payload_json,
       created_at
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::timestamptz)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::timestamptz)
   `, [
+    event.scopeId,
     event.sessionId,
     event.sequence,
     event.eventId,
@@ -349,7 +372,10 @@ async function insertEvent(client: PoolClient, event: SessionEvent): Promise<voi
 function createEventPayload(event: SessionEvent): JsonObject {
   switch (event.type) {
     case 'session.created':
-      return event.metadata ? { metadata: event.metadata } : {}
+      return {
+        ...(event.sessionName ? { sessionName: event.sessionName } : {}),
+        ...(event.metadata ? { metadata: event.metadata } : {}),
+      }
     case 'message.appended':
       return { message: event.message as unknown as JsonValue }
     case 'turn.failed':
@@ -363,8 +389,12 @@ function createEventPayload(event: SessionEvent): JsonObject {
 }
 
 /** 把数据库行恢复为 SessionEvent 判别联合，并拒绝损坏或未知的持久化数据。 */
-function restoreEvent(row: SessionEventRow, requestedSessionId: string): SessionEvent {
-  if (row.session_id !== requestedSessionId)
+function restoreEvent(
+  row: SessionEventRow,
+  requestedScopeId: string,
+  requestedSessionId: string,
+): SessionEvent {
+  if (row.scope_id !== requestedScopeId || row.session_id !== requestedSessionId)
     throw operationFailed('read', requestedSessionId, '数据库返回了其他 Session 的事件')
   validateIdentifier(row.event_id, 'event_id')
   const sequence = parseDatabaseInteger(row.sequence, 'sequence', requestedSessionId)
@@ -372,6 +402,7 @@ function restoreEvent(row: SessionEventRow, requestedSessionId: string): Session
   const payload = restoreJsonObject(row.payload_json, 'payload_json', requestedSessionId)
   const envelope = {
     eventId: row.event_id,
+    scopeId: row.scope_id,
     sessionId: row.session_id,
     sequence,
     timestamp,
@@ -383,12 +414,15 @@ function restoreEvent(row: SessionEventRow, requestedSessionId: string): Session
 
   switch (row.event_type) {
     case 'session.created': {
+      if (payload.sessionName !== undefined && typeof payload.sessionName !== 'string')
+        throw operationFailed('read', requestedSessionId, 'session.created.sessionName 必须是字符串')
       const metadata = payload.metadata === undefined
         ? undefined
         : restoreJsonObject(payload.metadata, 'metadata', requestedSessionId)
       return deepFreeze({
         ...envelope,
         type: 'session.created',
+        ...(typeof payload.sessionName === 'string' ? { sessionName: payload.sessionName } : {}),
         ...(metadata ? { metadata } : {}),
       })
     }
@@ -441,6 +475,7 @@ function restoreEvent(row: SessionEventRow, requestedSessionId: string): Session
 /** 为事件草稿附加 Store 负责生成的身份、顺序和时间信封。 */
 function createPersistedEvent(
   draft: SessionEventDraft,
+  scopeId: string,
   sessionId: string,
   eventId: string,
   sequence: number,
@@ -449,6 +484,7 @@ function createPersistedEvent(
   return deepFreeze({
     ...draft,
     eventId,
+    scopeId,
     sessionId,
     sequence,
     timestamp,
@@ -490,6 +526,8 @@ function validateDraft(event: SessionEventDraft, sessionId: string): void {
     validateIdentifier(event.runId, 'runId')
   if ('turnId' in event && event.turnId !== undefined)
     validateIdentifier(event.turnId, 'turnId')
+  if (event.type === 'session.created' && event.sessionName !== undefined)
+    validateIdentifier(event.sessionName, 'sessionName')
   if (![
     'session.created',
     'message.appended',
@@ -530,6 +568,15 @@ function cloneSerializable<T>(value: T, sessionId: string): T {
 /** JSON 参数统一序列化；JavaScript null 必须保留为 SQL NULL 以满足 metadata 约束。 */
 function serializeJson(value: unknown): string | null {
   return value === null ? null : JSON.stringify(value)
+}
+
+/** 将名称搜索归一化为大小写不敏感的字面子串，避免 `%` 和 `_` 被解释为通配符。 */
+function normalizeSearch(value: string | undefined): string | undefined {
+  if (value === undefined)
+    return undefined
+  if (typeof value !== 'string' || !value.trim())
+    throw invalidArgument('', 'search 必须是非空字符串')
+  return value.trim().replace(/[\\%_]/g, '\\$&')
 }
 
 /** 将 jsonb 值收窄为普通对象，数组和 null 都视为持久化数据损坏。 */

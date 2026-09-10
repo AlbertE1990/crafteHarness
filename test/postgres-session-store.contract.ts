@@ -1,7 +1,7 @@
 import type { ModelStreamChunk } from '../src/craft-agent'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import process, { loadEnvFile } from 'node:process'
 import { Pool } from 'pg'
 import Agent, { SessionStoreError } from '../src/craft-agent'
@@ -25,8 +25,7 @@ async function main(): Promise<void> {
   const config = readPostgresRuntimeConfig()
   const administrationPool = createPostgresPool(config)
   const schema = `craft_agent_contract_${randomUUID().replaceAll('-', '')}`
-  const migrationUrl = new URL('../database/migrations/001-create-session-log.sql', import.meta.url)
-  const migration = await readFile(migrationUrl, 'utf8')
+  const migrationsUrl = new URL('../database/migrations/', import.meta.url)
   let pool: Pool | undefined
 
   try {
@@ -35,10 +34,15 @@ async function main(): Promise<void> {
       connectionString: config.connectionString,
       max: config.maxConnections,
       application_name: 'craft-agent-store-contract',
-      options: `-c search_path=${schema}`,
+      // pg_trgm 安装在 public；隔离业务表时仍需让 PostgreSQL 找到扩展的 operator class。
+      options: `-c search_path=${schema},public`,
       ...(config.ssl ? { ssl: { rejectUnauthorized: true } } : {}),
     })
-    await pool.query(migration)
+    const filenames = (await readdir(migrationsUrl))
+      .filter(filename => /^\d+-[a-z0-9-]+\.sql$/i.test(filename))
+      .sort((left, right) => left.localeCompare(right))
+    for (const filename of filenames)
+      await pool.query(await readFile(new URL(filename, migrationsUrl), 'utf8'))
     const store = new PostgresSessionStore(pool)
     const result = await assertSessionStoreContract(store, {
       sessionIdPrefix: 'postgres-contract',
@@ -58,11 +62,13 @@ async function main(): Promise<void> {
 
 /** 验证新 Agent 实例会从数据库恢复旧消息，而不是依赖前一个实例的内存。 */
 async function assertAgentRestoresFromDatabase(store: PostgresSessionStore): Promise<void> {
+  const scopeId = 'postgres-contract:agent-scope'
   const sessionId = 'postgres-contract:agent-restore'
   const firstAdapter = new ScriptedModelAdapter({
     script: [{ method: 'stream', chunks: [completionChunk('第一轮回答')] }],
   })
   await consume(new Agent({ model: firstAdapter, sessionStore: store }).stream({
+    scopeId,
     sessionId,
     input: '第一轮问题',
   }))
@@ -71,6 +77,7 @@ async function assertAgentRestoresFromDatabase(store: PostgresSessionStore): Pro
     script: [{ method: 'stream', chunks: [completionChunk('第二轮回答')] }],
   })
   await consume(new Agent({ model: secondAdapter, sessionStore: store }).stream({
+    scopeId,
     sessionId,
     input: '第二轮问题',
   }))
@@ -110,8 +117,10 @@ function completionChunk(content: string): ModelStreamChunk {
 
 /** 验证两个连接基于同一版本写入时，行锁只允许一个提交成功。 */
 async function assertConcurrentAppend(store: PostgresSessionStore): Promise<void> {
+  const scopeId = 'postgres-contract:concurrency-scope'
   const sessionId = 'postgres-contract:concurrency'
   await store.append({
+    scopeId,
     sessionId,
     expectedVersion: 0,
     events: [{ type: 'session.created' }],
@@ -119,6 +128,7 @@ async function assertConcurrentAppend(store: PostgresSessionStore): Promise<void
 
   const results = await Promise.allSettled([
     store.append({
+      scopeId,
       sessionId,
       expectedVersion: 1,
       events: [{
@@ -127,6 +137,7 @@ async function assertConcurrentAppend(store: PostgresSessionStore): Promise<void
       }],
     }),
     store.append({
+      scopeId,
       sessionId,
       expectedVersion: 1,
       events: [{
@@ -142,7 +153,7 @@ async function assertConcurrentAppend(store: PostgresSessionStore): Promise<void
   const reason = rejected[0]?.reason
   if (!(reason instanceof SessionStoreError) || reason.code !== 'SESSION_VERSION_CONFLICT')
     throw new Error('PostgreSQL 并发契约失败：失败写入必须返回 SESSION_VERSION_CONFLICT')
-  if ((await store.read(sessionId)).latestVersion !== 2)
+  if ((await store.read({ scopeId, sessionId })).latestVersion !== 2)
     throw new Error('PostgreSQL 并发契约失败：冲突写入不能推进 Session 版本')
 }
 

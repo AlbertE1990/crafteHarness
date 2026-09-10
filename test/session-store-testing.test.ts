@@ -13,6 +13,7 @@ describe('session store testing utilities', () => {
     })
 
     expect(result).toEqual({
+      scopeId: 'memory-contract:scope',
       sessionIds: [
         'memory-contract:primary',
         'memory-contract:secondary',
@@ -27,7 +28,7 @@ describe('session store testing utilities', () => {
     const memory = new MemorySessionStore()
     const store: SessionStore = {
       append: request => memory.append(request),
-      read: (sessionId, options) => memory.read(sessionId, options),
+      read: request => memory.read(request),
     }
 
     const result = await assertSessionStoreContract(store, {
@@ -41,7 +42,7 @@ describe('session store testing utilities', () => {
     const memory = new MemorySessionStore()
     const store: SessionStore = {
       append: request => memory.append(request),
-      read: (sessionId, options) => memory.read(sessionId, options),
+      read: request => memory.read(request),
     }
 
     await expect(assertSessionStoreContract(store, {

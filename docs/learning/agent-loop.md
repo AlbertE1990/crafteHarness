@@ -76,6 +76,7 @@ const loop = new AgentLoop({
 })
 
 const result = await loop.run({
+  scopeId: 'default',
   sessionId: 'session-1',
   input: '杭州天气怎么样？',
 }, {

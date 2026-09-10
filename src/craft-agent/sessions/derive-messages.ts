@@ -1,6 +1,7 @@
 import type {
   ModelMessage,
   SessionEvent,
+  SessionIdentity,
   SessionSnapshot,
   SessionStore,
 } from '../contracts'
@@ -21,10 +22,13 @@ export function deriveModelMessages(events: readonly SessionEvent[]): readonly M
   if (events.length === 0)
     return Object.freeze([])
 
+  const scopeId = events[0]!.scopeId
   const sessionId = events[0]!.sessionId
   for (const [index, event] of events.entries()) {
     const expectedSequence = index + 1
-    if (event.sessionId !== sessionId || event.sequence !== expectedSequence) {
+    if (event.scopeId !== scopeId
+      || event.sessionId !== sessionId
+      || event.sequence !== expectedSequence) {
       throw new SessionStoreError({
         code: 'SESSION_INVALID_EVENT_SEQUENCE',
         message: `Session 快照必须来自同一 Session 且 sequence 连续；索引 ${index} 期望 ${expectedSequence}`,
@@ -48,28 +52,47 @@ export function deriveModelMessages(events: readonly SessionEvent[]): readonly M
 
 /** 跨分页读取一个固定版本，避免读取期间的新事件混入历史。 */
 export async function readSessionSnapshot(
-  sessionId: string,
+  identity: SessionIdentity,
   store: SessionStore,
   options: ReadSessionSnapshotOptions = {},
 ): Promise<SessionSnapshot> {
   const pageSize = options.pageSize ?? 100
   let afterSequence = 0
   let snapshotVersion: number | undefined
+  let sessionName: string | undefined
   const events: SessionEvent[] = []
 
   do {
-    const page = await store.read(sessionId, {
+    const page = await store.read({
+      ...identity,
       afterSequence,
       limit: pageSize,
       ...(snapshotVersion === undefined ? {} : { throughVersion: snapshotVersion }),
     })
+    if (page.scopeId !== identity.scopeId || page.sessionId !== identity.sessionId) {
+      throw new SessionStoreError({
+        code: 'SESSION_INVALID_EVENT_SEQUENCE',
+        message: `Session ${identity.sessionId} 的 Store 返回了其他作用域或 Session`,
+        sessionId: identity.sessionId,
+      })
+    }
     snapshotVersion ??= page.snapshotVersion
+    sessionName ??= page.sessionName
+    if (sessionName !== undefined
+      && page.sessionName !== undefined
+      && page.sessionName !== sessionName) {
+      throw new SessionStoreError({
+        code: 'SESSION_INVALID_EVENT_SEQUENCE',
+        message: `Session ${identity.sessionId} 的 Store 分页名称不一致`,
+        sessionId: identity.sessionId,
+      })
+    }
     events.push(...page.events)
     if (page.hasMore && page.nextAfterSequence <= afterSequence) {
       throw new SessionStoreError({
         code: 'SESSION_INVALID_EVENT_SEQUENCE',
-        message: `Session ${sessionId} 的 Store 分页游标没有前进`,
-        sessionId,
+        message: `Session ${identity.sessionId} 的 Store 分页游标没有前进`,
+        sessionId: identity.sessionId,
       })
     }
     afterSequence = page.nextAfterSequence
@@ -79,7 +102,8 @@ export async function readSessionSnapshot(
   } while (true)
 
   return Object.freeze({
-    sessionId,
+    ...identity,
+    ...(sessionName ? { sessionName } : {}),
     version: snapshotVersion ?? 0,
     events: Object.freeze(events),
   })
@@ -87,9 +111,9 @@ export async function readSessionSnapshot(
 
 /** 读取一致快照并直接生成下一次模型请求所需的历史消息。 */
 export async function loadModelMessages(
-  sessionId: string,
+  identity: SessionIdentity,
   store: SessionStore,
 ): Promise<readonly ModelMessage[]> {
-  const snapshot = await readSessionSnapshot(sessionId, store)
+  const snapshot = await readSessionSnapshot(identity, store)
   return deriveModelMessages(snapshot.events)
 }

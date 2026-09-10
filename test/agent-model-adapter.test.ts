@@ -4,6 +4,8 @@ import Agent from '../src/craft-agent'
 import { serverToolGuard, serverTools } from '../src/server/agent-tools'
 import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
+const SCOPE_ID = 'scope-agent-model-adapter'
+
 /** 构造供应商无关模型流块，验证 Server 只消费 CraftAgent 标准协议。 */
 function chunk(
   delta: ModelStreamChunk['choices'][number]['delta'],
@@ -56,6 +58,7 @@ describe('agent runtime model adapter boundary', () => {
     })
     const agent = createAgent(adapter)
     const events = await collectEvents(agent.stream({
+      scopeId: SCOPE_ID,
       input: '你好',
       sessionId: 'adapter-test-conversation',
     }))
@@ -85,8 +88,8 @@ describe('agent runtime model adapter boundary', () => {
       reasoning: '正在分析',
     })
 
-    const page = await agent.listSessions()
-    const detail = await agent.getSession('adapter-test-conversation')
+    const page = await agent.listSessions({ scopeId: SCOPE_ID })
+    const detail = await agent.getSession({ scopeId: SCOPE_ID, sessionId: 'adapter-test-conversation' })
     expect(detail?.messages.at(-1)?.message).toEqual({
       role: 'assistant',
       content: '最终回答',
@@ -132,6 +135,7 @@ describe('agent runtime model adapter boundary', () => {
     })
     const agent = createAgent(adapter)
     const events = await collectEvents(agent.stream({
+      scopeId: SCOPE_ID,
       input: '现在几点',
       sessionId: 'fragmented-tool-call',
     }))
@@ -170,8 +174,8 @@ describe('agent runtime model adapter boundary', () => {
     })
     const agent = createAgent(adapter)
 
-    await collectEvents(agent.stream({ input: '第一轮问题', sessionId: 'multi-turn' }))
-    await collectEvents(agent.stream({ input: '第二轮问题', sessionId: 'multi-turn' }))
+    await collectEvents(agent.stream({ scopeId: SCOPE_ID, input: '第一轮问题', sessionId: 'multi-turn' }))
+    await collectEvents(agent.stream({ scopeId: SCOPE_ID, input: '第二轮问题', sessionId: 'multi-turn' }))
 
     expect(adapter.calls[1]?.request.messages).toEqual([
       { role: 'system', content: '你是一个AI助手' },
@@ -179,9 +183,9 @@ describe('agent runtime model adapter boundary', () => {
       { role: 'assistant', content: '第一轮回答' },
       { role: 'user', content: '第二轮问题' },
     ])
-    const page = await agent.listSessions()
+    const page = await agent.listSessions({ scopeId: SCOPE_ID })
     expect(page.sessions).toHaveLength(1)
-    const detail = await agent.getSession('multi-turn')
+    const detail = await agent.getSession({ scopeId: SCOPE_ID, sessionId: 'multi-turn' })
     expect(detail?.messages.map(item => item.message).filter(message => (
       message.role === 'user' || message.role === 'assistant'
     )).map(message => message.content)).toEqual([
@@ -209,7 +213,7 @@ describe('agent runtime model adapter boundary', () => {
       }],
     })
     const agent = createAgent(adapter)
-    const events = await collectEvents(agent.stream({ input: '执行自定义工具' }))
+    const events = await collectEvents(agent.stream({ scopeId: SCOPE_ID, input: '执行自定义工具' }))
     expect(events.at(-1)).toMatchObject({
       type: 'error',
       code: 'MODEL_PROTOCOL_ERROR',

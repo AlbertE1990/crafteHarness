@@ -70,8 +70,8 @@ import Agent, { MemorySessionStore } from '../../src/craft-agent'
 const store = new MemorySessionStore()
 const agent = new Agent({ model, sessionStore: store })
 
-await agent.invoke({ sessionId: 'learning-session', input: '你好' })
-console.dir(await store.read('learning-session'), { depth: null })
+await agent.invoke({ scopeId: 'default', sessionId: 'learning-session', input: '你好' })
+console.dir(await store.read({ scopeId: 'default', sessionId: 'learning-session' }), { depth: null })
 ```
 
 ## 4. 必须实现的协议
@@ -81,10 +81,7 @@ console.dir(await store.read('learning-session'), { depth: null })
 ```ts
 interface SessionStore {
   append: (request: AppendSessionEventsRequest) => Promise<AppendSessionEventsResult>
-  read: (
-    sessionId: string,
-    options?: ReadSessionEventsOptions,
-  ) => Promise<SessionEventPage>
+  read: (request: ReadSessionEventsRequest) => Promise<SessionEventPage>
 }
 ```
 
@@ -92,7 +89,7 @@ interface SessionStore {
 
 ```ts
 interface SessionCatalogStore extends SessionStore {
-  list: (options?: ListSessionsOptions) => Promise<SessionListPage>
+  list: (options: ListSessionsOptions) => Promise<SessionListPage>
 }
 ```
 
@@ -115,23 +112,28 @@ CraftAgent 的 ID 是字符串，教程使用 `text`，不强制调用方只能�
 
 ```sql
 CREATE TABLE craft_agent_sessions (
-  session_id    text PRIMARY KEY,
+  scope_id      text NOT NULL,
+  session_id    text NOT NULL,
+  session_name  text,
   catalog_order bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
   version       bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
   metadata_json jsonb,
   created_at    timestamptz NOT NULL,
-  updated_at    timestamptz NOT NULL
+  updated_at    timestamptz NOT NULL,
+  PRIMARY KEY (scope_id, session_id)
 );
 
-CREATE INDEX craft_agent_sessions_created_idx
-  ON craft_agent_sessions (catalog_order);
+CREATE INDEX craft_agent_sessions_scope_catalog_idx
+  ON craft_agent_sessions (scope_id, catalog_order);
 ```
 
 字段说明：
 
 | 字段            | 用途                                                                     |
 | --------------- | ------------------------------------------------------------------------ |
-| `session_id`    | CraftAgent 的 Session ID，也是事件表外键。                               |
+| `scope_id`      | Runtime 显式提供的持久化分区键。                                         |
+| `session_id`    | scope 内的 Session ID，与 scope 共同构成事件表外键。                     |
+| `session_name`  | 标准可搜索名称；不再从 metadata JSON 路径查询。                          |
 | `catalog_order` | 稳定的创建顺序，用于实现 `list()` 游标分页。事务回滚造成空洞不影响语义。 |
 | `version`       | 当前最后一个事件的 sequence；新 Session 初始为 0。                       |
 | `metadata_json` | `session.created.metadata` 的目录投影。                                  |
@@ -142,8 +144,8 @@ CREATE INDEX craft_agent_sessions_created_idx
 
 ```sql
 CREATE TABLE craft_agent_session_events (
-  session_id  text NOT NULL
-              REFERENCES craft_agent_sessions(session_id),
+  scope_id    text NOT NULL,
+  session_id  text NOT NULL,
   sequence    bigint NOT NULL CHECK (sequence > 0),
   event_id    text NOT NULL UNIQUE,
   event_type  varchar(64) NOT NULL,
@@ -151,7 +153,9 @@ CREATE TABLE craft_agent_session_events (
   turn_id     text,
   payload_json jsonb NOT NULL,
   created_at  timestamptz NOT NULL,
-  PRIMARY KEY (session_id, sequence)
+  PRIMARY KEY (scope_id, session_id, sequence),
+  FOREIGN KEY (scope_id, session_id)
+    REFERENCES craft_agent_sessions(scope_id, session_id)
 );
 
 CREATE INDEX craft_agent_session_events_run_idx
@@ -161,12 +165,12 @@ CREATE INDEX craft_agent_session_events_run_idx
 
 `payload_json` 保存事件特有字段：
 
-- `session.created`：`metadata`。
+- `session.created`：`sessionName` 和 `metadata`。
 - `message.appended`：`message`。
 - `turn.failed`：`error`。
 - `turn.cancelled`：`reason`。
 
-`eventId`、`sessionId`、`sequence`、`timestamp` 和 `type` 已有稳定列，不必再次复制进 payload。读取时将列与
+`eventId`、`scopeId`、`sessionId`、`sequence`、`timestamp` 和 `type` 已有稳定列，不必再次复制进 payload。读取时将列与
 payload 合并成 `SessionEvent`。
 
 不要建立可变的 `messages` 表作为第二份权威历史。模型消息应继续从 `message.appended` 事件确定性推导。
@@ -195,21 +199,21 @@ BEGIN;
 -- 新 Session 可以先 INSERT ... ON CONFLICT DO NOTHING，随后统一加行锁。
 SELECT version
 FROM craft_agent_sessions
-WHERE session_id = $1
+WHERE scope_id = $1 AND session_id = $2
 FOR UPDATE;
 
 -- 应用代码比较 version 和 expectedVersion。
 
 INSERT INTO craft_agent_session_events (
-  session_id, sequence, event_id, event_type,
+  scope_id, session_id, sequence, event_id, event_type,
   run_id, turn_id, payload_json, created_at
 )
 VALUES (...), (...);
 
 UPDATE craft_agent_sessions
-SET version = $2,
-    updated_at = $3
-WHERE session_id = $1;
+SET version = $3,
+    updated_at = $4
+WHERE scope_id = $1 AND session_id = $2;
 
 COMMIT;
 ```
@@ -241,11 +245,12 @@ throw new SessionStoreError({
 SELECT sequence, event_id, event_type, run_id, turn_id,
        payload_json, created_at
 FROM craft_agent_session_events
-WHERE session_id = $1
-  AND sequence > $2
-  AND sequence <= $3
+WHERE scope_id = $1
+  AND session_id = $2
+  AND sequence > $3
+  AND sequence <= $4
 ORDER BY sequence ASC
-LIMIT $4;
+LIMIT $5;
 ```
 
 后续页面必须继续使用第一页返回的 `snapshotVersion` 作为 `throughVersion`。`latestVersion` 可以反映数据库
@@ -255,6 +260,7 @@ LIMIT $4;
 
 ```ts
 const emptyPage = {
+  scopeId,
   sessionId,
   snapshotVersion: 0,
   latestVersion: 0,
@@ -266,15 +272,17 @@ const emptyPage = {
 
 ## 8. list() 的稳定目录分页
 
-当前协议使用上一页最后一个 `sessionId` 作为游标。数据库实现应先查询该 Session 的
+当前协议使用上一页最后一个 `sessionId` 作为游标。数据库实现应在指定 scope 内先查询该 Session 的
 `catalog_order`；游标不存在时抛出 `SESSION_INVALID_ARGUMENT`，未提供游标时使用 0。随后读取后续条目：
 
 ```sql
-SELECT session_id, version, metadata_json, created_at
+SELECT scope_id, session_id, session_name, version, metadata_json, created_at
 FROM craft_agent_sessions
-WHERE catalog_order > $1
+WHERE scope_id = $1
+  AND catalog_order > $2
+  AND ($3::text IS NULL OR session_name ILIKE '%' || $3 || '%')
 ORDER BY catalog_order ASC
-LIMIT $2;
+LIMIT $4;
 ```
 
 和事件分页一样，可以多取一条计算 `hasMore`。返回给 CraftAgent 的 `createdAt` 必须是 ISO 8601 字符串。
@@ -288,7 +296,7 @@ import type {
   AppendSessionEventsRequest,
   AppendSessionEventsResult,
   ListSessionsOptions,
-  ReadSessionEventsOptions,
+  ReadSessionEventsRequest,
   SessionCatalogStore,
   SessionEventPage,
   SessionListPage,
@@ -327,12 +335,9 @@ export class PostgresSessionStore implements SessionCatalogStore {
   }
 
   /** 从数据库直接读取固定版本事件页，不复制到 MemorySessionStore。 */
-  async read(
-    sessionId: string,
-    options: ReadSessionEventsOptions = {},
-  ): Promise<SessionEventPage> {
+  async read(request: ReadSessionEventsRequest): Promise<SessionEventPage> {
     try {
-      return await readSessionEventPage(this.database, sessionId, options)
+      return await readSessionEventPage(this.database, request)
     }
     catch (error) {
       if (error instanceof SessionStoreError)
@@ -340,7 +345,7 @@ export class PostgresSessionStore implements SessionCatalogStore {
       throw new SessionStoreError({
         code: 'SESSION_OPERATION_FAILED',
         message: 'Session 事件读取失败',
-        sessionId,
+        sessionId: request.sessionId,
         operation: 'read',
         cause: error,
       })
@@ -348,7 +353,7 @@ export class PostgresSessionStore implements SessionCatalogStore {
   }
 
   /** 按稳定创建顺序读取 Session 目录。 */
-  async list(options: ListSessionsOptions = {}): Promise<SessionListPage> {
+  async list(options: ListSessionsOptions): Promise<SessionListPage> {
     try {
       return await listSessionPage(this.database, options)
     }
@@ -369,44 +374,73 @@ export class PostgresSessionStore implements SessionCatalogStore {
 示例中的 `AppDatabase`、`appendSessionEvents()`、`readSessionEventPage()` 和 `listSessionPage()` 由应用根据
 `pg`、Prisma、Drizzle、TypeORM 或已有数据库 Service 实现。不要让这些类型进入 CraftAgent Core。
 
-## 10. 保存应用用户信息
+## 10. sessionMetadata、context 与多用户数据
 
-CraftAgent 不定义 `User`、`Role`、`Tenant` 或权限协议。Runtime 可以在创建 Session 时传入应用字段：
+CraftAgent 当前不定义 `User`、`Role`、`Tenant` 或权限协议。`sessionMetadata` 是新 Session 的持久化 JSON
+创建信息；`context` 是每次调用的临时执行依赖。一个多用户 Runtime 通常会同时使用二者：
 
 ```ts
 await agent.invoke({
+  scopeId: authenticatedUser.tenantId,
   input: '你好',
+  sessionName: '第一次对话',
   sessionMetadata: {
-    userId: authenticatedUser.id,
+    // 仅作为 JSON 安全的创建事实；标准目录不会按这些字段查询。
+    ownerUserId: authenticatedUser.id,
     tenantId: authenticatedUser.tenantId,
     source: 'web',
+  },
+  context: {
+    // 当前请求重新读取的可信身份和权限，不从 metadata 恢复。
+    user: authenticatedUser,
+    permissions: await permissionService.listFor(authenticatedUser.id),
+    userService,
   },
 })
 ```
 
-Store 可以把 metadata 原样保存在 `metadata_json`，也可以提取常用字段到应用自己的列：
+当前消费者如下：
+
+| 数据              | 是否持久化 | 当前消费者                                                |
+| ----------------- | ---------- | --------------------------------------------------------- |
+| `sessionMetadata` | 是         | `session.created`、Store、Session 摘要/详情、Runtime 投影 |
+| `context`         | 否         | 工具级 Guard、`tools.guard`、工具 `execute()`             |
+
+继续已有 Session 时，新的 `sessionMetadata` 不会更新创建事件。需要记录可变资料时，应在业务表维护，或先定义新的
+Session 事件和投影规则；不能覆盖 append-only 日志。用户名通常会变化，也可能包含个人信息，所以目录归属应使用
+稳定用户 ID，展示时查询最新用户名。只有确实需要“创建时用户名快照”时才放入 metadata。
+
+Store 把 metadata 原样保存在 CraftAgent 管理的 `metadata_json`。业务需要更多可查询字段时，不应继续修改
+`craft_agent_sessions`，而应建立应用自己拥有的投影表，并以完整 Session 身份关联：
 
 ```sql
-ALTER TABLE craft_agent_sessions
-  ADD COLUMN app_user_id text,
-  ADD COLUMN app_tenant_id text;
+CREATE TABLE app_session_catalog (
+  scope_id text NOT NULL,
+  session_id text NOT NULL,
+  owner_user_id text NOT NULL,
+  status text NOT NULL,
+  PRIMARY KEY (scope_id, session_id),
+  FOREIGN KEY (scope_id, session_id)
+    REFERENCES craft_agent_sessions(scope_id, session_id)
+);
 
 CREATE INDEX craft_agent_sessions_app_user_idx
-  ON craft_agent_sessions (app_tenant_id, app_user_id, catalog_order);
+  ON app_session_catalog (owner_user_id, status);
 ```
 
-这些列不是 CraftAgent 标准。具体 Store 还可以公开 Agent 不使用的业务方法：
+这张表的迁移、写入时机和查询方法都由应用负责，CraftAgent 无需为每个业务需求增加标准列。具体 Repository
+或 Store 扩展还可以公开 Agent 不使用的业务方法：
 
 ```ts
 /** 应用 Store 可以在标准协议之外提供用户会话查询。 */
 class AppSessionStore implements SessionCatalogStore {
   // append/read/list 供 CraftAgent 使用。
 
-  async listByUser(tenantId: string, userId: string) {
+  async listByUser(scopeId: string, userId: string) {
     // 供 Fastify、管理后台或业务 Service 使用。
   }
 
-  async assertUserAccess(userId: string, sessionId: string) {
+  async assertUserAccess(scopeId: string, userId: string, sessionId: string) {
     // 权限规则由应用决定，不由 Agent 或模型决定。
   }
 }
@@ -414,6 +448,28 @@ class AppSessionStore implements SessionCatalogStore {
 
 不要直接相信请求体中的 `userId`。Runtime 应先完成身份认证，再把可信身份写入 metadata 或交给业务 Store。
 Session 所有者变更、成员管理和权限判断也不应该通过 Agent 对话修改。
+
+### 10.1 为什么 sessionName 已成为标准字段
+
+`sessionName` 已从 metadata 提升为 `session.created`、`SessionSummary` 和目录表的标准字段。
+`ListSessionsOptions.search` 在同一 scope 内按名称执行忽略大小写的字面子串匹配；PostgreSQL 参考实现使用
+`session_name` 和 trigram 索引，Memory Store 提供相同可观察语义。旧 `metadata_json.name` 只在 002 迁移中
+一次性回填，之后不再是名称权威源。
+
+当前尚未支持重命名。需要时应增加 `session.renamed` 事实并在同一 Store 原子操作中更新目录投影，不能覆盖
+`session.created`，也不能同时把 metadata 和独立列作为两个权威源。
+
+### 10.2 多用户目录的当前协议
+
+通用库不应理解应用的完整 User 对象，但目录需要一个由可信 Runtime 生成的稳定作用域，例如 `scopeId`。它可
+表示个人、租户、团队或项目空间。所有 `invoke/stream/get/list` 都必须由调用方在请求中携带作用域，
+不在 AgentConfig 中增加默认值或模式配置。单用户 Runtime 统一传固定值（例如 `default`），多用户 Runtime
+根据可信认证结果组装。数据库中至少建立
+`(scope_id, catalog_order)` 索引；名称搜索使用独立 `session_name` 列及适合目标数据库和语言的索引。
+
+`scopeId` 只负责数据分区，不代替授权。Runtime 仍应根据当前 context 验证用户是否能访问该作用域；数据库
+查询必须同时约束 scope 和 sessionId，避免先全局读取再在内存过滤。设计决策见
+[ADR-0010](../product/decisions/adr-0010-searchable-multi-user-session-catalog.md)。
 
 ## 11. 运行契约测试
 
@@ -442,6 +498,7 @@ await assertSessionStoreContract(store, {
 - 驱动断连、超时和唯一约束异常映射为正确错误码。
 - metadata 与事件 payload 的 JSON 序列化边界。
 - 多页读取期间发生新追加时，固定快照不漂移。
+- 不同 scope 使用相同 sessionId 时，读取、写入与目录搜索仍完全隔离。
 
 ## 12. 持久化不等于上下文压缩
 
@@ -463,6 +520,8 @@ Turn”，同时继续保留数据库中的完整事件事实。
 
 ```text
 database/migrations/001-create-session-log.sql
+database/migrations/002-add-session-scope-and-name.sql
+database/migrations/003-use-composite-session-identity.sql
 src/server/database/postgres.ts
 src/server/database/migrate.ts
 src/server/database/check.ts
@@ -478,7 +537,8 @@ pnpm db:check
 pnpm db:test-store
 ```
 
-迁移可以重复执行；连接检查只输出数据库名、PostgreSQL 版本和表是否存在，不输出连接字符串或密码。
+迁移器按文件名执行尚未记录的迁移，并写入 `craft_agent_schema_migrations`；连接检查只输出数据库名、PostgreSQL
+版本和表是否存在，不输出连接字符串或密码。
 契约命令会创建独立临时 schema，验证完成后自动删除，不会把测试 Session 写进开发目录。
 
 ### 13.1 当前实现的阅读顺序
@@ -506,9 +566,11 @@ pnpm db:test-store
 
 - [x] Runtime 管理数据库连接池，CraftAgent 只接收 Store 对象。
 - [x] `append()` 在一个事务中完成全部写入和版本推进。
-- [x] 数据库约束保证 `(session_id, sequence)` 与 `event_id` 唯一。
+- [x] 数据库约束保证 `(scope_id, session_id, sequence)` 与 `event_id` 唯一。
 - [x] `read()` 支持固定 `throughVersion` 分页。
 - [x] `list()` 使用稳定创建顺序，而不是易变化的更新时间。
+- [x] `scopeId` 在读写和目录查询中必填，并允许不同 scope 使用相同 sessionId。
+- [x] `sessionName` 使用独立列和索引，支持标准大小写不敏感子串搜索。
 - [x] 驱动异常被包装为 `SessionStoreError`，公开消息不泄露 SQL 和连接信息。
 - [x] 用户字段属于应用扩展，不进入 CraftAgent 用户或权限模型。
 - [x] Store 已通过契约探针和数据库专项并发测试。
