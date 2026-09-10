@@ -7,27 +7,33 @@ export interface SessionEventCorrelation {
   readonly turnId?: string
 }
 
+/** 事件的身份与发生时刻；由产生方在创建草稿时写入，缺省时由 Store 兜底生成。 */
+export interface SessionEventOccurrence {
+  readonly eventId?: string
+  readonly timestamp?: string
+}
+
 /** 创建一个新 Session 时写入的第一个事实。 */
-export interface SessionCreatedEventDraft {
+export interface SessionCreatedEventDraft extends SessionEventOccurrence {
   readonly type: 'session.created'
   readonly metadata?: JsonObject
 }
 
 /** 把一条模型可见消息追加到 Session 历史。 */
-export interface SessionMessageAppendedEventDraft extends SessionEventCorrelation {
+export interface SessionMessageAppendedEventDraft extends SessionEventCorrelation, SessionEventOccurrence {
   readonly type: 'message.appended'
   readonly message: ModelMessage
 }
 
 /** 标记一次 Turn 已经开始。 */
-export interface SessionTurnStartedEventDraft {
+export interface SessionTurnStartedEventDraft extends SessionEventOccurrence {
   readonly type: 'turn.started'
   readonly runId?: string
   readonly turnId: string
 }
 
 /** 标记一次 Turn 已经正常完成。 */
-export interface SessionTurnCompletedEventDraft {
+export interface SessionTurnCompletedEventDraft extends SessionEventOccurrence {
   readonly type: 'turn.completed'
   readonly runId?: string
   readonly turnId: string
@@ -41,7 +47,7 @@ export interface SessionFailureInfo {
 }
 
 /** 标记一次 Turn 因异常结束。 */
-export interface SessionTurnFailedEventDraft {
+export interface SessionTurnFailedEventDraft extends SessionEventOccurrence {
   readonly type: 'turn.failed'
   readonly runId?: string
   readonly turnId: string
@@ -49,7 +55,7 @@ export interface SessionTurnFailedEventDraft {
 }
 
 /** 标记一次 Turn 被调用方主动取消。 */
-export interface SessionTurnCancelledEventDraft {
+export interface SessionTurnCancelledEventDraft extends SessionEventOccurrence {
   readonly type: 'turn.cancelled'
   readonly runId?: string
   readonly turnId: string
@@ -67,11 +73,12 @@ export type SessionEventDraft
 
 /** Store 为每个 Session Event 附加的稳定持久化信封。 */
 export interface SessionEventEnvelope {
+  /** 事件身份；由产生方写入，缺省时由 Store 生成。 */
   readonly eventId: string
   readonly sessionId: string
   /** Session 内从 1 开始严格递增且无空洞的顺序号。 */
   readonly sequence: number
-  /** Store 接受该事实时生成的 ISO 8601 时间。 */
+  /** 事实发生时刻；由产生方写入，缺省时由 Store 在接受时生成。 */
   readonly timestamp: string
 }
 

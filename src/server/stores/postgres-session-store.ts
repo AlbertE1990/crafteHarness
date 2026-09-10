@@ -76,8 +76,8 @@ export class PostgresSessionStore implements SessionCatalogStore {
 
     const drafts = request.events.map(event => cloneSerializable(event, request.sessionId))
     drafts.forEach(event => validateDraft(event, request.sessionId))
-    const eventIds = drafts.map(() => randomUUID())
-    const timestamps = drafts.map(() => new Date().toISOString())
+    const eventIds = drafts.map(draft => resolveProducerEventId(draft, randomUUID, request.sessionId))
+    const timestamps = drafts.map(draft => resolveEventTimestamp(draft, request.sessionId))
     const sessionCreated = drafts.find(event => event.type === 'session.created')
     const metadata = sessionCreated?.type === 'session.created'
       ? (sessionCreated.metadata ?? null)
@@ -566,6 +566,30 @@ function toIsoTimestamp(
   const date = value instanceof Date ? value : new Date(value)
   if (!Number.isFinite(date.getTime()))
     throw operationFailed(operation, sessionId, '数据库包含无效时间戳')
+  return date.toISOString()
+}
+
+/** 事件身份与发生时刻由产生方写入；缺省时由 Store 兜底生成。 */
+function resolveProducerEventId(
+  draft: SessionEventDraft,
+  fallback: () => string,
+  sessionId: string,
+): string {
+  if (draft.eventId === undefined)
+    return fallback()
+  if (typeof draft.eventId !== 'string' || !draft.eventId.trim())
+    throw invalidArgument(sessionId, '事件 eventId 必须是非空字符串')
+  return draft.eventId.trim()
+}
+
+function resolveEventTimestamp(draft: SessionEventDraft, sessionId: string): string {
+  if (draft.timestamp === undefined)
+    return new Date().toISOString()
+  if (typeof draft.timestamp !== 'string' || !draft.timestamp)
+    throw invalidArgument(sessionId, '事件 timestamp 必须是非空字符串')
+  const date = new Date(draft.timestamp)
+  if (!Number.isFinite(date.getTime()))
+    throw invalidArgument(sessionId, '事件 timestamp 必须是可解析的时间')
   return date.toISOString()
 }
 

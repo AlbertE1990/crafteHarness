@@ -124,7 +124,7 @@ describe('memorySessionStore', () => {
       metadata: { owner: 'before' },
     })
     expect(Object.isFrozen(result.events[0])).toBe(true)
-    expect(Object.isFrozen(result.events[0]?.metadata)).toBe(true)
+    expect(Object.isFrozen((result.events[0] as { metadata?: unknown })?.metadata)).toBe(true)
   })
 
   it('rejects non-serializable event data and leaves the Session empty', async () => {
@@ -205,6 +205,63 @@ describe('memorySessionStore', () => {
     })).rejects.toMatchObject({ code: 'SESSION_EVENT_ID_CONFLICT' })
 
     expect((await store.read('session-id-conflict')).latestVersion).toBe(0)
+  })
+
+  it('persists producer-provided eventId and occurrence timestamp', async () => {
+    const store = createStore()
+    const result = await store.append({
+      sessionId: 'session-producer-identity',
+      expectedVersion: 0,
+      events: [
+        {
+          type: 'session.created',
+          eventId: 'evt-created',
+          timestamp: '2026-01-01T00:00:00.000Z',
+        },
+        {
+          type: 'turn.started',
+          turnId: 'turn-1',
+          eventId: 'evt-turn-started',
+          timestamp: '2026-01-01T00:00:05.500Z',
+        },
+      ],
+    })
+
+    expect(result.events.map(event => event.eventId)).toEqual(['evt-created', 'evt-turn-started'])
+    expect(result.events.map(event => event.timestamp)).toEqual([
+      '2026-01-01T00:00:00.000Z',
+      '2026-01-01T00:00:05.500Z',
+    ])
+  })
+
+  it('falls back to store-generated eventId and acceptance time when omitted', async () => {
+    const store = createStore()
+    const result = await store.append({
+      sessionId: 'session-fallback',
+      expectedVersion: 0,
+      events: [{ type: 'session.created' }],
+    })
+
+    expect(result.events[0]?.eventId).toBe('event-1')
+    expect(result.events[0]?.timestamp).toBe('2026-09-08T01:00:00.000Z')
+  })
+
+  it('rejects invalid producer eventId and timestamp without writing', async () => {
+    const store = createStore()
+
+    await expect(store.append({
+      sessionId: 'session-bad-event-id',
+      expectedVersion: 0,
+      events: [{ type: 'session.created', eventId: '   ' }],
+    })).rejects.toMatchObject({ code: 'SESSION_INVALID_ARGUMENT' })
+    expect((await store.read('session-bad-event-id')).latestVersion).toBe(0)
+
+    await expect(store.append({
+      sessionId: 'session-bad-timestamp',
+      expectedVersion: 0,
+      events: [{ type: 'session.created', timestamp: 'not-a-time' }],
+    })).rejects.toMatchObject({ code: 'SESSION_INVALID_ARGUMENT' })
+    expect((await store.read('session-bad-timestamp')).latestVersion).toBe(0)
   })
 })
 
