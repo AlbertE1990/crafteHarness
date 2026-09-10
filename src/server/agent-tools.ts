@@ -1,9 +1,21 @@
 import type {
   ToolPolicy,
+  ToolPolicyDecision,
+  ToolPolicyRequest,
 } from '../craft-agent'
 import { z } from 'zod'
-import { defineTool } from '../craft-agent'
+import { defineTool, ToolError } from '../craft-agent'
 import { getUserLocation, getWeather } from './func'
+
+/** 审批演示工具可操作的进程内资源；不会触碰文件、数据库或操作系统。 */
+const runtimeResources = new Map<string, string>()
+
+/** 参数本身决定本次调用是只读、写入还是删除。 */
+const runtimeResourceInputSchema = z.strictObject({
+  operation: z.enum(['read', 'write', 'delete']).describe('read 自动允许；write 需要审批；delete 需要审批，protected/ 前缀会自动拒绝。'),
+  resource: z.string().min(1).max(120).describe('进程内资源名称，例如 demo/greeting 或 protected/system。'),
+  content: z.string().min(1).max(2_000).nullable().describe('write 时填写内容；read/delete 时传 null。'),
+})
 
 /** 只读网络工具共用的自动重试策略。 */
 const NETWORK_RETRY_POLICY = Object.freeze({
@@ -82,6 +94,64 @@ export const getWeatherTool = defineTool({
 })
 
 /**
+ * 一个真实产生进程内副作用、但影响范围受控的审批演示工具。
+ *
+ * 工具定义声明最大风险为 destructive；Runtime Policy 再依据 operation/resource 对单次调用
+ * 分别作 allow、ask 或 deny 决定，从而覆盖审批链路的三种分支。
+ */
+export const manageRuntimeResourceTool = defineTool({
+  name: 'manage_runtime_resource',
+  description: '管理服务进程内的演示资源。read 用于读取；write 会修改内容；delete 会删除内容。仅在用户明确要求操作演示资源时调用。',
+  inputSchema: runtimeResourceInputSchema,
+  outputSchema: z.strictObject({
+    operation: z.enum(['read', 'write', 'delete']),
+    resource: z.string(),
+    existed: z.boolean(),
+    value: z.string().nullable(),
+  }),
+  security: {
+    risk: 'destructive',
+    capabilities: ['runtime-resource:manage'],
+    idempotent: false,
+  },
+  execute(input) {
+    const previous = runtimeResources.get(input.resource)
+    if (input.operation === 'read') {
+      return {
+        operation: input.operation,
+        resource: input.resource,
+        existed: previous !== undefined,
+        value: previous ?? null,
+      }
+    }
+
+    if (input.operation === 'write') {
+      if (input.content === null) {
+        throw new ToolError({
+          code: 'CONTENT_REQUIRED',
+          message: 'write 操作必须提供 content',
+        })
+      }
+      runtimeResources.set(input.resource, input.content)
+      return {
+        operation: input.operation,
+        resource: input.resource,
+        existed: previous !== undefined,
+        value: input.content,
+      }
+    }
+
+    runtimeResources.delete(input.resource)
+    return {
+      operation: input.operation,
+      resource: input.resource,
+      existed: previous !== undefined,
+      value: previous ?? null,
+    }
+  },
+})
+
+/**
  * 当前服务明确注册的第一方工具。
  *
  * 开发自定义工具时先使用 defineTool() 创建定义，再把定义加入此列表；Agent 配置会自动完成
@@ -90,6 +160,7 @@ export const getWeatherTool = defineTool({
 export const serverTools = [
   getUserLocationTool,
   getWeatherTool,
+  manageRuntimeResourceTool,
 ] as const
 
 /**
@@ -98,5 +169,48 @@ export const serverTools = [
  * 该策略只服务当前开发验证，不代表第三方插件安全模型；工具注册来源由服务端代码控制。
  */
 export const trustedServerToolPolicy: ToolPolicy = Object.freeze({
-  evaluate: () => ({ decision: 'allow' as const }),
+  evaluate: (request: ToolPolicyRequest): ToolPolicyDecision => {
+    if (request.toolName === manageRuntimeResourceTool.name)
+      return evaluateRuntimeResourcePolicy(request.input)
+
+    // CraftAgent 内置工具以及当前两个只读网络工具都由服务端静态注册，可直接执行。
+    if (request.security.risk === 'safe'
+      || request.toolName === getUserLocationTool.name
+      || request.toolName === getWeatherTool.name) {
+      return { decision: 'allow' }
+    }
+
+    return {
+      decision: 'deny',
+      reason: `服务端策略未授权工具 ${request.toolName}`,
+    }
+  },
 })
+
+/** 根据已经通过 Harness 校验的业务参数，决定单次资源操作的实际权限。 */
+function evaluateRuntimeResourcePolicy(input: unknown): ToolPolicyDecision {
+  const parsed = runtimeResourceInputSchema.safeParse(input)
+  if (!parsed.success) {
+    return {
+      decision: 'deny' as const,
+      reason: '资源操作参数无法通过服务端策略校验',
+    }
+  }
+
+  if (parsed.data.operation === 'read')
+    return { decision: 'allow' as const }
+
+  if (parsed.data.operation === 'delete' && parsed.data.resource.startsWith('protected/')) {
+    return {
+      decision: 'deny' as const,
+      reason: `受保护资源 ${parsed.data.resource} 禁止删除`,
+    }
+  }
+
+  return {
+    decision: 'ask' as const,
+    reason: parsed.data.operation === 'write'
+      ? `工具将写入进程内资源 ${parsed.data.resource}`
+      : `工具将删除进程内资源 ${parsed.data.resource}`,
+  }
+}

@@ -27,6 +27,31 @@ function streamResponse(events: unknown[]): Response {
   } as Response
 }
 
+/** 创建可由测试逐步推进的 SSE，用于观察 Agent 等待审批时尚未结束的页面状态。 */
+function controlledStreamResponse(initialEvents: unknown[]) {
+  const encoder = new TextEncoder()
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      streamController = controller
+      for (const event of initialEvents)
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+    },
+  })
+
+  return {
+    response: { ok: true, status: 200, body } as Response,
+    /** 推送一个完整 SSE 事件帧。 */
+    push(event: unknown) {
+      streamController?.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+    },
+    /** 模拟 Agent Run 正常关闭 SSE。 */
+    close() {
+      streamController?.close()
+    },
+  }
+}
+
 describe('chat page conversations', () => {
   beforeEach(() => {
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
@@ -49,7 +74,11 @@ describe('chat page conversations', () => {
       ...existingConversation,
       history: [
         { role: 'user', content: '历史问题' },
-        { role: 'assistant', content: '历史回答', reasoning_content: '历史思考过程' },
+        {
+          role: 'assistant',
+          content: '历史**回答**\n\n<img src=x onerror=alert(1)>',
+          reasoning_content: '历史思考过程',
+        },
         { role: 'tool', content: '{"ignored":true}' },
       ],
     }
@@ -83,6 +112,8 @@ describe('chat page conversations', () => {
 
     expect(wrapper.text()).toContain('历史问题')
     expect(wrapper.text()).toContain('历史回答')
+    expect(wrapper.get('.markdown-body strong').text()).toBe('回答')
+    expect(wrapper.find('.markdown-body img').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('历史思考过程')
     expect(wrapper.text()).not.toContain('{"ignored":true}')
 
@@ -112,5 +143,100 @@ describe('chat page conversations', () => {
     const newRequest = JSON.parse(String(fetchMock.mock.calls[4][1]?.body))
     expect(newRequest).toEqual({ message: '创建新对话' })
     expect(wrapper.text()).toContain('新会话回答')
+  })
+
+  it('replaces the composer with a confirmation card while a tool awaits approval', async () => {
+    const stream = controlledStreamResponse([
+      { type: 'conversation', conversationId: 'chat-approval' },
+      {
+        type: 'tool.approval.requested',
+        approvalId: 'approval-ui',
+        callId: 'call-ui',
+        toolName: 'manage_runtime_resource',
+        reason: '工具将写入进程内资源 demo/ui',
+        input: { operation: 'write', resource: 'demo/ui', content: 'hello' },
+        risk: 'destructive',
+      },
+    ])
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: [] }))
+      .mockResolvedValueOnce(stream.response)
+      .mockResolvedValueOnce(jsonResponse({ accepted: true }))
+      .mockResolvedValueOnce(jsonResponse({ data: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(ChatPage)
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('写入演示资源')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.find('textarea').exists()).toBe(false)
+    expect(wrapper.get('.tool-confirm-card').text()).toContain('工具需要确认')
+    expect(wrapper.get('.tool-confirm-card').text()).toContain('manage_runtime_resource')
+    expect(wrapper.get('.tool-input-details').text()).toContain('查看调用参数')
+
+    await wrapper.get('.tool-approve-button').trigger('click')
+    await flushPromises()
+    expect(fetchMock.mock.calls[2][0]).toBe('/api/tool-approvals/approval-ui')
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({ decision: 'approve' })
+
+    stream.push({
+      type: 'tool.approval.decided',
+      approvalId: 'approval-ui',
+      callId: 'call-ui',
+      toolName: 'manage_runtime_resource',
+      outcome: 'allowed-once',
+    })
+    stream.push({
+      type: 'message.completed',
+      conversationId: 'chat-approval',
+      content: '已完成写入',
+      reasoning: '',
+    })
+    stream.close()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已完成写入')
+    expect(wrapper.find('textarea').exists()).toBe(true)
+  })
+
+  it('shows an automatic ToolPolicy denial without asking for a decision', async () => {
+    const stream = controlledStreamResponse([
+      { type: 'conversation', conversationId: 'chat-denied' },
+      {
+        type: 'tool.policy.denied',
+        callId: 'call-denied',
+        toolName: 'manage_runtime_resource',
+        reason: '受保护资源 protected/system 禁止删除',
+      },
+    ])
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ data: [] }))
+      .mockResolvedValueOnce(stream.response)
+      .mockResolvedValueOnce(jsonResponse({ data: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(ChatPage)
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('删除受保护资源')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.get('.tool-confirm-card.denied').text()).toContain('工具已被策略拒绝')
+    expect(wrapper.get('.tool-confirm-card.denied').text()).toContain('禁止删除')
+    expect(wrapper.find('.tool-approve-button').exists()).toBe(false)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    stream.push({
+      type: 'message.completed',
+      conversationId: 'chat-denied',
+      content: '该操作不能执行',
+      reasoning: '',
+    })
+    stream.close()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('该操作不能执行')
   })
 })

@@ -467,6 +467,33 @@ CraftAgent 能力级授权：允许调用 order_read 工具
 业务服务资源级授权：用户 A 是否能读取 orderId=123
 ```
 
+### 7.3 拒绝以后，Agent 为什么还能继续回答
+
+`deny` 或用户点击“拒绝”只是否定这一次工具调用，不等于让整个 Agent Run 抛异常。Harness 会生成
+`attempts: 0` 的失败结果，AgentLoop 再把它作为对应 `tool_call_id` 的 `role: 'tool'` 消息写入 Session：
+
+```mermaid
+sequenceDiagram
+  participant M as Model
+  participant L as AgentLoop
+  participant H as Tool Harness
+  participant U as User / Policy
+  participant S as SessionStore
+
+  M-->>L: assistant tool_call
+  L->>H: execute(validated arguments)
+  H->>U: ask 或 policy evaluate
+  U-->>H: rejected / deny
+  Note over H: 不调用 tool.execute
+  H-->>L: TOOL_PERMISSION_DENIED, attempts=0
+  L->>S: append role=tool failure
+  L->>M: 下一 Step 携带失败 tool message
+  M-->>L: 解释拒绝或给出替代回答
+```
+
+因此交互层不应在用户拒绝时主动关闭聊天 SSE，也不应自行伪造助手回复。它只需要把审批结果交还
+`ToolApprovalHandler`，然后继续等待 AgentLoop 的模型增量和最终结果。只有 Run 取消信号才负责终止整轮。
+
 ## 8. 重试、超时与取消
 
 ### 8.1 重试必须同时满足的条件

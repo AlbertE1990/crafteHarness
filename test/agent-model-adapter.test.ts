@@ -63,6 +63,7 @@ describe('agent runtime model adapter boundary', () => {
       'calculator',
       'get_user_location',
       'get_weather',
+      'manage_runtime_resource',
     ])
     expect(events).toContainEqual({
       type: 'message.delta',

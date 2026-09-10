@@ -21,6 +21,7 @@
   "dependencies": {
     "@vueuse/core": "catalog:frontend",
     "fastify": "catalog:",
+    "markdown-it": "catalog:",
     "openai": "catalog:",
     "pg": "catalog:",
     "vue": "catalog:frontend",

@@ -231,6 +231,71 @@ describe('agent loop', () => {
     ]))
   })
 
+  it.each([
+    {
+      name: 'user rejection',
+      policyDecision: { decision: 'ask' as const, reason: '写操作需要确认' },
+      expectedMessage: '工具审批结果：rejected',
+      expectedApprovalCalls: 1,
+    },
+    {
+      name: 'automatic policy denial',
+      policyDecision: { decision: 'deny' as const, reason: '受保护资源禁止删除' },
+      expectedMessage: '受保护资源禁止删除',
+      expectedApprovalCalls: 0,
+    },
+  ])('returns $name to the model and continues the Loop', async (scenario) => {
+    const execute = vi.fn(() => ({ changed: true }))
+    const mutatingTool = createAgentTool(defineTool({
+      name: 'mutate_resource',
+      description: '修改测试资源',
+      inputSchema: z.strictObject({ resource: z.string() }),
+      outputSchema: z.strictObject({ changed: z.boolean() }),
+      security: { risk: 'write', idempotent: false },
+      execute,
+    }))
+    const requestToolApproval = vi.fn(async () => 'rejected' as const)
+    const adapter = new ScriptedModelAdapter({
+      script: [
+        {
+          method: 'stream',
+          chunks: [chunk({
+            tool_calls: [{
+              index: 0,
+              id: 'call-mutate',
+              type: 'function',
+              function: { name: 'mutate_resource', arguments: '{"resource":"protected/a"}' },
+            }],
+          }, 'tool_calls')],
+        },
+        { method: 'stream', chunks: [chunk({ content: '已根据权限结果调整回答' }, 'stop')] },
+      ],
+    })
+    const loop = new AgentLoop({
+      model: adapter,
+      store: createStore(),
+      tools: [mutatingTool],
+      toolPolicy: { evaluate: () => scenario.policyDecision },
+      requestToolApproval,
+    })
+
+    const result = await loop.run({ sessionId: `session-${scenario.name}`, input: '修改资源' })
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      content: '已根据权限结果调整回答',
+      steps: 2,
+      toolCalls: 1,
+    })
+    expect(execute).not.toHaveBeenCalled()
+    expect(requestToolApproval).toHaveBeenCalledTimes(scenario.expectedApprovalCalls)
+    expect(adapter.calls[1]?.request.messages).toEqual(expect.arrayContaining([{
+      role: 'tool',
+      tool_call_id: 'call-mutate',
+      content: `Error: ${scenario.expectedMessage}`,
+    }]))
+  })
+
   it('stops before persisting or executing a tool batch that exceeds the call budget', async () => {
     const execute = vi.fn(() => 'never')
     const tool = createAgentTool(defineTool({

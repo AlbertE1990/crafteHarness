@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import MarkdownIt from 'markdown-it'
 import { computed, nextTick, onMounted, ref } from 'vue'
 
 defineOptions({ name: 'IndexPage' })
@@ -42,7 +43,41 @@ type ChatStreamEvent
       content: string
       reasoning?: string
     }
+    | {
+      type: 'tool.approval.requested'
+      approvalId: string
+      callId: string
+      toolName: string
+      reason: string
+      input: unknown
+      risk: 'safe' | 'read' | 'write' | 'destructive'
+    }
+    | {
+      type: 'tool.approval.decided'
+      approvalId: string
+      callId: string
+      toolName: string
+      outcome: 'allowed-once' | 'rejected' | 'unavailable' | 'aborted'
+    }
+    | {
+      type: 'tool.policy.denied'
+      callId: string
+      toolName: string
+      reason: string
+    }
     | { type: 'error', message: string }
+
+/** 当前 Composer 展示的工具权限交互；每个 Agent Run 同一时间只会等待一个工具。 */
+interface ToolInteraction {
+  kind: 'approval' | 'denied'
+  approvalId?: string
+  callId: string
+  toolName: string
+  reason: string
+  input?: unknown
+  risk?: 'safe' | 'read' | 'write' | 'destructive'
+  status: 'pending' | 'submitting' | 'allowed-once' | 'rejected' | 'unavailable' | 'aborted' | 'denied'
+}
 
 interface ConversationListResponse {
   data: ConversationSummary[]
@@ -63,8 +98,23 @@ const isSidebarOpen = ref(false)
 const errorMessage = ref('')
 const conversationError = ref('')
 const failedPrompt = ref('')
+const toolInteraction = ref<ToolInteraction>()
+const approvalError = ref('')
 const messageList = ref<HTMLElement>()
 let nextMessageId = 1
+
+// 模型输出是不可信文本：关闭原始 HTML，只允许 markdown-it 生成受控标签。
+const markdown = new MarkdownIt({
+  html: false,
+  breaks: true,
+  linkify: true,
+  typographer: false,
+})
+
+/** 将助手回复转换为 HTML；原始 HTML 会被转义，不会作为页面节点执行。 */
+function renderMarkdown(content: string): string {
+  return markdown.render(content)
+}
 
 const displayedConversations = computed(() => [...conversations.value].reverse())
 const activeConversation = computed(() => (
@@ -243,9 +293,83 @@ function isChatStreamEvent(value: unknown): value is ChatStreamEvent {
       && typeof event.content === 'string'
       && (event.reasoning === undefined || typeof event.reasoning === 'string')
   }
+  if (event.type === 'tool.approval.requested') {
+    return typeof event.approvalId === 'string'
+      && typeof event.callId === 'string'
+      && typeof event.toolName === 'string'
+      && typeof event.reason === 'string'
+      && (event.risk === 'safe'
+        || event.risk === 'read'
+        || event.risk === 'write'
+        || event.risk === 'destructive')
+  }
+  if (event.type === 'tool.approval.decided') {
+    return typeof event.approvalId === 'string'
+      && typeof event.callId === 'string'
+      && typeof event.toolName === 'string'
+      && (event.outcome === 'allowed-once'
+        || event.outcome === 'rejected'
+        || event.outcome === 'unavailable'
+        || event.outcome === 'aborted')
+  }
+  if (event.type === 'tool.policy.denied') {
+    return typeof event.callId === 'string'
+      && typeof event.toolName === 'string'
+      && typeof event.reason === 'string'
+  }
   if (event.type === 'error')
     return typeof event.message === 'string'
   return false
+}
+
+/** 把未知工具参数安全格式化为只读预览，序列化失败时不影响用户作出决定。 */
+function formatToolInput(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value)
+  }
+  catch {
+    return '[参数无法序列化]'
+  }
+}
+
+/** 把协议状态转换为用户可理解的短文本。 */
+function getToolInteractionStatus(status: ToolInteraction['status']): string {
+  const labels: Record<ToolInteraction['status'], string> = {
+    'pending': '等待你的决定',
+    'submitting': '正在提交决定…',
+    'allowed-once': '已仅本次允许，正在执行工具…',
+    'rejected': '你已拒绝，Agent 正在调整回答…',
+    'unavailable': '审批已超时或不可用，Agent 正在调整回答…',
+    'aborted': '本次审批已取消',
+    'denied': '安全策略已自动拒绝，Agent 正在调整回答…',
+  }
+  return labels[status]
+}
+
+/** 向 Server 提交一次性审批决定，最终状态仍以 SSE decided 事件为准。 */
+async function decideToolApproval(decision: 'approve' | 'reject'): Promise<void> {
+  const interaction = toolInteraction.value
+  if (!interaction?.approvalId || interaction.status !== 'pending')
+    return
+
+  approvalError.value = ''
+  interaction.status = 'submitting'
+  try {
+    const response = await fetch(
+      `/api/tool-approvals/${encodeURIComponent(interaction.approvalId)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision }),
+      },
+    )
+    if (!response.ok)
+      throw new Error(`审批提交失败（${response.status}）`)
+  }
+  catch (error) {
+    interaction.status = 'pending'
+    approvalError.value = error instanceof Error ? error.message : '审批提交失败'
+  }
 }
 
 /**
@@ -317,6 +441,8 @@ async function send(prompt = input.value, appendUserMessage = true) {
 
   errorMessage.value = ''
   failedPrompt.value = ''
+  toolInteraction.value = undefined
+  approvalError.value = ''
 
   if (appendUserMessage) {
     messages.value.push({ id: nextMessageId++, role: 'user', content: message })
@@ -370,6 +496,39 @@ async function send(prompt = input.value, appendUserMessage = true) {
 
       if (event.type === 'error')
         throw new Error(event.message)
+
+      if (event.type === 'tool.approval.requested') {
+        toolInteraction.value = {
+          kind: 'approval',
+          approvalId: event.approvalId,
+          callId: event.callId,
+          toolName: event.toolName,
+          reason: event.reason,
+          input: event.input,
+          risk: event.risk,
+          status: 'pending',
+        }
+        isAwaitingFirstToken.value = false
+        return
+      }
+
+      if (event.type === 'tool.approval.decided') {
+        if (toolInteraction.value?.approvalId === event.approvalId)
+          toolInteraction.value.status = event.outcome
+        return
+      }
+
+      if (event.type === 'tool.policy.denied') {
+        toolInteraction.value = {
+          kind: 'denied',
+          callId: event.callId,
+          toolName: event.toolName,
+          reason: event.reason,
+          status: 'denied',
+        }
+        isAwaitingFirstToken.value = false
+        return
+      }
 
       if (event.type === 'message.delta') {
         // 两个频道共用一个助手消息，但分别追加到 reasoning 和 content。
@@ -564,17 +723,17 @@ onMounted(() => {
             <h1 class="text-4.5 text-slate-900 font-700 m-0 truncate dark:text-white">
               {{ pageTitle }}
             </h1>
-            <div class="text-3 text-slate-500 mt-1 flex gap-1.5 items-center dark:text-slate-400">
+            <!-- <div class="text-3 text-slate-500 mt-1 flex gap-1.5 items-center dark:text-slate-400">
               <span class="status-dot" />
               <span>{{ conversationId ? '对话上下文已连接' : '发送第一条消息以创建对话' }}</span>
-            </div>
+            </div> -->
           </div>
           <div v-if="messages.length" class="message-count">
             {{ messages.length }} 条消息
           </div>
         </header>
 
-        <main ref="messageList" class="message-list h-614px" aria-live="polite">
+        <main ref="messageList" class="message-list" aria-live="polite">
           <div v-if="messages.length === 0" class="empty-state">
             <div class="empty-icon" aria-hidden="true">
               <div i-carbon-chat-bot text-8 />
@@ -587,7 +746,7 @@ onMounted(() => {
             </p>
           </div>
 
-          <div v-else class="mx-auto flex flex-col gap-5 max-w-210 w-full">
+          <div v-else class="message-content">
             <article
               v-for="message in messages"
               :key="message.id"
@@ -631,9 +790,12 @@ onMounted(() => {
                     </div>
                   </section>
 
-                  <div v-if="message.content" class="answer-content">
-                    {{ message.content }}
-                  </div>
+                  <!-- markdown-it 已禁用原始 HTML；v-html 只挂载解析器生成的受控标签。 -->
+                  <div
+                    v-if="message.content"
+                    class="answer-content markdown-body"
+                    v-html="renderMarkdown(message.content)"
+                  />
                   <div v-else-if="message.isStreaming" class="answer-pending">
                     正在组织回答…
                   </div>
@@ -658,39 +820,82 @@ onMounted(() => {
         </main>
 
         <footer class="composer-area">
-          <div v-if="errorMessage" class="error-banner" role="alert">
-            <div class="flex gap-2 items-center">
-              <div i-carbon-warning-alt-filled shrink-0 />
-              <span>{{ errorMessage }}</span>
+          <div class="composer-content">
+            <div v-if="errorMessage" class="error-banner" role="alert">
+              <div class="flex gap-2 items-center">
+                <div i-carbon-warning-alt-filled shrink-0 />
+                <span>{{ errorMessage }}</span>
+              </div>
+              <button type="button" class="retry-button" :disabled="isSending" @click="retry">
+                重试
+              </button>
             </div>
-            <button type="button" class="retry-button" :disabled="isSending" @click="retry">
-              重试
-            </button>
-          </div>
 
-          <form class="composer" @submit.prevent="send()">
-            <textarea
-              v-model="input"
-              rows="1"
-              maxlength="2000"
-              aria-label="消息内容"
-              placeholder="输入消息，按 Enter 发送…"
-              :disabled="isSending"
-              @keydown.enter.exact.prevent="send()"
-            />
-            <button
-              class="send-button"
-              type="submit"
-              :disabled="!input.trim() || isSending"
-              aria-label="发送消息"
+            <section
+              v-if="isSending && toolInteraction"
+              class="tool-confirm-card"
+              :class="{ denied: toolInteraction.kind === 'denied' }"
+              aria-live="assertive"
             >
-              <div v-if="isSending" i-carbon-circle-dash class="animate-spin" />
-              <div v-else i-carbon-send-filled />
-            </button>
-          </form>
-          <p class="text-2.75 text-slate-400 m-0 mt-2 text-center dark:text-slate-500">
-            Shift + Enter 换行 · AI 生成内容可能存在错误，请注意核实
-          </p>
+              <div class="tool-confirm-heading">
+                <div class="tool-confirm-icon" aria-hidden="true">
+                  <div i-carbon-warning-alt-filled />
+                </div>
+                <div class="min-w-0">
+                  <strong>{{ toolInteraction.kind === 'approval' ? '工具需要确认' : '工具已被策略拒绝' }}</strong>
+                  <div class="tool-confirm-name">
+                    {{ toolInteraction.toolName }}
+                  </div>
+                </div>
+                <span v-if="toolInteraction.risk" class="risk-badge">{{ toolInteraction.risk }}</span>
+              </div>
+              <p class="tool-confirm-reason">
+                {{ toolInteraction.reason }}
+              </p>
+              <details v-if="toolInteraction.input !== undefined" class="tool-input-details">
+                <summary>查看调用参数</summary>
+                <pre>{{ formatToolInput(toolInteraction.input) }}</pre>
+              </details>
+              <div class="tool-confirm-footer">
+                <span class="tool-confirm-status">{{ getToolInteractionStatus(toolInteraction.status) }}</span>
+                <div v-if="toolInteraction.status === 'pending'" class="tool-confirm-actions">
+                  <button type="button" class="tool-reject-button" @click="decideToolApproval('reject')">
+                    拒绝
+                  </button>
+                  <button type="button" class="tool-approve-button" @click="decideToolApproval('approve')">
+                    仅本次允许
+                  </button>
+                </div>
+              </div>
+              <div v-if="approvalError" class="tool-confirm-error" role="alert">
+                {{ approvalError }}
+              </div>
+            </section>
+
+            <form v-else class="composer" @submit.prevent="send()">
+              <textarea
+                v-model="input"
+                rows="1"
+                maxlength="2000"
+                aria-label="消息内容"
+                placeholder="输入消息，按 Enter 发送…"
+                :disabled="isSending"
+                @keydown.enter.exact.prevent="send()"
+              />
+              <button
+                class="send-button"
+                type="submit"
+                :disabled="!input.trim() || isSending"
+                aria-label="发送消息"
+              >
+                <div v-if="isSending" i-carbon-circle-dash class="animate-spin" />
+                <div v-else i-carbon-send-filled />
+              </button>
+            </form>
+            <p v-if="!isSending || !toolInteraction" class="text-2.75 text-slate-400 m-0 mt-2 text-center dark:text-slate-500">
+              Shift + Enter 换行 · AI 生成内容可能存在错误，请注意核实
+            </p>
+          </div>
         </footer>
       </section>
     </section>
@@ -991,6 +1196,8 @@ onMounted(() => {
 
 .chat-panel {
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
@@ -1031,11 +1238,24 @@ onMounted(() => {
 }
 
 .message-list {
+  min-height: 0;
   overflow-y: auto;
   padding: 28px 32px;
   scroll-behavior: smooth;
   scrollbar-color: #cbd5e1 transparent;
   scrollbar-width: thin;
+}
+
+.message-content,
+.composer-content {
+  width: min(100%, 840px);
+  margin-inline: auto;
+}
+
+.message-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 .empty-state {
@@ -1188,6 +1408,115 @@ onMounted(() => {
   padding: 11px 15px;
 }
 
+.markdown-body {
+  white-space: normal;
+}
+
+.markdown-body :deep(> :first-child) {
+  margin-top: 0;
+}
+
+.markdown-body :deep(> :last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-body :deep(p),
+.markdown-body :deep(ul),
+.markdown-body :deep(ol),
+.markdown-body :deep(pre),
+.markdown-body :deep(blockquote),
+.markdown-body :deep(table) {
+  margin: 0.7em 0;
+}
+
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3),
+.markdown-body :deep(h4) {
+  margin: 1em 0 0.45em;
+  color: #0f172a;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.markdown-body :deep(h1) {
+  font-size: 1.35em;
+}
+
+.markdown-body :deep(h2) {
+  font-size: 1.2em;
+}
+
+.markdown-body :deep(h3),
+.markdown-body :deep(h4) {
+  font-size: 1.05em;
+}
+
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
+  padding-left: 1.5em;
+}
+
+.markdown-body :deep(li + li) {
+  margin-top: 0.25em;
+}
+
+.markdown-body :deep(a) {
+  color: #2563eb;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-body :deep(code) {
+  border-radius: 5px;
+  padding: 0.15em 0.38em;
+  background: #f1f5f9;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.markdown-body :deep(pre) {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #0f172a;
+  color: #e2e8f0;
+  white-space: pre;
+}
+
+.markdown-body :deep(pre code) {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 0.88em;
+}
+
+.markdown-body :deep(blockquote) {
+  border-left: 3px solid #93c5fd;
+  padding-left: 12px;
+  color: #64748b;
+}
+
+.markdown-body :deep(table) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  border: 1px solid #cbd5e1;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.markdown-body :deep(th) {
+  background: #f8fafc;
+}
+
 .answer-pending {
   color: #94a3b8;
   font-size: 12px;
@@ -1223,6 +1552,143 @@ onMounted(() => {
   padding: 16px 24px 18px;
   border-top: 1px solid var(--panel-border);
   background: rgb(248 250 252 / 82%);
+}
+
+.tool-confirm-card {
+  padding: 14px 16px;
+  border: 1px solid #fdba74;
+  border-radius: 17px;
+  color: #7c2d12;
+  background: #fff7ed;
+  box-shadow: 0 4px 14px rgb(124 45 18 / 8%);
+}
+
+.tool-confirm-card.denied {
+  border-color: #fca5a5;
+  color: #991b1b;
+  background: #fef2f2;
+}
+
+.tool-confirm-heading,
+.tool-confirm-footer,
+.tool-confirm-actions {
+  display: flex;
+  align-items: center;
+}
+
+.tool-confirm-heading {
+  gap: 10px;
+}
+
+.tool-confirm-heading strong {
+  display: block;
+  font-size: 14px;
+}
+
+.tool-confirm-icon {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: #c2410c;
+  background: rgb(255 237 213 / 90%);
+}
+
+.tool-confirm-card.denied .tool-confirm-icon {
+  color: #dc2626;
+  background: #fee2e2;
+}
+
+.tool-confirm-name {
+  margin-top: 2px;
+  color: #9a3412;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.risk-badge {
+  margin-left: auto;
+  padding: 3px 7px;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.tool-confirm-reason {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.tool-input-details {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.tool-input-details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.tool-input-details pre {
+  max-height: 150px;
+  margin: 8px 0 0;
+  padding: 9px 10px;
+  overflow: auto;
+  border-radius: 9px;
+  color: #431407;
+  background: rgb(255 255 255 / 72%);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tool-confirm-footer {
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.tool-confirm-status {
+  font-size: 11px;
+}
+
+.tool-confirm-actions {
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.tool-reject-button,
+.tool-approve-button {
+  border-radius: 9px;
+  padding: 7px 11px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.tool-reject-button {
+  border: 1px solid #fdba74;
+  color: #9a3412;
+  background: white;
+}
+
+.tool-approve-button {
+  border: 1px solid #ea580c;
+  color: white;
+  background: #ea580c;
+}
+
+.tool-confirm-error {
+  margin-top: 8px;
+  color: #b91c1c;
+  font-size: 11px;
 }
 
 .composer {
@@ -1376,6 +1842,15 @@ onMounted(() => {
     transform: translateX(0);
   }
 
+  .tool-confirm-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .tool-confirm-actions > button {
+    flex: 1;
+  }
+
   .sidebar-close,
   .menu-button {
     display: grid;
@@ -1413,7 +1888,7 @@ onMounted(() => {
   }
 
   .composer-area {
-    padding: 12px 12px max(12px, env(safe-area-inset-bottom));
+    padding: 12px 16px max(12px, env(safe-area-inset-bottom));
   }
 }
 
@@ -1476,6 +1951,33 @@ onMounted(() => {
   background: #1e293b;
 }
 
+:global(html.dark) .tool-confirm-card {
+  border-color: #9a3412;
+  color: #fed7aa;
+  background: #431407;
+}
+
+:global(html.dark) .tool-confirm-card.denied {
+  border-color: #991b1b;
+  color: #fecaca;
+  background: #450a0a;
+}
+
+:global(html.dark) .tool-confirm-name,
+:global(html.dark) .tool-input-details pre {
+  color: #fdba74;
+}
+
+:global(html.dark) .tool-input-details pre {
+  background: rgb(15 23 42 / 64%);
+}
+
+:global(html.dark) .tool-reject-button {
+  border-color: #c2410c;
+  color: #fed7aa;
+  background: #431407;
+}
+
 :global(html.dark) .reasoning-panel {
   border-color: #334155;
   color: #94a3b8;
@@ -1489,6 +1991,40 @@ onMounted(() => {
 
 :global(html.dark) .reasoning-content {
   color: #94a3b8;
+}
+
+:global(html.dark) .markdown-body :deep(h1),
+:global(html.dark) .markdown-body :deep(h2),
+:global(html.dark) .markdown-body :deep(h3),
+:global(html.dark) .markdown-body :deep(h4) {
+  color: #f8fafc;
+}
+
+:global(html.dark) .markdown-body :deep(a) {
+  color: #93c5fd;
+}
+
+:global(html.dark) .markdown-body :deep(code) {
+  background: #334155;
+}
+
+:global(html.dark) .markdown-body :deep(pre) {
+  border-color: #475569;
+  background: #020617;
+}
+
+:global(html.dark) .markdown-body :deep(blockquote) {
+  border-color: #3b82f6;
+  color: #94a3b8;
+}
+
+:global(html.dark) .markdown-body :deep(th),
+:global(html.dark) .markdown-body :deep(td) {
+  border-color: #475569;
+}
+
+:global(html.dark) .markdown-body :deep(th) {
+  background: #334155;
 }
 
 :global(html.dark) .composer textarea {

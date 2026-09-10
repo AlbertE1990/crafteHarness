@@ -2,11 +2,19 @@ import type { FastifyInstance, FastifyServerOptions } from 'fastify'
 import type { ServerResponse } from 'node:http'
 import type {
   Agent,
+  AgentEvent,
   AgentOutputEvent,
   AgentSessionDetail,
+  AgentSessionMessage,
   ModelMessage,
   SessionSummary,
 } from '../craft-agent'
+import type {
+  ToolApprovalBroker,
+  ToolApprovalStreamEvent,
+  UserToolApprovalDecision,
+} from './tool-approval-broker'
+import { randomUUID } from 'node:crypto'
 import Fastify from 'fastify'
 
 /** 前端会话列表需要的展示消息；工具和系统消息不会进入该投影。 */
@@ -31,7 +39,8 @@ export interface ConversationDetail extends ConversationSummary {
 
 /** 当前页面消费的 SSE 事件。 */
 export type AgentStreamEvent
-  = | { readonly type: 'conversation', readonly conversationId: string }
+  = ToolApprovalStreamEvent
+    | { readonly type: 'conversation', readonly conversationId: string }
     | {
       readonly type: 'message.delta'
       readonly channel: 'reasoning' | 'content'
@@ -49,10 +58,18 @@ export type AgentStreamEvent
       readonly code?: string
       readonly stopReason?: string
     }
+    | {
+      readonly type: 'tool.policy.denied'
+      readonly callId: string
+      readonly toolName: string
+      readonly reason: string
+    }
 
 /** 创建 Fastify 应用时注入的 Runtime 和日志配置。 */
 export interface CreateServerAppOptions {
   readonly agent: Agent
+  /** 连接等待中的 ToolApprovalHandler 与前端确认接口；省略时 ask 会 fail-closed。 */
+  readonly approvalBroker?: ToolApprovalBroker
   readonly logger?: FastifyServerOptions['logger']
 }
 
@@ -64,50 +81,39 @@ export interface CreateServerAppOptions {
 export function createServerApp(options: CreateServerAppOptions): FastifyInstance {
   const fastify = Fastify({ logger: options.logger ?? true })
 
-  fastify.get<{
-    Querystring: { name?: string }
-    Reply: { hello: string }
-  }>('/api/hello', {
-    schema: {
-      querystring: {
-        type: 'object',
-        properties: { name: { type: 'string' } },
-        additionalProperties: false,
-      },
-      response: {
-        200: {
-          type: 'object',
-          properties: { hello: { type: 'string' } },
-          required: ['hello'],
-          additionalProperties: false,
-        },
-      },
-    },
-  }, async (request) => {
-    return { hello: request.query.name ?? 'world' }
-  })
-
   fastify.post<{
-    Body: { name?: string }
-    Reply: { data: string }
-  }>('/api/conversation', {
+    Params: { approvalId: string }
+    Body: { decision: UserToolApprovalDecision }
+  }>('/api/tool-approvals/:approvalId', {
     schema: {
       body: {
         type: 'object',
-        properties: { name: { type: 'string' } },
+        properties: { decision: { type: 'string', enum: ['approve', 'reject'] } },
+        required: ['decision'],
         additionalProperties: false,
       },
-      response: {
-        200: {
-          type: 'object',
-          properties: { data: { type: 'string' } },
-          required: ['data'],
-          additionalProperties: false,
-        },
-      },
     },
-  }, async () => {
-    return { data: '' }
+  }, async (request, reply) => {
+    if (!options.approvalBroker) {
+      await reply.code(503)
+      return {
+        error: 'TOOL_APPROVAL_UNAVAILABLE',
+        message: '当前服务未配置工具审批通道',
+      }
+    }
+
+    const decided = options.approvalBroker.decide(
+      request.params.approvalId,
+      request.body.decision,
+    )
+    if (!decided) {
+      await reply.code(404)
+      return {
+        error: 'TOOL_APPROVAL_NOT_FOUND',
+        message: '审批不存在、已处理或已经超时',
+      }
+    }
+    return { accepted: true }
   })
 
   fastify.get('/api/conversation/list', {
@@ -160,6 +166,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     },
   }, async (request, reply) => {
     const abortController = new AbortController()
+    const runId = randomUUID()
 
     // 浏览器断开连接时取消同一个 Agent Run，模型和工具会收到组合后的 AbortSignal。
     reply.raw.on('close', () => {
@@ -176,6 +183,12 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     })
     reply.raw.flushHeaders()
 
+    // 审批事件与聊天增量共用当前 SSE；Run 结束后必须删除临时路由关系。
+    const stopObservingApprovals = options.approvalBroker?.observeRun(
+      runId,
+      event => writeSseEvent(reply.raw, event),
+    )
+
     try {
       await options.agent.run({
         input: request.body.message,
@@ -191,11 +204,17 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
             }
           : {}),
       }, {
+        runId,
         signal: abortController.signal,
         onEvent: async (event) => {
           const projected = projectAgentEvent(event)
           if (projected)
             await writeSseEvent(reply.raw, projected)
+        },
+        onTrace: async (event) => {
+          const denial = projectToolPolicyDenial(event)
+          if (denial)
+            await writeSseEvent(reply.raw, denial)
         },
       })
     }
@@ -208,12 +227,31 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
       }
     }
     finally {
+      stopObservingApprovals?.()
       if (!reply.raw.writableEnded)
         reply.raw.end()
     }
   })
 
   return fastify
+}
+
+/** 只把自动策略拒绝投影给页面；ask 的生命周期由带 approvalId 的 Broker 发送。 */
+function projectToolPolicyDenial(
+  event: AgentEvent,
+): Extract<AgentStreamEvent, { type: 'tool.policy.denied' }> | undefined {
+  if (event.type !== 'agent.tool.event'
+    || event.event.type !== 'tool.policy.decided'
+    || event.event.result.decision !== 'deny') {
+    return undefined
+  }
+
+  return {
+    type: 'tool.policy.denied',
+    callId: event.event.callId,
+    toolName: event.event.toolName,
+    reason: event.event.result.reason,
+  }
 }
 
 /** 将通用 CraftAgent 输出映射为现有页面字段。 */
@@ -258,7 +296,7 @@ function createConversationDetail(session: AgentSessionDetail): ConversationDeta
   return Object.freeze({
     ...createConversationSummary(session),
     history,
-    displayHistory: createDisplayHistory(history),
+    displayHistory: createDisplayHistory(session.messages),
   })
 }
 
@@ -273,25 +311,72 @@ function createConversationTitle(message: string): string {
   return message.trim().slice(0, 40) || '新对话'
 }
 
-/** 过滤系统、工具和中间 Tool Call，只保留页面真正展示的消息。 */
-function createDisplayHistory(history: readonly ModelMessage[]): readonly DisplayMessage[] {
-  return Object.freeze(history.flatMap((message): DisplayMessage[] => {
-    if (message.role === 'user')
-      return [{ role: 'user', content: message.content }]
-    if (message.role !== 'assistant'
-      || message.tool_calls?.length
+/**
+ * 按 Turn 聚合所有模型 Step 的思考，并挂到该 Turn 的最终助手回复上。
+ *
+ * 带 Tool Call 的 assistant 仍不作为聊天气泡展示，但它的 reasoning_content 不能丢失；
+ * 最终结果必须与实时 AgentRunResult.reasoning 的“Step 间空行分隔”语义一致。
+ */
+function createDisplayHistory(
+  history: readonly AgentSessionMessage[],
+): readonly DisplayMessage[] {
+  const display: DisplayMessage[] = []
+  const reasoningByTurn = new Map<string, string[]>()
+  let uncorrelatedReasoning: string[] = []
+
+  for (const item of history) {
+    const message = item.message
+    if (message.role === 'user') {
+      display.push({ role: 'user', content: message.content })
+      uncorrelatedReasoning = []
+      continue
+    }
+    if (message.role !== 'assistant')
+      continue
+
+    const reasoning = typeof message.reasoning_content === 'string'
+      && message.reasoning_content.trim()
+      ? message.reasoning_content
+      : undefined
+    const reasoningParts = item.turnId
+      ? getOrCreateReasoningParts(reasoningByTurn, item.turnId)
+      : uncorrelatedReasoning
+    if (reasoning)
+      reasoningParts.push(reasoning)
+
+    // 工具调用消息是中间 Step，只累积思考；最终文本由后续 assistant 消息展示。
+    if (message.tool_calls?.length
       || typeof message.content !== 'string'
       || !message.content.trim()) {
-      return []
+      continue
     }
-    return [{
+
+    const combinedReasoning = reasoningParts.join('\n\n')
+    display.push({
       role: 'assistant',
       content: message.content,
-      ...(message.reasoning_content
-        ? { reasoning_content: message.reasoning_content }
-        : {}),
-    }]
-  }))
+      ...(combinedReasoning ? { reasoning_content: combinedReasoning } : {}),
+    })
+    if (item.turnId)
+      reasoningByTurn.delete(item.turnId)
+    else
+      uncorrelatedReasoning = []
+  }
+
+  return Object.freeze(display)
+}
+
+/** 返回指定 Turn 的思考片段容器，不存在时创建一个。 */
+function getOrCreateReasoningParts(
+  reasoningByTurn: Map<string, string[]>,
+  turnId: string,
+): string[] {
+  const existing = reasoningByTurn.get(turnId)
+  if (existing)
+    return existing
+  const created: string[] = []
+  reasoningByTurn.set(turnId, created)
+  return created
 }
 
 /** 使用标准双换行帧写入一个 JSON SSE 事件。 */

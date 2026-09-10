@@ -114,6 +114,9 @@ turn.completed
 
 - 只消费候选 `index=0`；未找到时使用数组第一项。
 - `content`、`reasoning_content` 和函数名/参数分片按到达顺序拼接。
+- 同一 Turn 包含多个模型 Step 时，每个 assistant 事实分别保存自己的 `reasoning_content`；Run 级
+  `reasoning` 按 Step 顺序以空行连接。历史展示若提供“本轮思考”，必须按 `turnId` 做同样聚合，不能只保留
+  最终 assistant Step。
 - Tool Call 按 `index` 排序；同一 Step 的 `id` 必须完整且唯一。
 - `custom` Tool Call 和旧版 `function_call` 当前不受支持，返回 `model_protocol_error`。
 - `finish_reason=tool_calls` 却没有 Tool Call 属于协议错误。
@@ -140,6 +143,10 @@ toolCall.arguments
 
 - 工具不存在或参数 JSON 无效时，Loop 创建标准失败结果并写回模型，Run 可以继续。
 - 工具业务失败由 Harness 转成失败 content，默认不会直接终止 Run。
+- 策略 `deny` 和审批 `rejected/unavailable` 也属于标准工具失败：实现函数不执行，失败结果以
+  `role=tool` 持久化，然后 Loop 继续下一 Model Step。模型因此可以解释拒绝、请求替代方案或给出不依赖该工具的回答。
+- 策略 `ask` 会在 Harness 内等待 `ToolApprovalHandler`；只有 `allowed-once` 恢复当前调用的执行。
+  审批期间 Run 的时间预算和取消信号仍然有效，断连或处理器异常不能隐式授权。
 - 一批 Tool Call 在执行前整体检查 `maxToolCalls`；超限时整批不执行，也不持久化 assistant 调用意图。
 - assistant 调用意图写入成功后，每个 Tool Call 都必须得到对应 tool message。
 - 批处理中发生取消时，尚未执行的调用写入 `TOOL_ABORTED` 结果，从而不留下缺失 tool message 的模型历史。

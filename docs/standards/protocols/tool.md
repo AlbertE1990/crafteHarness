@@ -157,6 +157,21 @@ JavaScript 无法安全强杀同进程同步代码。如果工具忽略信号，
 
 没有自定义策略时，只自动允许 `risk: safe` 且不申请外部能力的工具。没有审批处理器、审批通道异常或无法得到明确结果时一律拒绝。只有 `allowed-once` 可以继续执行。
 
+权限结果进入 AgentLoop 后遵循固定语义：
+
+| 结果                 | 是否执行工具实现    | Harness 结果                           | AgentLoop 后续行为                                          |
+| -------------------- | ------------------- | -------------------------------------- | ----------------------------------------------------------- |
+| `allow`              | 是                  | 正常进入尝试、重试和输出校验           | 把成功或业务失败写成 `role=tool`，继续下一 Model Step       |
+| `ask → allowed-once` | 是，仅当前 `callId` | 与 `allow` 相同                        | 当前调用结束后授权立即失效，继续下一 Model Step             |
+| `ask → rejected`     | 否                  | `TOOL_PERMISSION_DENIED`，`attempts=0` | 持久化失败 `tool` 消息，让模型解释拒绝或选择其他方案        |
+| `ask → unavailable`  | 否                  | `TOOL_PERMISSION_DENIED`，`attempts=0` | 持久化失败 `tool` 消息，让模型继续；不会把不可用当成同意    |
+| `ask → aborted`      | 否                  | `ABORTED`，`attempts=0`                | 若整个 Run 已取消则按取消收口，否则该结果仍作为 `tool` 消息 |
+| `deny`               | 否                  | `TOOL_PERMISSION_DENIED`，`attempts=0` | 持久化失败 `tool` 消息，让模型解释策略拒绝或选择其他方案    |
+
+审批是执行前的暂停点，不是新的 Session 状态，也不是可复用权限。交互层可以把等待中的 Promise
+桥接到 UI、CLI 或外部审批系统，但必须为每次调用生成一次性关联 ID，并在拒绝、超时、断连或进程重启时
+fail-closed。`ToolApprovalHandler` 只返回封闭结果，不负责直接执行工具。
+
 `safeToolPolicy` 不是 JavaScript 沙箱。恶意同进程工具可以谎报 `risk`，也可以直接使用 Node.js
 文件和进程 API。未审查第三方工具必须通过部署侧可信注册、受控能力及独立进程或容器隔离，不能依赖
 工具自己的 `security` 声明。完整边界见[安全与信任模型](../security/trust-model.md)。

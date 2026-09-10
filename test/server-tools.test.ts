@@ -49,6 +49,7 @@ describe('server tools through CraftAgent', () => {
     expect(registeredServerTools.map(tool => tool.model.name)).toEqual([
       'get_user_location',
       'get_weather',
+      'manage_runtime_resource',
     ])
 
     for (const tool of registeredServerTools) {
@@ -196,6 +197,45 @@ describe('server tools through CraftAgent', () => {
       attempts: 2,
       value: { city: '杭州市' },
     })
+  })
+
+  it('uses arguments to allow reads, ask for writes and deny protected deletes', async () => {
+    const readResult = await invokeServerTool('manage_runtime_resource', {
+      operation: 'read',
+      resource: 'demo/approval-test',
+      content: null,
+    })
+    expect(readResult).toMatchObject({ ok: true, attempts: 1 })
+
+    const requestApproval = vi.fn().mockResolvedValue('allowed-once')
+    const writeResult = await invokeServerTool('manage_runtime_resource', {
+      operation: 'write',
+      resource: 'demo/approval-test',
+      content: 'approved value',
+    }, { requestApproval })
+    expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'manage_runtime_resource',
+      reason: expect.stringContaining('写入'),
+    }))
+    expect(writeResult).toMatchObject({
+      ok: true,
+      value: { value: 'approved value' },
+    })
+
+    const protectedDelete = await invokeServerTool('manage_runtime_resource', {
+      operation: 'delete',
+      resource: 'protected/system',
+      content: null,
+    }, { requestApproval })
+    expect(protectedDelete).toMatchObject({
+      ok: false,
+      attempts: 0,
+      error: {
+        code: 'TOOL_PERMISSION_DENIED',
+        message: expect.stringContaining('禁止删除'),
+      },
+    })
+    expect(requestApproval).toHaveBeenCalledTimes(1)
   })
 
   it('keeps raw business functions available for focused unit tests', async () => {
