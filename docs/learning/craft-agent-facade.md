@@ -54,7 +54,9 @@ const agent = new Agent({
   tools: {
     additional: [echoTool],
   },
-  limits: { maxModelSteps: 8, maxToolCalls: 16 },
+  execution: {
+    limits: { maxModelSteps: 8, maxToolCalls: 16 },
+  },
 })
 
 const result = await agent.run({ input: '复述 hello' }, {
@@ -151,7 +153,7 @@ sequenceDiagram
 
 ## 7. 练习
 
-1. 使用 ScriptedModelAdapter 创建 Agent，并观察标准应用事件与完整轨迹数量差异。
+1. 参考 `test/support/scripted-model-adapter.ts` 创建确定性模型替身，并观察标准应用事件与完整轨迹数量差异。
 2. 定义两个不同输入 Schema 的工具，直接通过 `additional: [toolA, toolB]` 注册。
 3. 连续向同一个 sessionId 发起两次 run，检查第二次模型输入包含第一轮历史。
 4. 使用 `listSessions({ limit: 1 })` 和 `afterSessionId` 读取两页。

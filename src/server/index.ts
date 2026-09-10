@@ -28,17 +28,21 @@ const agent = new Agent({
     reasoningEffort: normalizeReasoningEffort(process.env.DEEPSEEK_REASONING_EFFORT),
   },
   systemPrompt: '你是一个AI助手',
-  limits: {
-    maxModelSteps: 5,
-    maxToolCalls: 16,
-    maxDurationMs: 120_000,
+  execution: {
+    limits: {
+      maxModelSteps: 5,
+      maxToolCalls: 16,
+      maxDurationMs: 120_000,
+    },
   },
   tools: {
     additional: serverTools,
   },
   // 应用只实现风险评估规则；等待、超时、取消和防重复提交都由 Agent 内部完成。
   toolGuard: serverToolGuard,
-  store: postgresSessionStore,
+  session: {
+    store: postgresSessionStore,
+  },
 })
 const fastify = createServerApp({ agent })
 fastify.addHook('onClose', async () => {

@@ -4,12 +4,12 @@ import type { AgentConfigInput, ModelStreamChunk } from '../src/craft-agent'
 import type { ServerStreamEvent } from '../src/server/app'
 import { describe, expect, it } from 'vitest'
 import Agent, { MemorySessionStore } from '../src/craft-agent'
-import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
 import {
   manageRuntimeResourceTool,
   serverToolGuard,
 } from '../src/server/agent-tools'
 import { createServerApp } from '../src/server/app'
+import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
 /** 构造 Server Runtime 契约测试使用的标准模型 chunk。 */
 function chunk(
@@ -43,7 +43,7 @@ function parseSse(body: string): ServerStreamEvent[] {
 /** 为一次 Agent 测试生成唯一关联 ID，并固定预期 approvalId。 */
 function createIdFactory(
   approvalId: string,
-): NonNullable<AgentConfigInput['createId']> {
+): NonNullable<NonNullable<AgentConfigInput['execution']>['createId']> {
   let eventId = 0
   return (kind) => {
     if (kind === 'approval')
@@ -87,8 +87,12 @@ describe('server runtime HTTP boundary', () => {
     const agent = new Agent({
       model: adapter,
       systemPrompt: '你是一个AI助手',
-      createSessionId: () => 'http-session',
-      now: () => new Date('2026-09-08T09:00:00.000Z'),
+      session: {
+        createSessionId: () => 'http-session',
+      },
+      execution: {
+        now: () => new Date('2026-09-08T09:00:00.000Z'),
+      },
     })
     const app = createServerApp({ agent, logger: false })
 
@@ -227,7 +231,7 @@ describe('server runtime HTTP boundary', () => {
     })
     const agent = new Agent({
       model: new ScriptedModelAdapter({ script: [] }),
-      store,
+      session: { store },
     })
     const app = createServerApp({ agent, logger: false })
 
@@ -280,9 +284,13 @@ describe('server runtime HTTP boundary', () => {
     })
     const agent = new Agent({
       model: adapter,
-      createSessionId: () => 'approval-session',
-      createId: createIdFactory('approval-http'),
-      now: () => new Date('2026-09-10T02:00:00.000Z'),
+      session: {
+        createSessionId: () => 'approval-session',
+      },
+      execution: {
+        createId: createIdFactory('approval-http'),
+        now: () => new Date('2026-09-10T02:00:00.000Z'),
+      },
       tools: { mode: 'replace', tools: [manageRuntimeResourceTool] },
       toolGuard: serverToolGuard,
     })
@@ -363,8 +371,12 @@ describe('server runtime HTTP boundary', () => {
     })
     const agent = new Agent({
       model: adapter,
-      createSessionId: () => 'rejection-session',
-      createId: createIdFactory('approval-reject'),
+      session: {
+        createSessionId: () => 'rejection-session',
+      },
+      execution: {
+        createId: createIdFactory('approval-reject'),
+      },
       tools: { mode: 'replace', tools: [manageRuntimeResourceTool] },
       toolGuard: serverToolGuard,
     })
@@ -427,7 +439,9 @@ describe('server runtime HTTP boundary', () => {
     })
     const agent = new Agent({
       model: adapter,
-      createSessionId: () => 'denial-session',
+      session: {
+        createSessionId: () => 'denial-session',
+      },
       tools: { mode: 'replace', tools: [manageRuntimeResourceTool] },
       toolGuard: serverToolGuard,
     })

@@ -17,7 +17,7 @@ import type {
 import type {
   ToolEventListener,
 } from '../tools'
-import type { AgentToolDefinitionInput } from './normalize-tools'
+import type { AgentToolInput } from './normalize-tools'
 import type { DefinedToolGuardConfig, ToolGuardConfig } from './tool-guard'
 import { randomUUID } from 'node:crypto'
 import { DeepSeekModelAdapter } from '../adapters/deepseek'
@@ -52,55 +52,96 @@ export type AgentModelInput
 export interface ExtendAgentToolsConfig {
   readonly mode?: 'extend'
   readonly disabledBuiltins?: readonly BuiltinToolName[]
-  readonly overrides?: Readonly<Partial<Record<BuiltinToolName, AgentToolDefinitionInput>>>
-  readonly additional?: readonly AgentToolDefinitionInput[]
+  readonly overrides?: Readonly<Partial<Record<BuiltinToolName, AgentToolInput>>>
+  readonly additional?: readonly AgentToolInput[]
 }
 
 /** 完全跳过默认内置工具，仅注册调用方给出的工具集合。 */
 export interface ReplaceAgentToolsConfig {
   readonly mode: 'replace'
-  readonly tools: readonly AgentToolDefinitionInput[]
+  readonly tools: readonly AgentToolInput[]
 }
 
 /** Agent 工具配置：默认扩展内置集合，也可以显式整体替换。 */
 export type AgentToolsInput = ExtendAgentToolsConfig | ReplaceAgentToolsConfig
 
-/** 创建 CraftAgent 时由开发者提供的单一配置根。 */
-export interface AgentConfigInput {
-  readonly model: AgentModelInput
-  /** 未配置时自动装载全部内置工具。 */
-  readonly tools?: AgentToolsInput
+/** CraftAgent 生成运行、轮次、事件和审批标识时使用的稳定种类。 */
+export type AgentIdKind = 'run' | 'turn' | 'event' | 'approval'
+
+/** 宿主可注入的 ID 生成器；未注入时由 CraftAgent 生成随机 ID。 */
+export type AgentIdFactory = (kind: AgentIdKind) => string
+
+/** Session Store 与会话 ID 的宿主集成配置。 */
+export interface AgentSessionConfig {
   /** 默认使用进程内 MemorySessionStore；生产环境应注入持久化实现。 */
   readonly store?: SessionStore
-  readonly systemPrompt?: string
+  /** 未指定 sessionId 时使用的 ID 生成器。 */
+  readonly createSessionId?: () => string
+}
+
+/** AgentLoop 的预算和确定性运行基础设施。 */
+export interface AgentExecutionConfig {
+  /** 单次 Run 的模型步数、工具调用数、耗时和 Token 预算。 */
   readonly limits?: Partial<AgentLoopLimits>
-  /** 工具风险评估与通用审批时限的唯一配置入口；等待用户由 Agent 内部完成。 */
-  readonly toolGuard?: ToolGuardConfig
-  /** Tool Harness 的完整生命周期观察器，不参与授权或其他控制流。 */
-  readonly onToolEvent?: ToolEventListener
-  /** 所有低层 AgentEvent 的全局观察器。 */
-  readonly onTrace?: AgentEventListener
   /** 测试或宿主环境可注入的时钟。 */
   readonly now?: () => Date
   /** 测试或宿主环境可注入的 Run、Turn、Event 和 Approval ID 生成器。 */
-  readonly createId?: (kind: 'run' | 'turn' | 'event' | 'approval') => string
-  /** 未指定 sessionId 时使用的 ID 生成器。 */
-  readonly createSessionId?: () => string
+  readonly createId?: AgentIdFactory
+}
+
+/** 不参与控制流的全局轨迹与工具生命周期观察器。 */
+export interface AgentObservabilityConfig {
+  /** Tool Harness 的完整生命周期观察器。 */
+  readonly onToolEvent?: ToolEventListener
+  /** 所有低层 AgentEvent 的全局观察器。 */
+  readonly onTrace?: AgentEventListener
+}
+
+/** 创建 CraftAgent 时由开发者提供的单一配置根。 */
+export interface AgentConfigInput {
+  readonly model: AgentModelInput
+  /** Agent 的系统指令，不属于模型供应商连接配置。 */
+  readonly systemPrompt?: string
+  /** 未配置时自动装载全部内置工具。 */
+  readonly tools?: AgentToolsInput
+  /** 工具风险评估与通用审批时限的唯一配置入口；等待用户由 Agent 内部完成。 */
+  readonly toolGuard?: ToolGuardConfig
+  /** Session Store 和会话标识配置。 */
+  readonly session?: AgentSessionConfig
+  /** AgentLoop 预算、时钟和运行标识配置。 */
+  readonly execution?: AgentExecutionConfig
+  /** 全局轨迹与工具事件观察器。 */
+  readonly observability?: AgentObservabilityConfig
+}
+
+/** defineAgentConfig() 归一化后的 Session 配置。 */
+export interface DefinedAgentSessionConfig {
+  readonly store: SessionStore
+  readonly createSessionId: () => string
+}
+
+/** defineAgentConfig() 归一化后的执行配置。 */
+export interface DefinedAgentExecutionConfig {
+  readonly limits: AgentLoopLimits
+  readonly now: () => Date
+  readonly createId?: AgentIdFactory
+}
+
+/** defineAgentConfig() 归一化后的观察器配置。 */
+export interface DefinedAgentObservabilityConfig {
+  readonly onToolEvent?: ToolEventListener
+  readonly onTrace?: AgentEventListener
 }
 
 /** defineAgentConfig() 返回的已归一化、只读配置。 */
 export interface DefinedAgentConfig {
   readonly model: ModelAdapter
   readonly tools: readonly AgentTool[]
-  readonly store: SessionStore
   readonly systemPrompt?: string
-  readonly limits: AgentLoopLimits
   readonly toolGuard: DefinedToolGuardConfig
-  readonly onToolEvent?: ToolEventListener
-  readonly onTrace?: AgentEventListener
-  readonly now: () => Date
-  readonly createId?: (kind: 'run' | 'turn' | 'event' | 'approval') => string
-  readonly createSessionId: () => string
+  readonly session: DefinedAgentSessionConfig
+  readonly execution: DefinedAgentExecutionConfig
+  readonly observability: DefinedAgentObservabilityConfig
 }
 
 /**
@@ -112,40 +153,100 @@ export interface DefinedAgentConfig {
 export function defineAgentConfig(input: AgentConfigInput): DefinedAgentConfig {
   if (typeof input !== 'object' || input === null)
     throw new TypeError('Agent 配置必须是对象')
-  if (input.store !== undefined
-    && (typeof input.store.append !== 'function'
-      || typeof input.store.read !== 'function')) {
-    throw new TypeError('Agent config.store 必须实现 SessionStore')
+  assertKnownConfigFields(
+    input,
+    ['model', 'systemPrompt', 'tools', 'toolGuard', 'session', 'execution', 'observability'],
+    'Agent config',
+  )
+  assertOptionalConfigGroup(input.session, 'session')
+  assertOptionalConfigGroup(input.execution, 'execution')
+  assertOptionalConfigGroup(input.observability, 'observability')
+  assertKnownConfigFields(input.session, ['store', 'createSessionId'], 'Agent config.session')
+  assertKnownConfigFields(input.execution, ['limits', 'now', 'createId'], 'Agent config.execution')
+  assertKnownConfigFields(
+    input.observability,
+    ['onToolEvent', 'onTrace'],
+    'Agent config.observability',
+  )
+
+  if (input.session?.store !== undefined
+    && (typeof input.session.store.append !== 'function'
+      || typeof input.session.store.read !== 'function')) {
+    throw new TypeError('Agent config.session.store 必须实现 SessionStore')
   }
-  if (input.now !== undefined && typeof input.now !== 'function')
-    throw new TypeError('Agent config.now 必须是函数')
-  if (input.createId !== undefined && typeof input.createId !== 'function')
-    throw new TypeError('Agent config.createId 必须是函数')
-  if (input.createSessionId !== undefined && typeof input.createSessionId !== 'function')
-    throw new TypeError('Agent config.createSessionId 必须是函数')
+  if (input.execution?.now !== undefined && typeof input.execution.now !== 'function')
+    throw new TypeError('Agent config.execution.now 必须是函数')
+  if (input.execution?.createId !== undefined && typeof input.execution.createId !== 'function')
+    throw new TypeError('Agent config.execution.createId 必须是函数')
+  if (input.session?.createSessionId !== undefined && typeof input.session.createSessionId !== 'function')
+    throw new TypeError('Agent config.session.createSessionId 必须是函数')
+  if (input.observability?.onToolEvent !== undefined
+    && typeof input.observability.onToolEvent !== 'function') {
+    throw new TypeError('Agent config.observability.onToolEvent 必须是函数')
+  }
+  if (input.observability?.onTrace !== undefined
+    && typeof input.observability.onTrace !== 'function') {
+    throw new TypeError('Agent config.observability.onTrace 必须是函数')
+  }
 
   const model = createModelAdapter(input.model)
   const tools = createTools(input.tools)
-  const limits = createLimits(input.limits)
+  const limits = createLimits(input.execution?.limits)
   const toolGuard = defineToolGuardConfig(input.toolGuard)
   const systemPrompt = input.systemPrompt?.trim()
-  const now = input.now ?? (() => new Date())
-  const createSessionId = input.createSessionId
+  const now = input.execution?.now ?? (() => new Date())
+  const createSessionId = input.session?.createSessionId
     ?? (() => `session-${randomUUID()}`)
+  const session = Object.freeze({
+    store: input.session?.store ?? new MemorySessionStore({ now }),
+    createSessionId,
+  })
+  const execution = Object.freeze({
+    limits,
+    now,
+    ...(input.execution?.createId ? { createId: input.execution.createId } : {}),
+  })
+  const observability = Object.freeze({
+    ...(input.observability?.onToolEvent
+      ? { onToolEvent: input.observability.onToolEvent }
+      : {}),
+    ...(input.observability?.onTrace
+      ? { onTrace: input.observability.onTrace }
+      : {}),
+  })
 
   return Object.freeze({
     model,
     tools,
-    store: input.store ?? new MemorySessionStore({ now }),
     ...(systemPrompt ? { systemPrompt } : {}),
-    limits,
     toolGuard,
-    ...(input.onToolEvent ? { onToolEvent: input.onToolEvent } : {}),
-    ...(input.onTrace ? { onTrace: input.onTrace } : {}),
-    now,
-    ...(input.createId ? { createId: input.createId } : {}),
-    createSessionId,
+    session,
+    execution,
+    observability,
   })
+}
+
+/** 可选配置组必须是普通对象，避免数组或原始值在归一化时被静默忽略。 */
+function assertOptionalConfigGroup(value: unknown, name: string): void {
+  if (value !== undefined
+    && (typeof value !== 'object' || value === null || Array.isArray(value))) {
+    throw new TypeError(`Agent config.${name} 必须是对象`)
+  }
+}
+
+/** 配置边界拒绝拼写错误和已移除的扁平字段，避免 JavaScript 调用方被静默降级到默认值。 */
+function assertKnownConfigFields(
+  value: object | undefined,
+  allowedFields: readonly string[],
+  path: string,
+): void {
+  if (value === undefined)
+    return
+
+  const allowed = new Set(allowedFields)
+  const unknownField = Object.keys(value).find(field => !allowed.has(field))
+  if (unknownField)
+    throw new TypeError(`${path} 包含未知字段：${unknownField}`)
 }
 
 /** 将工具选择配置解析为 AgentLoop 可直接消费的最终只读集合。 */

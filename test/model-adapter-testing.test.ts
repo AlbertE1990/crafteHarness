@@ -3,10 +3,10 @@ import type {
   ModelStreamChunk,
 } from '../src/craft-agent'
 import { describe, expect, it } from 'vitest'
+import { assertModelAdapterContract } from './support/model-adapter-contract'
 import {
-  assertModelAdapterContract,
   ScriptedModelAdapter,
-} from '../src/craft-agent/adapters/testing'
+} from './support/scripted-model-adapter'
 
 function completion(): ModelCompletion {
   return {

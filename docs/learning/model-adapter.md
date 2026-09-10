@@ -44,7 +44,7 @@ flowchart LR
    兼容请求、响应、流和错误的公共实现。
 6. [`deepseek-model-adapter.ts`](../../src/craft-agent/adapters/deepseek/deepseek-model-adapter.ts)：
    DeepSeek 差异层。
-7. [`scripted-model-adapter.ts`](../../src/craft-agent/adapters/testing/scripted-model-adapter.ts)：
+7. [`scripted-model-adapter.ts`](../../test/support/scripted-model-adapter.ts)：
    无网络测试实现。
 8. [`agent/agent.ts`](../../src/craft-agent/agent/agent.ts)：标准 chunk 的消费者与应用事件投影。
 

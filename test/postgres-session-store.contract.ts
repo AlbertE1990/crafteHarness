@@ -1,17 +1,17 @@
-import type { ModelStreamChunk } from '../../craft-agent'
+import type { ModelStreamChunk } from '../src/craft-agent'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import process, { loadEnvFile } from 'node:process'
 import { Pool } from 'pg'
-import Agent, { SessionStoreError } from '../../craft-agent'
-import { ScriptedModelAdapter } from '../../craft-agent/adapters/testing'
-import { assertSessionStoreContract } from '../../craft-agent/sessions/testing'
+import Agent, { SessionStoreError } from '../src/craft-agent'
 import {
   createPostgresPool,
   readPostgresRuntimeConfig,
-} from '../database/postgres'
-import { PostgresSessionStore } from './postgres-session-store'
+} from '../src/server/database/postgres'
+import { PostgresSessionStore } from '../src/server/stores/postgres-session-store'
+import { ScriptedModelAdapter } from './support/scripted-model-adapter'
+import { assertSessionStoreContract } from './support/session-store-contract'
 
 if (existsSync('.env.local'))
   loadEnvFile('.env.local')
@@ -25,7 +25,7 @@ async function main(): Promise<void> {
   const config = readPostgresRuntimeConfig()
   const administrationPool = createPostgresPool(config)
   const schema = `craft_agent_contract_${randomUUID().replaceAll('-', '')}`
-  const migrationUrl = new URL('../../../database/migrations/001-create-session-log.sql', import.meta.url)
+  const migrationUrl = new URL('../database/migrations/001-create-session-log.sql', import.meta.url)
   const migration = await readFile(migrationUrl, 'utf8')
   let pool: Pool | undefined
 
@@ -62,7 +62,7 @@ async function assertAgentRestoresFromDatabase(store: PostgresSessionStore): Pro
   const firstAdapter = new ScriptedModelAdapter({
     script: [{ method: 'stream', chunks: [completionChunk('第一轮回答')] }],
   })
-  await new Agent({ model: firstAdapter, store }).run({
+  await new Agent({ model: firstAdapter, session: { store } }).run({
     sessionId,
     input: '第一轮问题',
   })
@@ -70,7 +70,7 @@ async function assertAgentRestoresFromDatabase(store: PostgresSessionStore): Pro
   const secondAdapter = new ScriptedModelAdapter({
     script: [{ method: 'stream', chunks: [completionChunk('第二轮回答')] }],
   })
-  await new Agent({ model: secondAdapter, store }).run({
+  await new Agent({ model: secondAdapter, session: { store } }).run({
     sessionId,
     input: '第二轮问题',
   })

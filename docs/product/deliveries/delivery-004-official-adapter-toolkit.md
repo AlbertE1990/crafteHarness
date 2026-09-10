@@ -56,3 +56,9 @@
 - Adapter 内部重试。
 - npm 多包和可选依赖拆分。
 - 真实供应商联网测试。
+
+## 后续收口
+
+2026-09-10 的预发布 API 收口将 `ScriptedModelAdapter` 与 `assertModelAdapterContract()` 迁移到
+`test/support`，并删除 `src/craft-agent/adapters/testing`。本记录保留阶段 2.1 当时的交付历史，当前公共边界
+以 ModelAdapter 协议和最新交付记录为准。

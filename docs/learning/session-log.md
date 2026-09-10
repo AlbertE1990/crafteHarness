@@ -307,7 +307,10 @@ class ServiceSessionStore implements SessionStore {
   }
 }
 
-const agent = new Agent({ model, store: new ServiceSessionStore(service) })
+const agent = new Agent({
+  model,
+  session: { store: new ServiceSessionStore(service) },
+})
 ```
 
 `service` 可以在内部使用原生 SQL、ORM 或 HTTP API。Agent 不需要知道其实现，也不需要调用 `initialize()`
@@ -316,7 +319,7 @@ const agent = new Agent({ model, store: new ServiceSessionStore(service) })
 实现完成后先运行契约探针：
 
 ```ts
-import { assertSessionStoreContract } from '../src/craft-agent/sessions/testing'
+import { assertSessionStoreContract } from '../../test/support/session-store-contract'
 
 await assertSessionStoreContract(store, {
   sessionIdPrefix: 'temporary-test-run',
@@ -325,6 +328,7 @@ await assertSessionStoreContract(store, {
 ```
 
 探针会写数据且 Session Log 没有删除接口，因此应使用临时数据库、测试 schema 或可整体销毁的测试容器。
+该导入是仓库内部测试支持代码，不属于 CraftAgent 生产 API；外部实现应根据本教程和协议建立自己的测试。
 SQL 事务结构、远程重试和错误映射要求见[Session Log 协议](../standards/protocols/session-log.md)。数据库表、
 固定快照查询、用户 metadata 扩展和无数据库调试步骤见
 [持久化 SessionStore 教程](./persistent-session-store.md)。

@@ -10,7 +10,7 @@ import {
   readSessionSnapshot,
   SessionStoreError,
 } from '../src/craft-agent'
-import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
+import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
 /** 构造只包含候选 0 的标准流块，让测试关注 Agent 控制流而不是供应商 SDK。 */
 function chunk(

@@ -415,7 +415,7 @@ deny / 用户拒绝 / 审批超时
 
 - 超时由 Agent 的服务端定时器裁决；前端倒计时只是展示。
 - `approvalTimeoutMs: -1` 不创建审批定时器，但 pending 仍会被用户决定、调用方取消、
-  `limits.maxDurationMs` 和进程退出收口；真正无限等待还需要不配置 Run 时限。
+  `execution.limits.maxDurationMs` 和进程退出收口；真正无限等待还需要不配置 Run 时限。
 - 永久等待会持续占用当前 Run 和一个内存 pending 项，应由宿主保证最终决定或主动取消。
 - 浏览器断开聊天 SSE 时，Server 应取消同一个 Run 的 `AbortSignal`。
 - Run 清理会把仍 pending 的审批收口为 `aborted`，避免遗留 Promise。

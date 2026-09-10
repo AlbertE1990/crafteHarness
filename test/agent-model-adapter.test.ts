@@ -1,8 +1,8 @@
 import type { AgentOutputEvent, ModelStreamChunk } from '../src/craft-agent'
 import { describe, expect, it } from 'vitest'
 import Agent from '../src/craft-agent'
-import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
 import { serverToolGuard, serverTools } from '../src/server/agent-tools'
+import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
 /** 构造供应商无关模型流块，验证 Server 只消费 CraftAgent 标准协议。 */
 function chunk(
@@ -28,7 +28,9 @@ function createAgent(adapter: ScriptedModelAdapter): Agent {
     },
     toolGuard: serverToolGuard,
     systemPrompt: '你是一个AI助手',
-    createSessionId: () => 'generated-conversation',
+    session: {
+      createSessionId: () => 'generated-conversation',
+    },
   })
 }
 

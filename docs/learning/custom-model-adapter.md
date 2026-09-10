@@ -72,7 +72,7 @@ const agent = new Agent({ model: adapter })
 
 ## 5. 无网络测试
 
-测试 Agent 行为时使用 `ScriptedModelAdapter`：
+CraftAgent 仓库测试 Agent 行为时使用位于 `test/support` 的 `ScriptedModelAdapter`：
 
 ```ts
 const adapter = new ScriptedModelAdapter({
@@ -90,6 +90,9 @@ const result = await assertModelAdapterContract(adapter)
 
 契约探针会分别调用一次 `complete()` 和 `stream()`，因此客户端替身必须准备两次响应。它只检查公共
 骨架、异步迭代和 provider 一致性；供应商专属 reasoning、请求扩展和错误映射仍要单独断言。
+
+这两个工具是仓库内部测试夹具，不属于 `craft-agent` 的生产导出。项目外开发者应依据
+[ModelAdapter 协议](../standards/protocols/model-adapter.md)在自己的测试目录实现同等断言。
 
 ## 6. 提交前检查
 

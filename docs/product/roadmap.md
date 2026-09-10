@@ -27,7 +27,8 @@ flowchart LR
   P44 --> P45[阶段 4.5<br/>PostgreSQL 学习基座<br/>已完成]
   P45 --> P46[阶段 4.6<br/>会话读模型与 PostgreSQL Store<br/>已完成]
   P46 --> P47[阶段 4.7<br/>ToolGuard 与内置审批管理<br/>已完成]
-  P47 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
+  P47 --> P48[阶段 4.8<br/>配置分组与公共 API 收口<br/>已完成]
+  P48 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -91,9 +92,9 @@ flowchart LR
 
 - 提取 `OpenAICompatibleModelAdapter`，复用消息、工具、响应、流、usage 和错误映射。
 - 将 DeepSeek 收缩为消息、token 参数、thinking 和 reasoning 差异层。
-- 提供 Scripted Adapter 与不绑定测试框架的契约探针。
+- 仓库测试目录提供 Scripted Adapter 与不绑定测试框架的契约探针，不把测试夹具作为生产 API。
 - Agent 配置同时支持内置兼容服务和自定义 Adapter。
-- 生产 Adapter 与测试工具使用独立入口，Core 继续禁止导入 SDK。
+- 生产 Adapter 使用独立入口，测试工具留在 `test/support`，Core 继续禁止导入 SDK。
 
 详细交付见[阶段 2.1 记录](./deliveries/delivery-004-official-adapter-toolkit.md)，设计依据见
 [ADR-0003](./decisions/adr-0003-official-adapter-toolkit.md)。
@@ -161,7 +162,7 @@ flowchart LR
 
 - 明确 SQL、ORM、Service 和 API 只通过 SessionStore Port 接入。
 - 增加外部持久化操作错误及操作类型。
-- 增加可复用、无测试框架依赖的 SessionStore 契约探针。
+- 在 `test/support` 增加可复用、无测试框架依赖的 SessionStore 契约探针。
 - 定义 SQL 原子事务、远程 API 幂等和 Runtime 生命周期边界。
 - 提供从 MemorySessionStore 调试到 PostgreSQL 实现的完整学习教程。
 - 明确 Session 持久化不是模型工具，不提供通用 SQL 内置工具。
@@ -223,7 +224,20 @@ flowchart LR
 
 详细交付见[阶段 4.7 记录](./deliveries/delivery-013-agent-tool-guard.md)。
 
-## 16. 阶段 5：轨迹持久化与查询（下一阶段）
+## 16. 阶段 4.8：配置分组与公共 API 收口（已完成）
+
+已完成范围：
+
+- `AgentConfigInput` 按 `session`、`execution`、`observability` 分组，同时保留模型、工具和 ToolGuard 的短路径。
+- 输入配置和 `agent.config` 使用相同分组，不保留旧扁平配置兼容层。
+- 新增可公开命名的 `AgentToolInput`，内部工具归一化实现继续隐藏。
+- CraftAgent 根入口改为显式导出白名单，生产 Adapter 保留独立高级入口。
+- Adapter、Session 契约探针和学习型可执行测试迁入 `test/`，删除生产源码中的 testing 子入口。
+- 开发规范新增配置分组、公共导出和测试代码放置原则。
+
+详细交付见[阶段 4.8 记录](./deliveries/delivery-014-config-and-public-api.md)。
+
+## 17. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -233,7 +247,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 CraftAgent 核心协议。
 
-## 17. 阶段 6：异常诊断
+## 18. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -246,7 +260,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 18. 阶段 7：长期安全与扩展（最低优先级）
+## 19. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

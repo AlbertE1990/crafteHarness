@@ -2,13 +2,13 @@ import type { ExecuteToolOptions } from '../src/craft-agent'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { defineAgentConfig, defineTool } from '../src/craft-agent'
-import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
 import {
   manageRuntimeResourceTool,
   serverToolGuard,
   serverTools,
 } from '../src/server/agent-tools'
 import { getTime, getUserLocation, getWeather } from '../src/server/func'
+import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
 /** 通过真实 Agent 配置边界把服务端原始 DefinedTool 归一化为 Harness 注册项。 */
 const registeredServerTools = defineAgentConfig({

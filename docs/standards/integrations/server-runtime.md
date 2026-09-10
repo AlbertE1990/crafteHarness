@@ -35,7 +35,9 @@ const agent = new Agent({
     additional: [getUserLocationTool, getWeatherTool],
   },
   toolGuard: serverToolGuard,
-  store: new PostgresSessionStore(databasePool),
+  session: {
+    store: new PostgresSessionStore(databasePool),
+  },
 })
 
 const app = createServerApp({ agent })
@@ -72,7 +74,7 @@ agent.run(..., {
 持有等待中的 Promise；未知、已处理、超时和重复的审批统一投影为 404。聊天 SSE 必须透传 requested 事件的
 `expiresAt`，让页面显示倒计时，但最终超时仍由 Agent 的服务端定时器裁决。若最终
 `approvalTimeoutMs` 为 `-1`，事件中的 `expiresAt` 为 `null`，页面应显示“无过期时间”，且 Run 仍可被取消。
-若 Runtime 同时配置了 `limits.maxDurationMs`，该 Run 级预算仍然有效。
+若 Runtime 同时配置了 `execution.limits.maxDurationMs`，该 Run 级预算仍然有效。
 
 会话列表调用 `agent.listSessions()`，只返回 `id/name/createAt` 摘要；进入某个会话后再通过
 `agent.getSession(sessionId)` 读取详情。标题在创建 Session 时写入 metadata，`displayHistory` 只在详情路由中

@@ -42,13 +42,24 @@ const agent = new Agent({
 归一化规则：
 
 - 模型声明转换为 `ModelAdapter`。
-- `limits` 由 AgentLoop 的同一规则补齐并校验。
+- `execution.limits` 由 AgentLoop 的同一规则补齐并校验。
 - 工具配置解析为包含内置、覆盖和应用追加工具的最终只读数组。
 - 未传 Store 时创建 `MemorySessionStore`。
 - 未传 Session ID 生成器时使用 Node.js `randomUUID()`。
 - 不读取 `process.env`，不替调用方决定密钥来源。
 
 配置对象只冻结组装结构，不冻结开发者注入的 Adapter、Store、ToolGuard 或回调实例。
+
+配置按职责分为三组，同时让高频且已经自成体系的 `model`、`tools`、`toolGuard` 保持短路径：
+
+| 配置组          | 字段                        | 职责                           |
+| --------------- | --------------------------- | ------------------------------ |
+| `session`       | `store`、`createSessionId`  | 持久化端口和会话标识           |
+| `execution`     | `limits`、`now`、`createId` | AgentLoop 预算及确定性运行依赖 |
+| `observability` | `onTrace`、`onToolEvent`    | 不参与控制流的全局观察器       |
+
+`systemPrompt` 描述 Agent 行为，因此不放入模型供应商连接配置。`toolGuard` 本身已经是完整的风险评估组，
+不会再套一层容易暗示沙箱或身份认证能力的 `security`。项目尚未发布，旧的扁平字段不属于兼容输入。
 
 ## 4. 工具组装
 
@@ -127,7 +138,8 @@ const result = await agent.run({
 外部协议或确实需要裁剪字段时，才自行增加 Adapter；该 Adapter 不属于 CraftAgent 核心。
 
 `onTrace` 输出完整 `AgentEvent`，包括 Run、Step、模型 chunk、工具调用、Tool Harness 子事件和终态。
-配置根和单次 run 都可设置 `onTrace`。所有观察器异常都会隔离；阶段 6 再通过 DiagnosticSink 记录。
+`observability.onTrace` 提供全局观察，单次 run 的 `onTrace` 只观察本次执行。所有观察器异常都会隔离；
+阶段 6 再通过 DiagnosticSink 记录。
 
 ## 6. 风险评估与用户审批
 
@@ -172,7 +184,7 @@ agent.resolveToolApproval({ approvalId, decision: 'deny' })
 Agent 实例只在当前进程中保存 pending 审批。没有 `onEvent` 交互出口、出口失效、Run 取消或进程重启时
 必须 fail-closed。完整交互见[工具审批全链路](../../learning/tool-approval-flow.md)。
 
-`-1` 只关闭审批自己的定时器，不会覆盖调用方 AbortSignal 或 `limits.maxDurationMs`。若要求在没有人为
+`-1` 只关闭审批自己的定时器，不会覆盖调用方 AbortSignal 或 `execution.limits.maxDurationMs`。若要求在没有人为
 取消时真正无限等待，还必须不配置 Run 时限。永久等待会持续占用一个 pending 项和当前 Run，因此只适合
 宿主能够保证最终提交或取消的场景。
 

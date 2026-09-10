@@ -155,9 +155,9 @@ src/craft-agent/index.ts  -X->  src/craft-agent/adapters
 
 协议差异无法由这些明确扩展点表达时，应直接实现新的 `ModelAdapter`，不能扭曲兼容层。
 
-## 8. 测试入口
+## 8. 测试支持代码
 
-`src/craft-agent/adapters/testing` 与生产汇总入口分离：
+`test/support` 保存 CraftAgent 仓库自己的测试替身和契约断言：
 
 - `ScriptedModelAdapter` 严格按脚本顺序输出 completion 或 chunk，捕获请求快照并响应取消。
 - 脚本耗尽、调用方法错位作为 `MODEL_PROTOCOL_ERROR`，原始脚本异常作为 `MODEL_CALL_FAILED`。
@@ -165,6 +165,9 @@ src/craft-agent/index.ts  -X->  src/craft-agent/adapters
 
 契约探针不得直接连接生产模型。供应商 Adapter 测试必须注入 SDK 客户端替身；契约探针也不能替代
 reasoning、供应商请求扩展和错误映射等专项测试。
+
+测试支持代码不从 `src/craft-agent` 或 npm 公共入口导出。外部开发者通过本文的输入、输出、取消和错误规范
+实现自己的契约测试；若未来形成稳定的第三方扩展需求，再单独设计 `craft-agent/testing`。
 
 ## 9. 统一配置
 

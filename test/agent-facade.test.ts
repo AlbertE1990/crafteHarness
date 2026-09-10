@@ -9,7 +9,7 @@ import type {
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import Agent, { defineTool, MemorySessionStore } from '../src/craft-agent'
-import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
+import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
 /** 构造门面测试使用的单候选标准流块。 */
 function chunk(content: string): ModelStreamChunk {
@@ -35,8 +35,12 @@ describe('agent facade', () => {
       model: new ScriptedModelAdapter({
         script: [{ method: 'stream', chunks: [chunk('门面回答')] }],
       }),
-      createSessionId: () => 'facade-session',
-      onTrace: event => configuredTraces.push(event),
+      session: {
+        createSessionId: () => 'facade-session',
+      },
+      observability: {
+        onTrace: event => configuredTraces.push(event),
+      },
     })
 
     const result = await agent.run({ input: '使用统一入口' }, {
@@ -125,7 +129,7 @@ describe('agent facade', () => {
     }
     const agent = new Agent({
       model: new ScriptedModelAdapter({ script: [] }),
-      store: executionStore,
+      session: { store: executionStore },
     })
 
     await expect(agent.listSessions()).rejects.toThrow(
@@ -181,8 +185,10 @@ describe('agent facade', () => {
           approvalTimeoutMs: -1,
         }),
       },
-      createId: kind => kind === 'event' ? `event-${++eventId}` : `${kind}-facade`,
-      now: () => new Date('2026-09-10T02:00:00.000Z'),
+      execution: {
+        createId: kind => kind === 'event' ? `event-${++eventId}` : `${kind}-facade`,
+        now: () => new Date('2026-09-10T02:00:00.000Z'),
+      },
     })
     const output: AgentOutputEvent[] = []
 

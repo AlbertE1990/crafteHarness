@@ -1,7 +1,7 @@
 /**
  * Sessions 学习型可执行测试。
  *
- * 运行方式：pnpm tsx src/craft-agent/sessions/test.ts
+ * 运行方式：pnpm tsx test/learning/session-log.example.ts
  *
  * 这个文件刻意不使用 Vitest：它是一段可以逐行阅读、直接运行的示例，
  * 通过断言保证结果正确，并通过日志展示 Session 的作用、意义和数据流。
@@ -12,7 +12,7 @@ import type {
   ModelMessage,
   SessionEvent,
   SessionEventDraft,
-} from '../contracts'
+} from '../../src/craft-agent/contracts'
 import assert from 'node:assert/strict'
 import process from 'node:process'
 import {
@@ -21,7 +21,7 @@ import {
   MemorySessionStore,
   readSessionSnapshot,
   SessionStoreError,
-} from './index'
+} from '../../src/craft-agent/sessions'
 
 const SESSION_ID = 'learning-session-001'
 const RUN_ID = 'learning-run-001'

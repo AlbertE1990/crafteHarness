@@ -6,8 +6,9 @@ import {
   Agent,
   defineAgentConfig,
   defineTool,
+  MemorySessionStore,
 } from '../src/craft-agent'
-import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
+import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
 /** 创建配置测试使用的最小安全工具。 */
 function createTestTool(name: string) {
@@ -25,7 +26,7 @@ describe('agent config', () => {
   it('keeps agent and model settings under one configuration root', () => {
     const config = defineAgentConfig({
       systemPrompt: '  你是测试助手  ',
-      limits: { maxModelSteps: 8 },
+      execution: { limits: { maxModelSteps: 8 } },
       model: {
         provider: 'deepseek',
         apiKey: 'test-key',
@@ -38,7 +39,7 @@ describe('agent config', () => {
 
     expect(config).toMatchObject({
       systemPrompt: '你是测试助手',
-      limits: { maxModelSteps: 8, maxToolCalls: 32 },
+      execution: { limits: { maxModelSteps: 8, maxToolCalls: 32 } },
       model: {
         provider: 'deepseek',
         model: 'deepseek-v4-pro',
@@ -46,12 +47,15 @@ describe('agent config', () => {
       },
     })
     expect(Object.isFrozen(config)).toBe(true)
-    expect(Object.isFrozen(config.limits)).toBe(true)
+    expect(Object.isFrozen(config.execution)).toBe(true)
+    expect(Object.isFrozen(config.execution.limits)).toBe(true)
+    expect(Object.isFrozen(config.session)).toBe(true)
+    expect(Object.isFrozen(config.observability)).toBe(true)
   })
 
   it('rejects invalid step budgets', () => {
     expect(() => defineAgentConfig({
-      limits: { maxModelSteps: 0 },
+      execution: { limits: { maxModelSteps: 0 } },
       model: {
         provider: 'deepseek',
         apiKey: 'test-key',
@@ -60,6 +64,24 @@ describe('agent config', () => {
         thinking: 'enabled',
       },
     })).toThrow('maxModelSteps')
+  })
+
+  it('rejects removed flat fields and unknown grouped fields', () => {
+    const model = new ScriptedModelAdapter({ script: [] })
+
+    expect(() => defineAgentConfig({
+      model,
+      store: new MemorySessionStore(),
+    } as unknown as Parameters<typeof defineAgentConfig>[0])).toThrow(
+      'Agent config 包含未知字段：store',
+    )
+
+    expect(() => defineAgentConfig({
+      model,
+      execution: { timeout: 1_000 },
+    } as unknown as Parameters<typeof defineAgentConfig>[0])).toThrow(
+      'Agent config.execution 包含未知字段：timeout',
+    )
   })
 
   it('creates the built-in OpenAI compatible adapter from the same config root', () => {
@@ -90,7 +112,7 @@ describe('agent config', () => {
     const adapter = new ScriptedModelAdapter({ script: [] })
     const agent = new Agent({ model: adapter })
 
-    expect(agent.store).toBe(agent.config.store)
+    expect(agent.store).toBe(agent.config.session.store)
     expect(agent.limits).toEqual({ maxModelSteps: 8, maxToolCalls: 32 })
   })
 

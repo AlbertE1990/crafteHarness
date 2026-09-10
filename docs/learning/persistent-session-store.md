@@ -27,7 +27,7 @@ CraftAgent 只定义会话存储的行为，不负责数据库连接和用户系
 HTTP / CLI / Worker Runtime
   ├── 身份认证、权限判断、连接池生命周期
   ├── 构造应用自己的 SessionStore
-  └── new Agent({ model, store })
+  └── new Agent({ model, session: { store } })
                          │
                          ▼
                     AgentLoop
@@ -68,7 +68,7 @@ const agent = new Agent({ model })
 import Agent, { MemorySessionStore } from '../../src/craft-agent'
 
 const store = new MemorySessionStore()
-const agent = new Agent({ model, store })
+const agent = new Agent({ model, session: { store } })
 
 await agent.run({ sessionId: 'learning-session', input: '你好' })
 console.dir(await store.read('learning-session'), { depth: null })
@@ -420,7 +420,7 @@ Session 所有者变更、成员管理和权限判断也不应该通过 Agent �
 实现完成后，必须对隔离数据库运行 CraftAgent 的契约探针：
 
 ```ts
-import { assertSessionStoreContract } from 'craft-agent/sessions/testing'
+import { assertSessionStoreContract } from '../../test/support/session-store-contract'
 
 await assertSessionStoreContract(store, {
   sessionIdPrefix: `postgres-test-${Date.now()}`,
@@ -430,6 +430,9 @@ await assertSessionStoreContract(store, {
 
 探针会真实写入多个 Session，而且协议没有删除方法。测试应使用临时数据库、临时 schema、事务夹具或测试容器，
 不能连接生产库。
+
+`test/support` 是本仓库的测试支持目录，不是 CraftAgent 公共子路径。项目外开发者应将协议中的行为清单写成
+自己测试框架下的契约测试，而不是让生产代码依赖 CraftAgent 的内部测试夹具。
 
 通用探针之外，SQL Store 还应测试：
 
@@ -464,7 +467,7 @@ src/server/database/postgres.ts
 src/server/database/migrate.ts
 src/server/database/check.ts
 src/server/stores/postgres-session-store.ts
-src/server/stores/postgres-session-store.contract.ts
+test/postgres-session-store.contract.ts
 ```
 
 先将 `.env.example` 中的数据库配置复制到被 Git 忽略的 `.env.local`，并填写本地真实密码。随后可以运行：
@@ -496,7 +499,7 @@ pnpm db:test-store
 实现过程中优先使用以下现有代码作为行为参考：
 
 - [memory-session-store.ts](../../src/craft-agent/sessions/memory-session-store.ts)：事件校验、分页结果和错误语义。
-- [session-store-contract.ts](../../src/craft-agent/sessions/testing/session-store-contract.ts)：必须通过的行为断言。
+- [session-store-contract.ts](../../test/support/session-store-contract.ts)：本仓库 Store 必须通过的内部行为断言。
 - [Session Log 协议](../standards/protocols/session-log.md)：持久化不变量。
 
 ## 14. 完成检查表

@@ -18,8 +18,8 @@
   Adapter 或供应商 SDK。产品根入口可以通过 Agent 门面提供内置 Adapter 的便利配置。
 - 提供 `OpenAICompatibleModelAdapter`，集中实现 Chat Completions 通用请求、响应、流和错误逻辑。
 - DeepSeek Adapter 继承兼容层的模板方法，只覆盖 developer 消息降级、token 参数和 reasoning 扩展。
-- 生产 Adapter 从 `src/craft-agent/adapters` 入口导出；测试 Adapter 和契约探针从
-  `src/craft-agent/adapters/testing` 独立导出。
+- 生产 Adapter 从 `src/craft-agent/adapters` 入口导出；测试 Adapter 和契约探针只放在仓库
+  `test/support`，不进入生产源码或公共 API。
 - `ScriptedModelAdapter` 使用确定性脚本替代网络，支持调用快照、取消和流迭代错误。
 - `assertModelAdapterContract()` 同时检查 `complete()` 与 `stream()` 的最小运行时协议，测试时必须配合
   SDK 客户端替身或 Scripted Adapter，不能访问生产模型。
@@ -41,3 +41,9 @@
 - 当前单项目仍会安装 OpenAI SDK；未来拆包时应将兼容 Adapter 作为独立子路径或可选包发布。
 - 继承点只适合 Chat Completions 兼容差异，不能代替对原生协议的认真建模。
 - 契约探针只检查公共骨架；reasoning、特殊工具和供应商错误仍需各 Adapter 的专属测试。
+
+## 2026-09-10 收口补充
+
+项目尚未发布，实际使用表明 `ScriptedModelAdapter` 和契约探针只被仓库测试消费。为避免把测试夹具误塑造成
+长期公共 API，删除原 `adapters/testing` 子入口并迁移到 `test/support`。外部 Adapter 开发要求继续由协议和
+学习文档说明；未来若出现稳定复用需求，再整体设计 `craft-agent/testing`，不恢复按子系统分散的 testing 入口。

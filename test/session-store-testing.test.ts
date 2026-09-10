@@ -3,7 +3,7 @@
 import type { SessionStore } from '../src/craft-agent'
 import { describe, expect, it } from 'vitest'
 import { MemorySessionStore } from '../src/craft-agent'
-import { assertSessionStoreContract } from '../src/craft-agent/sessions/testing'
+import { assertSessionStoreContract } from './support/session-store-contract'
 
 describe('session store testing utilities', () => {
   it('validates the complete MemorySessionStore persistence contract', async () => {

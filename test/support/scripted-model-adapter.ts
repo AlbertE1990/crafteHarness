@@ -4,8 +4,8 @@ import type {
   ModelCompletion,
   ModelRequest,
   ModelStreamChunk,
-} from '../../contracts'
-import { ModelError } from '../../contracts'
+} from '../../src/craft-agent/contracts'
+import { ModelError } from '../../src/craft-agent/contracts'
 
 /** ScriptedModelAdapter 支持的单次调用脚本。 */
 export type ScriptedModelStep

@@ -36,18 +36,18 @@ import { createToolGuardPolicy } from './tool-guard'
 export class Agent {
   readonly config: DefinedAgentConfig
   readonly store: SessionStore
-  readonly limits: DefinedAgentConfig['limits']
+  readonly limits: DefinedAgentConfig['execution']['limits']
 
   private readonly approvalManager: ToolApprovalManager
   private readonly loop: AgentLoop
 
   constructor(config: AgentConfigInput) {
     this.config = defineAgentConfig(config)
-    this.store = this.config.store
-    const createId = this.config.createId
+    this.store = this.config.session.store
+    const createId = this.config.execution.createId
     this.approvalManager = new ToolApprovalManager({
       defaultTimeoutMs: this.config.toolGuard.approvalTimeoutMs,
-      now: this.config.now,
+      now: this.config.execution.now,
       ...(createId
         ? { createApprovalId: () => createId('approval') }
         : {}),
@@ -62,12 +62,16 @@ export class Agent {
       store: this.store,
       tools: this.config.tools,
       ...(this.config.systemPrompt ? { systemPrompt: this.config.systemPrompt } : {}),
-      limits: this.config.limits,
+      limits: this.config.execution.limits,
       toolPolicy,
       requestToolApproval: this.approvalManager.requestApproval,
-      ...(this.config.onToolEvent ? { onToolEvent: this.config.onToolEvent } : {}),
-      now: this.config.now,
-      ...(this.config.createId ? { createId: this.config.createId } : {}),
+      ...(this.config.observability.onToolEvent
+        ? { onToolEvent: this.config.observability.onToolEvent }
+        : {}),
+      now: this.config.execution.now,
+      ...(this.config.execution.createId
+        ? { createId: this.config.execution.createId }
+        : {}),
     })
     this.limits = this.loop.limits
   }
@@ -89,7 +93,7 @@ export class Agent {
       throw new TypeError('Agent request.input 不能为空')
 
     const generatedSessionId = request.sessionId === undefined
-      ? this.config.createSessionId()
+      ? this.config.session.createSessionId()
       : undefined
     const sessionId = typeof request.sessionId === 'string'
       ? request.sessionId.trim()
@@ -123,7 +127,7 @@ export class Agent {
         ...(options.signal ? { signal: options.signal } : {}),
         ...(options.turnId ? { turnId: options.turnId } : {}),
         onEvent: async (event) => {
-          await emitTrace(this.config.onTrace, event)
+          await emitTrace(this.config.observability.onTrace, event)
           await emitTrace(options.onTrace, event)
           await project(event)
         },
@@ -189,7 +193,7 @@ function createRunId(
   config: DefinedAgentConfig,
 ): string {
   const runId = value === undefined
-    ? config.createId?.('run') ?? `run-${randomUUID()}`
+    ? config.execution.createId?.('run') ?? `run-${randomUUID()}`
     : typeof value === 'string'
       ? value.trim()
       : ''
@@ -305,7 +309,7 @@ async function emit(
 
 /** 完整轨迹观察器同样隔离异常，避免调试设施改变业务结果。 */
 async function emitTrace(
-  listener: DefinedAgentConfig['onTrace'] | AgentExecutionOptions['onTrace'],
+  listener: DefinedAgentConfig['observability']['onTrace'] | AgentExecutionOptions['onTrace'],
   event: AgentEvent,
 ): Promise<void> {
   try {

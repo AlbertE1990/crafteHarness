@@ -50,7 +50,7 @@
 - `new Agent(config)` 可直接组装内置模型、自定义 Adapter、Store、预算和事件观察器，并自动装载安全内置工具。
 - 工具配置支持禁用或覆盖指定内置工具、整体替换内置集合，以及只追加应用工具。
 - `defineAgentConfig()` 可显式提前校验配置；`defineTool()` 结果可直接传入 Agent，由内部统一归一化。
-- Scripted Adapter 与契约探针为应用和 Adapter 开发提供无网络测试入口。
+- Scripted Adapter 与契约探针位于仓库 `test/support`，为本项目提供无网络验证，不扩大生产 API。
 - Session 使用 append-only 事件、乐观并发和一致性分页，并可确定性推导模型历史。
 - 外部 SessionStore 通过统一持久化语义和独立契约探针接入 SQL、ORM、Service 或 API。
 - MemorySessionStore 只用于零数据库开发和测试；长期运行服务应显式注入持久化 Store。

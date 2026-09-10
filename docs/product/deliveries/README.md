@@ -16,5 +16,6 @@
 - [Delivery 011：阶段 4.5 PostgreSQL 持久化学习基座](./delivery-011-postgres-learning-scaffold.md)
 - [Delivery 012：阶段 4.6 会话读模型与 PostgreSQL Store](./delivery-012-session-query-and-postgres-store.md)
 - [Delivery 013：阶段 4.7 ToolGuard 与内置审批管理](./delivery-013-agent-tool-guard.md)
+- [Delivery 014：阶段 4.8 配置分组与公共 API 收口](./delivery-014-config-and-public-api.md)
 
 交付记录不是当前协议的权威来源。后续阶段改变行为时更新规范并新增交付记录，不覆盖旧记录中的历史状态。

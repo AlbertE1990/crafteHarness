@@ -36,10 +36,9 @@ src/
     adapters/
       openai-compatible/        # OpenAI SDK 隔离边界
       deepseek/                 # DeepSeek 差异层
-      testing/                  # 无网络 Scripted Adapter 和契约探针
     contracts/                  # 模型、消息、错误和 Session Port
     core/                       # AgentLoop 状态机、预算与工具注册
-    sessions/                   # Store 实现、消息推导与独立契约探针入口
+    sessions/                   # Store 实现与消息推导
     tools/                      # defineTool、Harness、策略、重试和错误
     builtins/                   # 默认工具实现、名称与自动注册表
     types/                      # JSON 基础类型
@@ -48,6 +47,10 @@ src/
     index.ts                    # 环境变量、Agent 构造和进程启动
     agent-tools.ts              # 当前应用的第一方工具
     app.ts                      # Fastify 路由、SSE 和前端展示投影
+
+test/
+  support/                      # Scripted Adapter 与协议契约探针
+  learning/                     # 可逐行运行的学习型验证脚本
 ```
 
 当前仍是单项目结构，不提前拆分 npm packages。
@@ -84,6 +87,13 @@ Fastify、CLI 或 Worker Runtime 负责：
 - 将来接入日志、轨迹存储和数据库 Store。
 
 Runtime 不是 CraftAgent 类名；它是使用 Agent 的宿主环境。
+
+### 3.4 公共入口
+
+- `craft-agent` 根入口显式导出普通 Agent 使用、协议实现和高级 AgentLoop 所需的稳定 API。
+- `craft-agent/adapters` 是生产模型 Adapter 的高级入口，不合并进普通根入口。
+- 工具归一化、审批管理器和测试夹具属于内部实现，不从公共入口导出。
+- 当前不提供 `adapters/testing` 或 `sessions/testing`；仓库测试支持代码统一位于 `test/support`。
 
 ## 4. 配置与执行数据流
 

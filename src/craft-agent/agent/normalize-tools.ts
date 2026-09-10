@@ -15,9 +15,9 @@ import { createAgentTool } from '../core'
  * 此结构用于容纳输入、输出 Schema 不同的工具数组；`never[]` 仅存在于配置边界，
  * 不会改变工具作者在 `defineTool()` 中获得的精确参数类型。
  *
- * @internal
+ * 调用方通常不需要显式标注此类型；它只用于封装可接收任意 `defineTool()` 结果的配置。
  */
-export interface AgentToolDefinitionInput {
+export interface AgentToolInput {
   readonly name: string
   readonly description: string
   readonly inputSchema: z.ZodType
@@ -39,13 +39,13 @@ export interface AgentToolDefinitionInput {
  * @internal
  */
 export function normalizeAgentToolDefinitions(
-  tools: readonly AgentToolDefinitionInput[],
+  tools: readonly AgentToolInput[],
 ): AgentTool[] {
   return tools.map(tool => normalizeToolDefinition(tool))
 }
 
 /** 在唯一的类型擦除边界把任意具体 Zod Schema 工具交给 Tool Harness。 */
-function normalizeToolDefinition(value: AgentToolDefinitionInput): AgentTool {
+function normalizeToolDefinition(value: AgentToolInput): AgentTool {
   if (!isAgentToolDefinition(value))
     throw new TypeError('Agent 工具必须由 defineTool() 创建')
 
@@ -53,10 +53,10 @@ function normalizeToolDefinition(value: AgentToolDefinitionInput): AgentTool {
 }
 
 /** 识别已经完成 Schema 编译和注册期检查的 `defineTool()` 结果。 */
-function isAgentToolDefinition(value: unknown): value is AgentToolDefinitionInput {
+function isAgentToolDefinition(value: unknown): value is AgentToolInput {
   if (typeof value !== 'object' || value === null)
     return false
-  const tool = value as Partial<AgentToolDefinitionInput>
+  const tool = value as Partial<AgentToolInput>
   return typeof tool.name === 'string'
     && typeof tool.description === 'string'
     && typeof tool.execute === 'function'

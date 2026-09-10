@@ -189,7 +189,7 @@ SQL、ORM、文件、远程 API 和业务 Service 都通过实现 `SessionStore`
 
 ```ts
 const store = new ApiSessionStore({ client })
-const agent = new Agent({ model, store })
+const agent = new Agent({ model, session: { store } })
 ```
 
 完整数据库表、事务、分页、用户 metadata 扩展和测试实践见
@@ -263,10 +263,10 @@ compare-and-swap。
 
 ## 13. 契约测试
 
-所有 SessionStore 实现必须运行独立入口提供的无测试框架契约探针：
+仓库内所有 SessionStore 实现必须运行 `test/support` 中无测试框架依赖的契约探针：
 
 ```ts
-import { assertSessionStoreContract } from 'craft-agent/sessions/testing'
+import { assertSessionStoreContract } from '../../../test/support/session-store-contract'
 
 await assertSessionStoreContract(store, {
   requireCatalog: true,
@@ -276,6 +276,9 @@ await assertSessionStoreContract(store, {
 探针覆盖空会话、初始化、批量原子性、版本冲突、JSON 序列化、事件身份与连续顺序、调用方对象隔离、固定快照
 分页和可选目录分页。它会真实写入多个 Session，测试必须提供临时 schema、事务夹具、测试容器或独立命名空间；
 不得对生产数据源运行。
+
+该探针是 CraftAgent 仓库自己的测试支持代码，不从生产包导出。外部开发者应按照本节列出的不变量在自己的
+测试目录实现契约测试；未来只有在形成明确的第三方开发工具需求后，才评估独立 `craft-agent/testing` API。
 
 契约探针验证通用行为，不能代替实现专项测试。SQL 实现仍需测试死锁、唯一约束映射和事务回滚；远程 API 实现
 仍需测试超时、认证、幂等重试和响应协议错误。
