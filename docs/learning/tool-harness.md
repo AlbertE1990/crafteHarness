@@ -430,22 +430,21 @@ const security = {
 }
 ```
 
-这段代码表达“工具需要什么”，不表达“工具已经被允许”。真正决定权属于 Runtime 注入的
-`ToolPolicy`。
+这段代码表达“工具需要什么”，不表达“工具已经被允许”。普通应用把决定权交给 Agent 配置中的
+`toolGuard.evaluate()`；Agent 再在内部适配成 Harness 使用的 `ToolPolicy`。
 
 ```mermaid
 flowchart LR
-  Metadata[工具 security 声明] --> Policy[Runtime ToolPolicy]
-  Input[校验后的具体参数] --> Policy
-  Policy --> Allow[allow：直接执行]
-  Policy --> Deny[deny：拒绝]
-  Policy --> Ask[ask：请求单次审批]
-  Ask --> Handler[前端 / CLI 审批处理器]
-  Handler --> Once[allowed-once]
-  Handler --> Stop[rejected / unavailable / aborted]
+  Metadata[工具 security 声明] --> Guard[toolGuard.evaluate]
+  Input[校验后的具体参数] --> Guard
+  Guard --> Allow[allow：直接执行]
+  Guard --> Deny[deny：当前调用失败]
+  Guard --> Ask[ask：Agent 创建单次审批]
+  Ask --> UI[前端 / CLI 提交 allow 或 deny]
+  UI --> Manager[Agent 内部 ApprovalManager]
 ```
 
-默认 `safeToolPolicy` 只允许：
+Agent 默认 ToolGuard 与底层 `safeToolPolicy` 都只允许：
 
 ```text
 risk === 'safe' 且 capabilities 为空
@@ -492,7 +491,9 @@ sequenceDiagram
 ```
 
 因此交互层不应在用户拒绝时主动关闭聊天 SSE，也不应自行伪造助手回复。它只需要把审批结果交还
-`ToolApprovalHandler`，然后继续等待 AgentLoop 的模型增量和最终结果。只有 Run 取消信号才负责终止整轮。
+`agent.resolveToolApproval()`，然后继续等待 AgentLoop 的模型增量和最终结果。只有 Run 取消信号才负责终止整轮。
+Agent 内部 Manager、HTTP/SSE 和 Vue 确认卡片的逐节点说明见
+[工具审批全链路教程](./tool-approval-flow.md)。
 
 ## 8. 重试、超时与取消
 

@@ -25,7 +25,9 @@ flowchart LR
   P42 --> P43[阶段 4.3<br/>SessionStore 持久化契约<br/>已完成]
   P43 --> P44[阶段 4.4<br/>Agent API 归一化与收口<br/>已完成]
   P44 --> P45[阶段 4.5<br/>PostgreSQL 学习基座<br/>已完成]
-  P45 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
+  P45 --> P46[阶段 4.6<br/>会话读模型与 PostgreSQL Store<br/>已完成]
+  P46 --> P47[阶段 4.7<br/>ToolGuard 与内置审批管理<br/>已完成]
+  P47 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -207,7 +209,20 @@ flowchart LR
 
 详细交付见[阶段 4.6 记录](./deliveries/delivery-012-session-query-and-postgres-store.md)。
 
-## 15. 阶段 5：轨迹持久化与查询（下一阶段）
+## 15. 阶段 4.7：ToolGuard 与内置审批管理（已完成）
+
+已完成范围：
+
+- Agent 公共配置将风险决策收口为单一 `toolGuard.evaluate()`。
+- 评估器按工具静态信息和已校验参数返回 `allow/deny/ask`。
+- Agent 内部管理一次性审批 ID、pending Promise、超时、取消和重复提交。
+- 单次 ask 超时优先于 ToolGuard 通用超时，并通过事件暴露绝对过期时间。
+- 自动拒绝和用户拒绝都只产生当前工具失败，由 AgentLoop 写入 `role=tool` 后继续模型循环。
+- 删除未发布的 Agent `toolPolicy/requestToolApproval` 双入口和 Runtime ApprovalBroker 接线。
+
+详细交付见[阶段 4.7 记录](./deliveries/delivery-013-agent-tool-guard.md)。
+
+## 16. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -217,7 +232,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 CraftAgent 核心协议。
 
-## 16. 阶段 6：异常诊断
+## 17. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -230,7 +245,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 17. 阶段 7：长期安全与扩展（最低优先级）
+## 18. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

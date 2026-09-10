@@ -4,8 +4,9 @@ import { z } from 'zod'
 import { defineAgentConfig, defineTool } from '../src/craft-agent'
 import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
 import {
+  manageRuntimeResourceTool,
+  serverToolGuard,
   serverTools,
-  trustedServerToolPolicy,
 } from '../src/server/agent-tools'
 import { getTime, getUserLocation, getWeather } from '../src/server/func'
 
@@ -35,7 +36,8 @@ async function invokeServerTool(
 
   return await tool.execute(rawInput, {
     callId: `test-${name}`,
-    policy: trustedServerToolPolicy,
+    // 本辅助函数只测试工具业务边界；参数级 Guard 决定由下面的独立测试覆盖。
+    policy: { evaluate: () => ({ decision: 'allow' }) },
     ...options,
   })
 }
@@ -79,7 +81,7 @@ describe('server tools through CraftAgent', () => {
 
     const result = await customTool.execute({ text: 'hello' }, {
       callId: 'custom-tool-call',
-      policy: trustedServerToolPolicy,
+      policy: { evaluate: () => ({ decision: 'allow' }) },
     })
 
     expect(customTool.model.name).toBe('echo_for_test')
@@ -199,43 +201,44 @@ describe('server tools through CraftAgent', () => {
     })
   })
 
-  it('uses arguments to allow reads, ask for writes and deny protected deletes', async () => {
-    const readResult = await invokeServerTool('manage_runtime_resource', {
+  it('uses validated arguments to allow reads, ask for writes and deny protected deletes', async () => {
+    /** 调用应用提供的评估函数，并补齐 Agent 正常提供的工具和关联上下文。 */
+    const evaluate = async (input: unknown) => await serverToolGuard.evaluate({
+      runId: 'run-server-tool',
+      sessionId: 'session-server-tool',
+      callId: 'call-server-tool',
+      tool: {
+        name: manageRuntimeResourceTool.name,
+        description: manageRuntimeResourceTool.description,
+        inputSchema: manageRuntimeResourceTool.model.inputSchema,
+        security: manageRuntimeResourceTool.security,
+      },
+      input,
+      signal: new AbortController().signal,
+    })
+
+    await expect(evaluate({
       operation: 'read',
       resource: 'demo/approval-test',
       content: null,
-    })
-    expect(readResult).toMatchObject({ ok: true, attempts: 1 })
-
-    const requestApproval = vi.fn().mockResolvedValue('allowed-once')
-    const writeResult = await invokeServerTool('manage_runtime_resource', {
+    })).resolves.toEqual({ decision: 'allow' })
+    await expect(evaluate({
       operation: 'write',
       resource: 'demo/approval-test',
       content: 'approved value',
-    }, { requestApproval })
-    expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({
-      toolName: 'manage_runtime_resource',
+    })).resolves.toMatchObject({
+      decision: 'ask',
       reason: expect.stringContaining('写入'),
-    }))
-    expect(writeResult).toMatchObject({
-      ok: true,
-      value: { value: 'approved value' },
+      approvalTimeoutMs: 45_000,
     })
-
-    const protectedDelete = await invokeServerTool('manage_runtime_resource', {
+    await expect(evaluate({
       operation: 'delete',
       resource: 'protected/system',
       content: null,
-    }, { requestApproval })
-    expect(protectedDelete).toMatchObject({
-      ok: false,
-      attempts: 0,
-      error: {
-        code: 'TOOL_PERMISSION_DENIED',
-        message: expect.stringContaining('禁止删除'),
-      },
+    })).resolves.toEqual({
+      decision: 'deny',
+      reason: '受保护资源 protected/system 禁止删除',
     })
-    expect(requestApproval).toHaveBeenCalledTimes(1)
   })
 
   it('keeps raw business functions available for focused unit tests', async () => {

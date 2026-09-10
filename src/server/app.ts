@@ -2,20 +2,27 @@ import type { FastifyInstance, FastifyServerOptions } from 'fastify'
 import type { ServerResponse } from 'node:http'
 import type {
   Agent,
-  AgentEvent,
   AgentOutputEvent,
   AgentSessionDetail,
   AgentSessionMessage,
   ModelMessage,
   SessionSummary,
 } from '../craft-agent'
-import type {
-  ToolApprovalBroker,
-  ToolApprovalStreamEvent,
-  UserToolApprovalDecision,
-} from './tool-approval-broker'
-import { randomUUID } from 'node:crypto'
 import Fastify from 'fastify'
+
+/** Agent 审批事件去掉内部 run/session 关联后形成页面 SSE。 */
+type ToolApprovalRequestedStreamEvent = Omit<
+  Extract<AgentOutputEvent, { type: 'tool.approval.requested' }>,
+  'runId' | 'sessionId'
+>
+type ToolApprovalResolvedStreamEvent = Omit<
+  Extract<AgentOutputEvent, { type: 'tool.approval.resolved' }>,
+  'runId' | 'sessionId'
+>
+type ToolGuardDeniedStreamEvent = Omit<
+  Extract<AgentOutputEvent, { type: 'tool.guard.denied' }>,
+  'runId' | 'sessionId'
+>
 
 /** 前端会话列表需要的展示消息；工具和系统消息不会进入该投影。 */
 export interface DisplayMessage {
@@ -39,7 +46,9 @@ export interface ConversationDetail extends ConversationSummary {
 
 /** 当前页面消费的 SSE 事件。 */
 export type AgentStreamEvent
-  = ToolApprovalStreamEvent
+  = ToolApprovalRequestedStreamEvent
+    | ToolApprovalResolvedStreamEvent
+    | ToolGuardDeniedStreamEvent
     | { readonly type: 'conversation', readonly conversationId: string }
     | {
       readonly type: 'message.delta'
@@ -58,18 +67,10 @@ export type AgentStreamEvent
       readonly code?: string
       readonly stopReason?: string
     }
-    | {
-      readonly type: 'tool.policy.denied'
-      readonly callId: string
-      readonly toolName: string
-      readonly reason: string
-    }
 
 /** 创建 Fastify 应用时注入的 Runtime 和日志配置。 */
 export interface CreateServerAppOptions {
   readonly agent: Agent
-  /** 连接等待中的 ToolApprovalHandler 与前端确认接口；省略时 ask 会 fail-closed。 */
-  readonly approvalBroker?: ToolApprovalBroker
   readonly logger?: FastifyServerOptions['logger']
 }
 
@@ -83,37 +84,31 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
 
   fastify.post<{
     Params: { approvalId: string }
-    Body: { decision: UserToolApprovalDecision }
+    Body: { decision: 'allow' | 'deny' }
   }>('/api/tool-approvals/:approvalId', {
     schema: {
       body: {
         type: 'object',
-        properties: { decision: { type: 'string', enum: ['approve', 'reject'] } },
+        properties: { decision: { type: 'string', enum: ['allow', 'deny'] } },
         required: ['decision'],
         additionalProperties: false,
       },
     },
   }, async (request, reply) => {
-    if (!options.approvalBroker) {
-      await reply.code(503)
-      return {
-        error: 'TOOL_APPROVAL_UNAVAILABLE',
-        message: '当前服务未配置工具审批通道',
-      }
-    }
-
-    const decided = options.approvalBroker.decide(
-      request.params.approvalId,
-      request.body.decision,
-    )
-    if (!decided) {
+    // Server 只转换 HTTP 数据；一次性校验和 pending Promise 都由 Agent 内部管理。
+    const result = options.agent.resolveToolApproval({
+      approvalId: request.params.approvalId,
+      decision: request.body.decision,
+    })
+    if (!result.accepted) {
+      // 同一个 approvalId 只能使用一次；已处理、超时和未知 ID 统一视为不存在。
       await reply.code(404)
       return {
         error: 'TOOL_APPROVAL_NOT_FOUND',
         message: '审批不存在、已处理或已经超时',
       }
     }
-    return { accepted: true }
+    return result
   })
 
   fastify.get('/api/conversation/list', {
@@ -166,7 +161,6 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     },
   }, async (request, reply) => {
     const abortController = new AbortController()
-    const runId = randomUUID()
 
     // 浏览器断开连接时取消同一个 Agent Run，模型和工具会收到组合后的 AbortSignal。
     reply.raw.on('close', () => {
@@ -183,12 +177,6 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     })
     reply.raw.flushHeaders()
 
-    // 审批事件与聊天增量共用当前 SSE；Run 结束后必须删除临时路由关系。
-    const stopObservingApprovals = options.approvalBroker?.observeRun(
-      runId,
-      event => writeSseEvent(reply.raw, event),
-    )
-
     try {
       await options.agent.run({
         input: request.body.message,
@@ -204,17 +192,12 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
             }
           : {}),
       }, {
-        runId,
         signal: abortController.signal,
         onEvent: async (event) => {
+          // 审批、拒绝、模型增量和最终结果现在都由 AgentOutputEvent 统一提供。
           const projected = projectAgentEvent(event)
           if (projected)
             await writeSseEvent(reply.raw, projected)
-        },
-        onTrace: async (event) => {
-          const denial = projectToolPolicyDenial(event)
-          if (denial)
-            await writeSseEvent(reply.raw, denial)
         },
       })
     }
@@ -227,7 +210,6 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
       }
     }
     finally {
-      stopObservingApprovals?.()
       if (!reply.raw.writableEnded)
         reply.raw.end()
     }
@@ -236,28 +218,44 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
   return fastify
 }
 
-/** 只把自动策略拒绝投影给页面；ask 的生命周期由带 approvalId 的 Broker 发送。 */
-function projectToolPolicyDenial(
-  event: AgentEvent,
-): Extract<AgentStreamEvent, { type: 'tool.policy.denied' }> | undefined {
-  if (event.type !== 'agent.tool.event'
-    || event.event.type !== 'tool.policy.decided'
-    || event.event.result.decision !== 'deny') {
-    return undefined
-  }
-
-  return {
-    type: 'tool.policy.denied',
-    callId: event.event.callId,
-    toolName: event.event.toolName,
-    reason: event.event.result.reason,
-  }
-}
-
 /** 将通用 CraftAgent 输出映射为现有页面字段。 */
 function projectAgentEvent(event: AgentOutputEvent): AgentStreamEvent | undefined {
   if (event.type === 'session.started')
     return { type: 'conversation', conversationId: event.sessionId }
+  if (event.type === 'tool.approval.requested') {
+    return {
+      type: event.type,
+      approvalId: event.approvalId,
+      callId: event.callId,
+      toolName: event.toolName,
+      reason: event.reason,
+      ...(event.title ? { title: event.title } : {}),
+      ...(event.details ? { details: event.details } : {}),
+      input: event.input,
+      risk: event.risk,
+      approvalTimeoutMs: event.approvalTimeoutMs,
+      requestedAt: event.requestedAt,
+      expiresAt: event.expiresAt,
+    }
+  }
+  if (event.type === 'tool.approval.resolved') {
+    return {
+      type: event.type,
+      approvalId: event.approvalId,
+      callId: event.callId,
+      toolName: event.toolName,
+      outcome: event.outcome,
+      resolvedAt: event.resolvedAt,
+    }
+  }
+  if (event.type === 'tool.guard.denied') {
+    return {
+      type: event.type,
+      callId: event.callId,
+      toolName: event.toolName,
+      reason: event.reason,
+    }
+  }
   if (event.type === 'message.delta') {
     return {
       type: event.type,

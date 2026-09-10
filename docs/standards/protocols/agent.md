@@ -48,7 +48,7 @@ const agent = new Agent({
 - 未传 Session ID 生成器时使用 Node.js `randomUUID()`。
 - 不读取 `process.env`，不替调用方决定密钥来源。
 
-配置对象只冻结组装结构，不冻结开发者注入的 Adapter、Store、Policy 或回调实例。
+配置对象只冻结组装结构，不冻结开发者注入的 Adapter、Store、ToolGuard 或回调实例。
 
 ## 4. 工具组装
 
@@ -112,17 +112,60 @@ const result = await agent.run({
 })
 ```
 
-`onEvent` 只输出四类稳定应用事件：
+`onEvent` 输出以下稳定应用事件：
 
 - `session.started`
 - `message.delta`
 - `message.completed`
+- `tool.approval.requested`
+- `tool.approval.resolved`
+- `tool.guard.denied`
 - `error`
 
 `onTrace` 输出完整 `AgentEvent`，包括 Run、Step、模型 chunk、工具调用、Tool Harness 子事件和终态。
 配置根和单次 run 都可设置 `onTrace`。所有观察器异常都会隔离；阶段 6 再通过 DiagnosticSink 记录。
 
-## 6. Session 查询
+## 6. 风险评估与用户审批
+
+Agent 门面只暴露一个 `toolGuard` 配置入口。使用者实现 `evaluate()` 决定当前调用是 `allow`、`deny`
+还是 `ask`；Agent 内部负责把它适配为 Tool Harness 策略，并管理一次性审批。
+
+```ts
+const agent = new Agent({
+  model,
+  tools: { additional: [businessTool] },
+  toolGuard: {
+    approvalTimeoutMs: 120_000,
+    evaluate(request) {
+      if (request.tool.security.risk === 'safe')
+        return { decision: 'allow' }
+      return {
+        decision: 'ask',
+        reason: `是否允许 ${request.tool.name}？`,
+        approvalTimeoutMs: 45_000,
+      }
+    },
+  },
+})
+```
+
+单次 `ask.approvalTimeoutMs` 优先于通用 `toolGuard.approvalTimeoutMs`，均未提供时默认 120 秒。
+`tool.approval.requested` 必须包含 Agent 生成的 `approvalId`、`requestedAt`、`expiresAt` 和最终采用的时限。
+交互层通过以下方法提交决定：
+
+```ts
+agent.resolveToolApproval({ approvalId, decision: 'allow' })
+agent.resolveToolApproval({ approvalId, decision: 'deny' })
+```
+
+每个 approvalId 只接受首个终态。重复、未知、已超时或已取消请求返回
+`{ accepted: false, reason: 'not-found-or-settled' }`。`deny` 和用户拒绝只阻止当前工具执行；AgentLoop
+持久化失败 `role=tool` 消息并继续下一 Model Step，不把它们提升为整个 Run 的终止条件。
+
+Agent 实例只在当前进程中保存 pending 审批。没有 `onEvent` 交互出口、出口失效、Run 取消或进程重启时
+必须 fail-closed。完整交互见[工具审批全链路](../../learning/tool-approval-flow.md)。
+
+## 7. Session 查询
 
 - `listSessions({ limit, afterSessionId })` 按创建顺序分页，只返回 `SessionSummary`，不得逐项加载完整事件。
 - `getSession(sessionId)` 按需读取一个一致快照，返回摘要和带 `eventId/sequence/timestamp/runId/turnId`
@@ -133,7 +176,7 @@ const result = await agent.run({
 默认 `MemorySessionStore` 支持列表，但进程退出后数据会丢失，且不会执行 TTL 或容量驱逐。生产环境应注入实现
 同一协议的持久化 Store，具体实践见[持久化 SessionStore 教程](../../learning/persistent-session-store.md)。
 
-## 7. 依赖规则
+## 8. 依赖规则
 
 `src/craft-agent/agent` 是产品便利层，因此可以实例化同仓库官方 Adapter。更底层的 `contracts`、
 `core`、`sessions`、`tools` 和 `builtins` 仍禁止依赖模型 SDK。官方 Adapter 必须直接依赖 contracts，

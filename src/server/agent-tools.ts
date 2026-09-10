@@ -1,7 +1,7 @@
 import type {
-  ToolPolicy,
-  ToolPolicyDecision,
-  ToolPolicyRequest,
+  ToolGuardConfig,
+  ToolGuardDecision,
+  ToolGuardRequest,
 } from '../craft-agent'
 import { z } from 'zod'
 import { defineTool, ToolError } from '../craft-agent'
@@ -110,11 +110,13 @@ export const manageRuntimeResourceTool = defineTool({
     value: z.string().nullable(),
   }),
   security: {
+    // 声明整个工具的最大能力；单次调用仍由下方 ToolPolicy 根据参数细分。
     risk: 'destructive',
     capabilities: ['runtime-resource:manage'],
     idempotent: false,
   },
   execute(input) {
+    // 能进入此函数，说明 Harness 已经得到 allow 或本 callId 的 allowed-once。
     const previous = runtimeResources.get(input.resource)
     if (input.operation === 'read') {
       return {
@@ -132,6 +134,7 @@ export const manageRuntimeResourceTool = defineTool({
           message: 'write 操作必须提供 content',
         })
       }
+      // 这是实际副作用点；审批逻辑不能写在这里，否则无法在执行前统一观察和拒绝。
       runtimeResources.set(input.resource, input.content)
       return {
         operation: input.operation,
@@ -141,6 +144,7 @@ export const manageRuntimeResourceTool = defineTool({
       }
     }
 
+    // protected/* 会在 Policy 中提前 deny，因此正常运行时无法到达这条删除语句。
     runtimeResources.delete(input.resource)
     return {
       operation: input.operation,
@@ -164,31 +168,33 @@ export const serverTools = [
 ] as const
 
 /**
- * 当前 Runtime 对静态注册第一方工具使用的许可策略。
+ * 当前 Runtime 对静态注册第一方工具使用的风险评估配置。
  *
  * 该策略只服务当前开发验证，不代表第三方插件安全模型；工具注册来源由服务端代码控制。
  */
-export const trustedServerToolPolicy: ToolPolicy = Object.freeze({
-  evaluate: (request: ToolPolicyRequest): ToolPolicyDecision => {
-    if (request.toolName === manageRuntimeResourceTool.name)
+export const serverToolGuard: ToolGuardConfig = Object.freeze({
+  approvalTimeoutMs: 120_000,
+  evaluate: (request: ToolGuardRequest): ToolGuardDecision => {
+    if (request.tool.name === manageRuntimeResourceTool.name)
       return evaluateRuntimeResourcePolicy(request.input)
 
     // CraftAgent 内置工具以及当前两个只读网络工具都由服务端静态注册，可直接执行。
-    if (request.security.risk === 'safe'
-      || request.toolName === getUserLocationTool.name
-      || request.toolName === getWeatherTool.name) {
+    if (request.tool.security.risk === 'safe'
+      || request.tool.name === getUserLocationTool.name
+      || request.tool.name === getWeatherTool.name) {
       return { decision: 'allow' }
     }
 
     return {
       decision: 'deny',
-      reason: `服务端策略未授权工具 ${request.toolName}`,
+      reason: `服务端策略未授权工具 ${request.tool.name}`,
     }
   },
 })
 
 /** 根据已经通过 Harness 校验的业务参数，决定单次资源操作的实际权限。 */
-function evaluateRuntimeResourcePolicy(input: unknown): ToolPolicyDecision {
+function evaluateRuntimeResourcePolicy(input: unknown): ToolGuardDecision {
+  // Harness 已校验过一次；这里再次 parse 是为了在通用 ToolPolicyRequest.input 上安全恢复具体类型。
   const parsed = runtimeResourceInputSchema.safeParse(input)
   if (!parsed.success) {
     return {
@@ -200,6 +206,7 @@ function evaluateRuntimeResourcePolicy(input: unknown): ToolPolicyDecision {
   if (parsed.data.operation === 'read')
     return { decision: 'allow' as const }
 
+  // 不允许人工审批绕过不可删除规则，所以 protected/* 使用 deny 而不是 ask。
   if (parsed.data.operation === 'delete' && parsed.data.resource.startsWith('protected/')) {
     return {
       decision: 'deny' as const,
@@ -207,10 +214,18 @@ function evaluateRuntimeResourcePolicy(input: unknown): ToolPolicyDecision {
     }
   }
 
+  // 普通写入和删除都需要用户针对当前 callId 作出一次性决定。
   return {
     decision: 'ask' as const,
     reason: parsed.data.operation === 'write'
       ? `工具将写入进程内资源 ${parsed.data.resource}`
       : `工具将删除进程内资源 ${parsed.data.resource}`,
+    title: parsed.data.operation === 'write' ? '确认写入资源' : '确认删除资源',
+    details: {
+      operation: parsed.data.operation,
+      resource: parsed.data.resource,
+    },
+    // 单次评估返回值优先于 serverToolGuard 的 120 秒通用配置。
+    approvalTimeoutMs: 45_000,
   }
 }

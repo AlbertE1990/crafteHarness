@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import MarkdownIt from 'markdown-it'
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 defineOptions({ name: 'IndexPage' })
 
@@ -30,6 +30,12 @@ interface ConversationDetail extends ConversationSummary {
   displayHistory?: HistoryMessage[]
 }
 
+/**
+ * Server 投影给聊天页面的封闭 SSE 协议。
+ *
+ * 审批请求、终态和自动拒绝都来自 AgentOutputEvent 的 Server 投影；页面不直接消费完整
+ * AgentEvent，避免与调试轨迹和 Agent 内部 ApprovalManager 耦合。
+ */
 type ChatStreamEvent
   = | { type: 'conversation', conversationId: string }
     | {
@@ -49,18 +55,24 @@ type ChatStreamEvent
       callId: string
       toolName: string
       reason: string
+      title?: string
+      details?: Record<string, unknown>
       input: unknown
       risk: 'safe' | 'read' | 'write' | 'destructive'
+      approvalTimeoutMs: number
+      requestedAt: string
+      expiresAt: string
     }
     | {
-      type: 'tool.approval.decided'
+      type: 'tool.approval.resolved'
       approvalId: string
       callId: string
       toolName: string
-      outcome: 'allowed-once' | 'rejected' | 'unavailable' | 'aborted'
+      outcome: 'allowed' | 'denied' | 'expired' | 'aborted'
+      resolvedAt: string
     }
     | {
-      type: 'tool.policy.denied'
+      type: 'tool.guard.denied'
       callId: string
       toolName: string
       reason: string
@@ -74,9 +86,12 @@ interface ToolInteraction {
   callId: string
   toolName: string
   reason: string
+  title?: string
+  details?: Record<string, unknown>
   input?: unknown
   risk?: 'safe' | 'read' | 'write' | 'destructive'
-  status: 'pending' | 'submitting' | 'allowed-once' | 'rejected' | 'unavailable' | 'aborted' | 'denied'
+  expiresAt?: string
+  status: 'pending' | 'submitting' | 'allowed' | 'denied' | 'expired' | 'aborted' | 'policy-denied'
 }
 
 interface ConversationListResponse {
@@ -98,10 +113,14 @@ const isSidebarOpen = ref(false)
 const errorMessage = ref('')
 const conversationError = ref('')
 const failedPrompt = ref('')
+// undefined 表示普通 Composer；有值时由状态决定展示审批卡片或自动拒绝卡片。
 const toolInteraction = ref<ToolInteraction>()
+// 审批 POST 失败只影响卡片提交，可恢复 pending 后重试，不应中断原聊天 SSE。
 const approvalError = ref('')
+const approvalRemainingSeconds = ref<number>()
 const messageList = ref<HTMLElement>()
 let nextMessageId = 1
+let approvalCountdown: ReturnType<typeof setInterval> | undefined
 
 // 模型输出是不可信文本：关闭原始 HTML，只允许 markdown-it 生成受控标签。
 const markdown = new MarkdownIt({
@@ -294,25 +313,36 @@ function isChatStreamEvent(value: unknown): value is ChatStreamEvent {
       && (event.reasoning === undefined || typeof event.reasoning === 'string')
   }
   if (event.type === 'tool.approval.requested') {
+    // input 本身允许任意 JSON 形状，其余关联字段必须完整，避免渲染无法提交的卡片。
     return typeof event.approvalId === 'string'
       && typeof event.callId === 'string'
       && typeof event.toolName === 'string'
       && typeof event.reason === 'string'
-      && (event.risk === 'safe'
-        || event.risk === 'read'
-        || event.risk === 'write'
-        || event.risk === 'destructive')
+      && (event.title === undefined || typeof event.title === 'string')
+      && (event.details === undefined
+        || (typeof event.details === 'object'
+          && event.details !== null
+          && !Array.isArray(event.details)))
+        && Number.isSafeInteger(event.approvalTimeoutMs)
+        && Number(event.approvalTimeoutMs) > 0
+        && typeof event.requestedAt === 'string'
+        && typeof event.expiresAt === 'string'
+        && (event.risk === 'safe'
+          || event.risk === 'read'
+          || event.risk === 'write'
+          || event.risk === 'destructive')
   }
-  if (event.type === 'tool.approval.decided') {
+  if (event.type === 'tool.approval.resolved') {
     return typeof event.approvalId === 'string'
       && typeof event.callId === 'string'
       && typeof event.toolName === 'string'
-      && (event.outcome === 'allowed-once'
-        || event.outcome === 'rejected'
-        || event.outcome === 'unavailable'
+      && typeof event.resolvedAt === 'string'
+      && (event.outcome === 'allowed'
+        || event.outcome === 'denied'
+        || event.outcome === 'expired'
         || event.outcome === 'aborted')
   }
-  if (event.type === 'tool.policy.denied') {
+  if (event.type === 'tool.guard.denied') {
     return typeof event.callId === 'string'
       && typeof event.toolName === 'string'
       && typeof event.reason === 'string'
@@ -337,18 +367,22 @@ function getToolInteractionStatus(status: ToolInteraction['status']): string {
   const labels: Record<ToolInteraction['status'], string> = {
     'pending': '等待你的决定',
     'submitting': '正在提交决定…',
-    'allowed-once': '已仅本次允许，正在执行工具…',
-    'rejected': '你已拒绝，Agent 正在调整回答…',
-    'unavailable': '审批已超时或不可用，Agent 正在调整回答…',
+    'allowed': '已仅本次允许，正在执行工具…',
+    'denied': '你已拒绝，Agent 正在调整回答…',
+    'expired': '审批已超时，Agent 正在调整回答…',
     'aborted': '本次审批已取消',
-    'denied': '安全策略已自动拒绝，Agent 正在调整回答…',
+    'policy-denied': '安全策略已自动拒绝，Agent 正在调整回答…',
   }
+  const remaining = approvalRemainingSeconds.value
+  if ((status === 'pending' || status === 'submitting') && remaining !== undefined)
+    return `${labels[status]} · 剩余 ${formatRemainingTime(remaining)}`
   return labels[status]
 }
 
-/** 向 Server 提交一次性审批决定，最终状态仍以 SSE decided 事件为准。 */
-async function decideToolApproval(decision: 'approve' | 'reject'): Promise<void> {
+/** 向 Server 提交一次性审批决定，最终状态仍以 SSE resolved 事件为准。 */
+async function decideToolApproval(decision: 'allow' | 'deny'): Promise<void> {
   const interaction = toolInteraction.value
+  // 只允许 pending 状态提交；这同时防止双击和 resolved 后重复使用 approvalId。
   if (!interaction?.approvalId || interaction.status !== 'pending')
     return
 
@@ -365,11 +399,45 @@ async function decideToolApproval(decision: 'approve' | 'reject'): Promise<void>
     )
     if (!response.ok)
       throw new Error(`审批提交失败（${response.status}）`)
+    // HTTP 成功只表示 Agent 接受决定；保持 submitting，等待 SSE resolved 成为页面事实。
   }
   catch (error) {
     interaction.status = 'pending'
     approvalError.value = error instanceof Error ? error.message : '审批提交失败'
   }
+}
+
+/** 根据 Agent 给出的绝对过期时间启动倒计时，避免网络延迟导致本地计时偏晚。 */
+function startApprovalCountdown(expiresAt: string): void {
+  stopApprovalCountdown()
+  const expiresAtMs = Date.parse(expiresAt)
+  if (!Number.isFinite(expiresAtMs))
+    return
+
+  /** 以秒为单位刷新；真正是否过期仍由 Agent ApprovalManager 决定。 */
+  const update = (): void => {
+    approvalRemainingSeconds.value = Math.max(
+      0,
+      Math.ceil((expiresAtMs - Date.now()) / 1_000),
+    )
+  }
+  update()
+  approvalCountdown = setInterval(update, 1_000)
+}
+
+/** 清理当前审批倒计时，避免切换 Run 后旧定时器继续更新页面。 */
+function stopApprovalCountdown(): void {
+  if (approvalCountdown)
+    clearInterval(approvalCountdown)
+  approvalCountdown = undefined
+  approvalRemainingSeconds.value = undefined
+}
+
+/** 把剩余秒数格式化为 mm:ss。 */
+function formatRemainingTime(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }
 
 /**
@@ -443,6 +511,7 @@ async function send(prompt = input.value, appendUserMessage = true) {
   failedPrompt.value = ''
   toolInteraction.value = undefined
   approvalError.value = ''
+  stopApprovalCountdown()
 
   if (appendUserMessage) {
     messages.value.push({ id: nextMessageId++, role: 'user', content: message })
@@ -498,34 +567,44 @@ async function send(prompt = input.value, appendUserMessage = true) {
         throw new Error(event.message)
 
       if (event.type === 'tool.approval.requested') {
+        // Agent Run 仍在原 SSE 中等待；这里只替换 Composer，不能结束 readEventStream。
         toolInteraction.value = {
           kind: 'approval',
           approvalId: event.approvalId,
           callId: event.callId,
           toolName: event.toolName,
           reason: event.reason,
+          ...(event.title ? { title: event.title } : {}),
+          ...(event.details ? { details: event.details } : {}),
           input: event.input,
           risk: event.risk,
+          expiresAt: event.expiresAt,
           status: 'pending',
         }
+        startApprovalCountdown(event.expiresAt)
         isAwaitingFirstToken.value = false
         return
       }
 
-      if (event.type === 'tool.approval.decided') {
-        if (toolInteraction.value?.approvalId === event.approvalId)
+      if (event.type === 'tool.approval.resolved') {
+        // approvalId 必须匹配当前卡片，迟到的旧事件不能覆盖新审批状态。
+        if (toolInteraction.value?.approvalId === event.approvalId) {
           toolInteraction.value.status = event.outcome
+          stopApprovalCountdown()
+        }
         return
       }
 
-      if (event.type === 'tool.policy.denied') {
+      if (event.type === 'tool.guard.denied') {
+        // deny 没有人工审批和 approvalId，因此卡片只展示原因，不渲染操作按钮。
         toolInteraction.value = {
           kind: 'denied',
           callId: event.callId,
           toolName: event.toolName,
           reason: event.reason,
-          status: 'denied',
+          status: 'policy-denied',
         }
+        stopApprovalCountdown()
         isAwaitingFirstToken.value = false
         return
       }
@@ -578,6 +657,7 @@ async function send(prompt = input.value, appendUserMessage = true) {
     errorMessage.value = error instanceof Error ? error.message : '发送失败，请稍后重试'
   }
   finally {
+    stopApprovalCountdown()
     isSending.value = false
     isAwaitingFirstToken.value = false
     await scrollToLatest()
@@ -592,6 +672,10 @@ function retry() {
 
 onMounted(() => {
   void loadConversations(true)
+})
+
+onBeforeUnmount(() => {
+  stopApprovalCountdown()
 })
 </script>
 
@@ -831,6 +915,7 @@ onMounted(() => {
               </button>
             </div>
 
+            <!-- Agent 等待审批时，用卡片替换输入框；用户作出决定后仍继续消费同一条 SSE。 -->
             <section
               v-if="isSending && toolInteraction"
               class="tool-confirm-card"
@@ -842,7 +927,7 @@ onMounted(() => {
                   <div i-carbon-warning-alt-filled />
                 </div>
                 <div class="min-w-0">
-                  <strong>{{ toolInteraction.kind === 'approval' ? '工具需要确认' : '工具已被策略拒绝' }}</strong>
+                  <strong>{{ toolInteraction.title ?? (toolInteraction.kind === 'approval' ? '工具需要确认' : '工具已被策略拒绝') }}</strong>
                   <div class="tool-confirm-name">
                     {{ toolInteraction.toolName }}
                   </div>
@@ -856,13 +941,18 @@ onMounted(() => {
                 <summary>查看调用参数</summary>
                 <pre>{{ formatToolInput(toolInteraction.input) }}</pre>
               </details>
+              <details v-if="toolInteraction.details" class="tool-input-details">
+                <summary>查看评估详情</summary>
+                <pre>{{ formatToolInput(toolInteraction.details) }}</pre>
+              </details>
               <div class="tool-confirm-footer">
                 <span class="tool-confirm-status">{{ getToolInteractionStatus(toolInteraction.status) }}</span>
+                <!-- 自动 deny 和已提交状态都没有按钮，避免绕过策略或重复提交。 -->
                 <div v-if="toolInteraction.status === 'pending'" class="tool-confirm-actions">
-                  <button type="button" class="tool-reject-button" @click="decideToolApproval('reject')">
+                  <button type="button" class="tool-reject-button" @click="decideToolApproval('deny')">
                     拒绝
                   </button>
-                  <button type="button" class="tool-approve-button" @click="decideToolApproval('approve')">
+                  <button type="button" class="tool-approve-button" @click="decideToolApproval('allow')">
                     仅本次允许
                   </button>
                 </div>

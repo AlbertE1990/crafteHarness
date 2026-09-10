@@ -8,6 +8,7 @@
 - `defineAgentConfig()` 如何把开发者输入归一化为内部协议。
 - 精简输出事件与完整轨迹事件为什么必须分层。
 - Session ID、事实日志和会话列表如何流转。
+- ToolGuard 风险规则与 Agent 内部审批生命周期如何分工。
 
 ## 2. 模块地图
 
@@ -15,6 +16,8 @@
 src/craft-agent/agent/
   config.ts        # 模型配置、依赖注入、预算和默认值归一化
   normalize-tools.ts # 原始 DefinedTool 到 AgentTool 的内部归一化
+  tool-guard.ts    # 风险评估输入、决定和应用审批事件
+  tool-approval-manager.ts # 内部 pending、超时、取消和一次性决定
   types.ts         # run 输入、精简输出和会话查询类型
   agent.ts         # AgentLoop 门面、事件投影和 Session 查询
   index.ts         # 本模块导出
@@ -60,7 +63,7 @@ const result = await agent.run({ input: '复述 hello' }, {
       process.stdout.write(event.delta)
   },
   onTrace(event) {
-    console.debug(event.type, event.runId, event.sessionId)
+    console.log(event.type, event.runId, event.sessionId)
   },
 })
 
@@ -91,6 +94,9 @@ flowchart TD
   Store <--> Loop
   RawTools[defineTool 结果] --> Normalize
   Tools --> Loop
+  Guard[toolGuard.evaluate] --> Loop
+  Loop --> Approval[Agent 内部 ApprovalManager]
+  Approval --> Output
   Loop --> Trace[完整 AgentEvent / onTrace]
   Loop --> Project[精简事件投影]
   Project --> Output[onEvent / CLI / SSE]
@@ -135,6 +141,8 @@ sequenceDiagram
 - `listSessions()` 来自 Store 目录，只返回摘要，不维护第二份 Server 内存索引，也不对每项调用 `read()`。
 - `getSession()` 返回的每条消息外层保留 Session Event 关联信息；真正的模型消息位于 `.message`。
 - `onEvent/onTrace` 是观察旁路，不能拿来修改控制流。
+- `toolGuard.evaluate()` 只决定 `allow/deny/ask`；审批等待、超时和重复提交由 Agent 内部处理。
+- 应用通过 `onEvent` 接收审批，通过 `resolveToolApproval()` 提交决定，不需要创建 Broker。
 - 自定义 Store 可以只实现 `append/read`；这时 Agent 能运行，但不能列会话。
 
 ## 7. 练习

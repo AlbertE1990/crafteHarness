@@ -149,13 +149,16 @@ JavaScript 无法安全强杀同进程同步代码。如果工具忽略信号，
 ## 权限与审批
 
 工具只声明风险和所需能力，不能给自己授权。Schema 只能验证声明的形状，无法证明工具的真实行为；
-当前实现假定工具注册代码来自可信的第一方开发者。Runtime 的 `ToolPolicy` 返回：
+当前实现假定工具注册代码来自可信的第一方开发者。普通应用通过 Agent 的 `toolGuard.evaluate()` 返回：
 
 - `allow`：允许当前调用。
 - `deny`：拒绝当前调用。
 - `ask`：请求一次性审批。
 
-没有自定义策略时，只自动允许 `risk: safe` 且不申请外部能力的工具。没有审批处理器、审批通道异常或无法得到明确结果时一律拒绝。只有 `allowed-once` 可以继续执行。
+没有自定义 ToolGuard 时，只自动允许 `risk: safe` 且不申请外部能力的工具。没有应用事件出口、审批通道
+异常或无法得到明确结果时一律拒绝。Agent 会把 ToolGuard 适配为底层 `ToolPolicy`，并用内置
+ApprovalManager 把公开 `allow/deny` 决定转换成 Harness 的一次性结果；直接使用 AgentLoop 时仍可注入
+底层 `ToolPolicy/ToolApprovalHandler`。
 
 权限结果进入 AgentLoop 后遵循固定语义：
 
@@ -168,9 +171,9 @@ JavaScript 无法安全强杀同进程同步代码。如果工具忽略信号，
 | `ask → aborted`      | 否                  | `ABORTED`，`attempts=0`                | 若整个 Run 已取消则按取消收口，否则该结果仍作为 `tool` 消息 |
 | `deny`               | 否                  | `TOOL_PERMISSION_DENIED`，`attempts=0` | 持久化失败 `tool` 消息，让模型解释策略拒绝或选择其他方案    |
 
-审批是执行前的暂停点，不是新的 Session 状态，也不是可复用权限。交互层可以把等待中的 Promise
-桥接到 UI、CLI 或外部审批系统，但必须为每次调用生成一次性关联 ID，并在拒绝、超时、断连或进程重启时
-fail-closed。`ToolApprovalHandler` 只返回封闭结果，不负责直接执行工具。
+审批是执行前的暂停点，不是新的 Session 状态，也不是可复用权限。Agent 为每次 ask 生成一次性
+`approvalId`，管理等待中的 Promise、超时、取消和重复提交；交互层只通过 Agent 事件与
+`resolveToolApproval()` 桥接 UI、CLI 或外部系统。拒绝、超时、断连或进程重启必须 fail-closed。
 
 `safeToolPolicy` 不是 JavaScript 沙箱。恶意同进程工具可以谎报 `risk`，也可以直接使用 Node.js
 文件和进程 API。未审查第三方工具必须通过部署侧可信注册、受控能力及独立进程或容器隔离，不能依赖
@@ -193,6 +196,10 @@ Tool Harness 按顺序发送：
 - `tool.call.failed`
 
 事件监听器异常会被隔离，不能改变工具执行结果。事件目前是进程内实时事件；写入未来 Session Log 前必须经过大小限制和敏感字段脱敏。
+
+以上是 Harness 完整轨迹。Agent 门面另行投影稳定的 `tool.approval.requested`、
+`tool.approval.resolved` 和 `tool.guard.denied` 应用事件，二者不能按同名猜测字段。完整映射见
+[Agent 门面协议](./agent.md#6-风险评估与用户审批)。
 
 ## 内置工具
 

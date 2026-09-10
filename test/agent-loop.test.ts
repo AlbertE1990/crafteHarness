@@ -55,11 +55,12 @@ describe('agent loop', () => {
       }],
     })
     const events: AgentEvent[] = []
+    let eventId = 0
     const loop = new AgentLoop({
       model: adapter,
       store,
       systemPrompt: '你是测试助手',
-      createId: kind => `${kind}-1`,
+      createId: kind => kind === 'event' ? `event-${++eventId}` : `${kind}-1`,
     })
 
     const result = await loop.run({

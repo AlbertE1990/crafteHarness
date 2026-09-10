@@ -34,7 +34,7 @@ const agent = new Agent({
   tools: {
     additional: [getUserLocationTool, getWeatherTool],
   },
-  toolPolicy: trustedServerToolPolicy,
+  toolGuard: serverToolGuard,
   store: new PostgresSessionStore(databasePool),
 })
 
@@ -46,7 +46,8 @@ const app = createServerApp({ agent })
 - 连接池由 Runtime 创建和关闭，不能进入 CraftAgent Core，也不能由 Store 模块在 import 时隐式创建。
 - `get_current_time` 和 `calculator` 由 Agent 自动装载，不进入 Server 工具注册表。
 - 应用工具使用 `defineTool()`，可直接组成普通只读数组并通过 `tools.additional` 追加；Agent 负责归一化。
-- 当前许可策略只适用于代码仓库内受信第一方工具，不代表第三方插件安全边界。
+- Runtime 只实现 `toolGuard.evaluate()` 的业务风险规则；pending 审批、超时和重复提交由 Agent 管理。
+- 当前风险规则只适用于代码仓库内受信第一方工具，不代表第三方插件安全边界。
 
 ## 4. 请求与取消
 
@@ -61,8 +62,14 @@ Fastify 只做必要字段转换：
 session.started   -> conversation
 message.delta     -> message.delta
 message.completed -> message.completed
+tool.approval.*  -> tool.approval.*
+tool.guard.denied -> tool.guard.denied
 error             -> error
 ```
+
+审批 POST 只调用 `agent.resolveToolApproval({ approvalId, decision })`。Server 不创建 ApprovalBroker，也不
+持有等待中的 Promise；未知、已处理、超时和重复的审批统一投影为 404。聊天 SSE 必须透传 requested 事件的
+`expiresAt`，让页面显示倒计时，但最终超时仍由 Agent 的服务端定时器裁决。
 
 会话列表调用 `agent.listSessions()`，只返回 `id/name/createAt` 摘要；进入某个会话后再通过
 `agent.getSession(sessionId)` 读取详情。标题在创建 Session 时写入 metadata，`displayHistory` 只在详情路由中

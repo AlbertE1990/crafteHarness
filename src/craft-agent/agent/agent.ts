@@ -8,6 +8,10 @@ import type {
 import type { AgentEvent, AgentRunResult } from '../core'
 import type { AgentConfigInput, DefinedAgentConfig } from './config'
 import type {
+  ResolveToolApprovalRequest,
+  ResolveToolApprovalResult,
+} from './tool-guard'
+import type {
   AgentExecutionOptions,
   AgentOutputEvent,
   AgentOutputEventListener,
@@ -16,9 +20,12 @@ import type {
   AgentSessionMessage,
   GetAgentSessionOptions,
 } from './types'
+import { randomUUID } from 'node:crypto'
 import { AgentLoop } from '../core'
 import { readSessionSnapshot } from '../sessions'
 import { defineAgentConfig } from './config'
+import { ToolApprovalManager } from './tool-approval-manager'
+import { createToolGuardPolicy } from './tool-guard'
 
 /**
  * CraftAgent 的开发者门面。
@@ -31,21 +38,33 @@ export class Agent {
   readonly store: SessionStore
   readonly limits: DefinedAgentConfig['limits']
 
+  private readonly approvalManager: ToolApprovalManager
   private readonly loop: AgentLoop
 
   constructor(config: AgentConfigInput) {
     this.config = defineAgentConfig(config)
     this.store = this.config.store
+    const createId = this.config.createId
+    this.approvalManager = new ToolApprovalManager({
+      defaultTimeoutMs: this.config.toolGuard.approvalTimeoutMs,
+      now: this.config.now,
+      ...(createId
+        ? { createApprovalId: () => createId('approval') }
+        : {}),
+    })
+    const toolPolicy = createToolGuardPolicy(
+      this.config.toolGuard,
+      this.config.tools,
+      (request, decision) => this.approvalManager.notifyDenied(request, decision),
+    )
     this.loop = new AgentLoop({
       model: this.config.model,
       store: this.store,
       tools: this.config.tools,
       ...(this.config.systemPrompt ? { systemPrompt: this.config.systemPrompt } : {}),
       limits: this.config.limits,
-      ...(this.config.toolPolicy ? { toolPolicy: this.config.toolPolicy } : {}),
-      ...(this.config.requestToolApproval
-        ? { requestToolApproval: this.config.requestToolApproval }
-        : {}),
+      toolPolicy,
+      requestToolApproval: this.approvalManager.requestApproval,
       ...(this.config.onToolEvent ? { onToolEvent: this.config.onToolEvent } : {}),
       now: this.config.now,
       ...(this.config.createId ? { createId: this.config.createId } : {}),
@@ -80,25 +99,50 @@ export class Agent {
     if (!sessionId)
       throw new TypeError('Agent sessionId 不能为空')
 
-    await emit(options.onEvent, { type: 'session.started', sessionId })
-    const project = createOutputProjector(sessionId, options.onEvent)
+    const runId = createRunId(options.runId, this.config)
+    // 没有应用事件出口时 ask 会得到 unavailable；这避免无法展示的审批长期占用内存。
+    const stopObservingApprovals = options.onEvent
+      ? this.approvalManager.observeRun(
+          runId,
+          options.onEvent,
+        )
+      : undefined
 
-    return await this.loop.run({
-      sessionId,
-      input,
-      ...(request.sessionMetadata
-        ? { sessionMetadata: request.sessionMetadata }
-        : {}),
-    }, {
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.runId ? { runId: options.runId } : {}),
-      ...(options.turnId ? { turnId: options.turnId } : {}),
-      onEvent: async (event) => {
-        await emitTrace(this.config.onTrace, event)
-        await emitTrace(options.onTrace, event)
-        await project(event)
-      },
-    })
+    try {
+      await emit(options.onEvent, { type: 'session.started', sessionId })
+      const project = createOutputProjector(sessionId, options.onEvent)
+
+      return await this.loop.run({
+        sessionId,
+        input,
+        ...(request.sessionMetadata
+          ? { sessionMetadata: request.sessionMetadata }
+          : {}),
+      }, {
+        runId,
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.turnId ? { turnId: options.turnId } : {}),
+        onEvent: async (event) => {
+          await emitTrace(this.config.onTrace, event)
+          await emitTrace(options.onTrace, event)
+          await project(event)
+        },
+      })
+    }
+    finally {
+      stopObservingApprovals?.()
+    }
+  }
+
+  /**
+   * 解决一次等待中的工具审批。
+   *
+   * approvalId 只接受首个 allow/deny；重复、过期或未知决定返回 accepted=false，绝不会再次执行工具。
+   */
+  resolveToolApproval(
+    request: ResolveToolApprovalRequest,
+  ): ResolveToolApprovalResult {
+    return this.approvalManager.resolve(request)
   }
 
   /** 读取一个 Session 的一致快照并返回带事件上下文的消息详情。 */
@@ -137,6 +181,21 @@ export class Agent {
 
     return await this.store.list(options)
   }
+}
+
+/** Agent 必须在进入 AgentLoop 前确定 runId，审批管理器才能提前注册对应事件出口。 */
+function createRunId(
+  value: string | undefined,
+  config: DefinedAgentConfig,
+): string {
+  const runId = value === undefined
+    ? config.createId?.('run') ?? `run-${randomUUID()}`
+    : typeof value === 'string'
+      ? value.trim()
+      : ''
+  if (!runId)
+    throw new TypeError('Agent runId 不能为空')
+  return runId
 }
 
 /**

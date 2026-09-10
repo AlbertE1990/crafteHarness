@@ -6,4 +6,9 @@ export default antfu(
     formatters: true,
     pnpm: true,
   },
+  {
+    rules: {
+      'no-console': ['warn', { allow: ['warn', 'error', 'log', 'dir'] }],
+    },
+  },
 )

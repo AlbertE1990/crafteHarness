@@ -1,16 +1,15 @@
 // @vitest-environment node
 
-import type { ModelStreamChunk } from '../src/craft-agent'
+import type { AgentConfigInput, ModelStreamChunk } from '../src/craft-agent'
 import type { AgentStreamEvent } from '../src/server/app'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import Agent, { MemorySessionStore } from '../src/craft-agent'
 import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
 import {
   manageRuntimeResourceTool,
-  trustedServerToolPolicy,
+  serverToolGuard,
 } from '../src/server/agent-tools'
 import { createServerApp } from '../src/server/app'
-import { ToolApprovalBroker } from '../src/server/tool-approval-broker'
 
 /** 构造 Server Runtime 契约测试使用的标准模型 chunk。 */
 function chunk(
@@ -39,6 +38,39 @@ function parseSse(body: string): AgentStreamEvent[] {
         .join('\n')
       return JSON.parse(data) as AgentStreamEvent
     })
+}
+
+/** 为一次 Agent 测试生成唯一关联 ID，并固定预期 approvalId。 */
+function createIdFactory(
+  approvalId: string,
+): NonNullable<AgentConfigInput['createId']> {
+  let eventId = 0
+  return (kind) => {
+    if (kind === 'approval')
+      return approvalId
+    if (kind === 'event')
+      return `event-${++eventId}`
+    return `${kind}-http`
+  }
+}
+
+/** Fastify.inject 在 SSE 完成后才返回，因此轮询独立 POST，直到 Agent 已建立 pending approval。 */
+async function submitApprovalWhenReady(
+  baseUrl: string,
+  approvalId: string,
+  decision: 'allow' | 'deny',
+) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const response = await fetch(`${baseUrl}/api/tool-approvals/${approvalId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision }),
+    })
+    if (response.status === 200)
+      return response
+    await new Promise<void>(resolve => setTimeout(resolve, 5))
+  }
+  throw new Error(`审批 ${approvalId} 未进入等待状态`)
 }
 
 describe('server runtime HTTP boundary', () => {
@@ -236,42 +268,48 @@ describe('server runtime HTTP boundary', () => {
         { method: 'stream', chunks: [chunk({ content: '资源已在用户同意后写入' }, 'stop')] },
       ],
     })
-    const broker = new ToolApprovalBroker({ createApprovalId: () => 'approval-http' })
     const agent = new Agent({
       model: adapter,
       createSessionId: () => 'approval-session',
+      createId: createIdFactory('approval-http'),
+      now: () => new Date('2026-09-10T02:00:00.000Z'),
       tools: { mode: 'replace', tools: [manageRuntimeResourceTool] },
-      toolPolicy: trustedServerToolPolicy,
-      requestToolApproval: broker.requestApproval,
+      toolGuard: serverToolGuard,
     })
-    const app = createServerApp({ agent, approvalBroker: broker, logger: false })
+    const app = createServerApp({ agent, logger: false })
 
     try {
-      const chatPromise = app.inject({
+      const baseUrl = await app.listen({ port: 0, host: '127.0.0.1' })
+      const chat = await fetch(`${baseUrl}/api/chat`, {
         method: 'POST',
-        url: '/api/chat',
-        payload: { message: '写入演示资源' },
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: '写入演示资源' }),
       })
-      await vi.waitFor(() => expect(broker.hasPending('approval-http')).toBe(true))
-
-      const approval = await app.inject({
-        method: 'POST',
-        url: '/api/tool-approvals/approval-http',
-        payload: { decision: 'approve' },
+      const approval = await submitApprovalWhenReady(baseUrl, 'approval-http', 'allow')
+      const chatBody = await chat.text()
+      // Agent 才是一次性语义的事实边界；HTTP 路由只把 accepted=false 投影为 404。
+      const duplicateApproval = agent.resolveToolApproval({
+        approvalId: 'approval-http',
+        decision: 'allow',
       })
-      const chat = await chatPromise
 
-      expect(approval.statusCode).toBe(200)
-      expect(parseSse(chat.body)).toEqual(expect.arrayContaining([
+      expect(approval.status).toBe(200)
+      expect(duplicateApproval).toEqual({
+        accepted: false,
+        reason: 'not-found-or-settled',
+      })
+      expect(parseSse(chatBody)).toEqual(expect.arrayContaining([
         expect.objectContaining({
           type: 'tool.approval.requested',
           approvalId: 'approval-http',
           toolName: 'manage_runtime_resource',
+          approvalTimeoutMs: 45_000,
+          expiresAt: '2026-09-10T02:00:45.000Z',
         }),
         expect.objectContaining({
-          type: 'tool.approval.decided',
+          type: 'tool.approval.resolved',
           approvalId: 'approval-http',
-          outcome: 'allowed-once',
+          outcome: 'allowed',
         }),
         expect.objectContaining({
           type: 'message.completed',
@@ -309,37 +347,31 @@ describe('server runtime HTTP boundary', () => {
         { method: 'stream', chunks: [chunk({ content: '已尊重用户拒绝，不再写入' }, 'stop')] },
       ],
     })
-    const broker = new ToolApprovalBroker({ createApprovalId: () => 'approval-reject' })
     const agent = new Agent({
       model: adapter,
       createSessionId: () => 'rejection-session',
+      createId: createIdFactory('approval-reject'),
       tools: { mode: 'replace', tools: [manageRuntimeResourceTool] },
-      toolPolicy: trustedServerToolPolicy,
-      requestToolApproval: broker.requestApproval,
+      toolGuard: serverToolGuard,
     })
-    const app = createServerApp({ agent, approvalBroker: broker, logger: false })
+    const app = createServerApp({ agent, logger: false })
 
     try {
-      const chatPromise = app.inject({
+      const baseUrl = await app.listen({ port: 0, host: '127.0.0.1' })
+      const chat = await fetch(`${baseUrl}/api/chat`, {
         method: 'POST',
-        url: '/api/chat',
-        payload: { message: '写入后由我拒绝' },
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: '写入后由我拒绝' }),
       })
-      await vi.waitFor(() => expect(broker.hasPending('approval-reject')).toBe(true))
+      const rejection = await submitApprovalWhenReady(baseUrl, 'approval-reject', 'deny')
+      const chatBody = await chat.text()
 
-      const rejection = await app.inject({
-        method: 'POST',
-        url: '/api/tool-approvals/approval-reject',
-        payload: { decision: 'reject' },
-      })
-      const chat = await chatPromise
-
-      expect(rejection.statusCode).toBe(200)
-      expect(parseSse(chat.body)).toEqual(expect.arrayContaining([
+      expect(rejection.status).toBe(200)
+      expect(parseSse(chatBody)).toEqual(expect.arrayContaining([
         expect.objectContaining({
-          type: 'tool.approval.decided',
+          type: 'tool.approval.resolved',
           approvalId: 'approval-reject',
-          outcome: 'rejected',
+          outcome: 'denied',
         }),
         expect.objectContaining({
           type: 'message.completed',
@@ -381,7 +413,7 @@ describe('server runtime HTTP boundary', () => {
       model: adapter,
       createSessionId: () => 'denial-session',
       tools: { mode: 'replace', tools: [manageRuntimeResourceTool] },
-      toolPolicy: trustedServerToolPolicy,
+      toolGuard: serverToolGuard,
     })
     const app = createServerApp({ agent, logger: false })
 
@@ -395,7 +427,7 @@ describe('server runtime HTTP boundary', () => {
 
       expect(events).toEqual(expect.arrayContaining([
         {
-          type: 'tool.policy.denied',
+          type: 'tool.guard.denied',
           callId: 'call-denied-delete',
           toolName: 'manage_runtime_resource',
           reason: '受保护资源 protected/system 禁止删除',

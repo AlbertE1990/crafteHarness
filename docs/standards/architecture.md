@@ -28,6 +28,8 @@ src/
     index.ts                    # 默认导出 Agent，并重导出公共协议
     agent/
       agent.ts                  # 统一门面、输出投影、Session 查询
+      tool-guard.ts             # 风险评估公共协议及底层策略适配
+      tool-approval-manager.ts  # Agent 内部一次性审批生命周期
       config.ts                 # defineAgentConfig 与内置模型配置
       normalize-tools.ts        # 工具定义的内部归一化边界
       types.ts                  # 门面输入、输出与会话投影

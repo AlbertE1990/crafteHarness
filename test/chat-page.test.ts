@@ -154,8 +154,13 @@ describe('chat page conversations', () => {
         callId: 'call-ui',
         toolName: 'manage_runtime_resource',
         reason: '工具将写入进程内资源 demo/ui',
+        title: '确认写入资源',
+        details: { operation: 'write', resource: 'demo/ui' },
         input: { operation: 'write', resource: 'demo/ui', content: 'hello' },
         risk: 'destructive',
+        approvalTimeoutMs: 45_000,
+        requestedAt: new Date(Date.now()).toISOString(),
+        expiresAt: new Date(Date.now() + 45_000).toISOString(),
       },
     ])
     const fetchMock = vi.fn()
@@ -172,21 +177,23 @@ describe('chat page conversations', () => {
     await flushPromises()
 
     expect(wrapper.find('textarea').exists()).toBe(false)
-    expect(wrapper.get('.tool-confirm-card').text()).toContain('工具需要确认')
+    expect(wrapper.get('.tool-confirm-card').text()).toContain('确认写入资源')
     expect(wrapper.get('.tool-confirm-card').text()).toContain('manage_runtime_resource')
+    expect(wrapper.get('.tool-confirm-card').text()).toContain('剩余 00:')
     expect(wrapper.get('.tool-input-details').text()).toContain('查看调用参数')
 
     await wrapper.get('.tool-approve-button').trigger('click')
     await flushPromises()
     expect(fetchMock.mock.calls[2][0]).toBe('/api/tool-approvals/approval-ui')
-    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({ decision: 'approve' })
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({ decision: 'allow' })
 
     stream.push({
-      type: 'tool.approval.decided',
+      type: 'tool.approval.resolved',
       approvalId: 'approval-ui',
       callId: 'call-ui',
       toolName: 'manage_runtime_resource',
-      outcome: 'allowed-once',
+      outcome: 'allowed',
+      resolvedAt: new Date().toISOString(),
     })
     stream.push({
       type: 'message.completed',
@@ -205,7 +212,7 @@ describe('chat page conversations', () => {
     const stream = controlledStreamResponse([
       { type: 'conversation', conversationId: 'chat-denied' },
       {
-        type: 'tool.policy.denied',
+        type: 'tool.guard.denied',
         callId: 'call-denied',
         toolName: 'manage_runtime_resource',
         reason: '受保护资源 protected/system 禁止删除',

@@ -7,6 +7,7 @@ import type {
   AgentRunResult,
 } from '../core'
 import type { JsonObject } from '../types/json'
+import type { ToolGuardOutputEvent } from './tool-guard'
 
 /** Agent.run() 的业务输入；未传 sessionId 时由 Agent 自动创建。 */
 export interface AgentRequest {
@@ -17,7 +18,8 @@ export interface AgentRequest {
 
 /** 面向应用层的精简实时输出；完整执行轨迹由 onTrace 暴露。 */
 export type AgentOutputEvent
-  = | { readonly type: 'session.started', readonly sessionId: string }
+  = ToolGuardOutputEvent
+    | { readonly type: 'session.started', readonly sessionId: string }
     | {
       readonly type: 'message.delta'
       readonly sessionId: string

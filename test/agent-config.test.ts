@@ -94,6 +94,31 @@ describe('agent config', () => {
     expect(agent.limits).toEqual({ maxModelSteps: 8, maxToolCalls: 32 })
   })
 
+  it('normalizes Tool Guard defaults under the Agent configuration root', () => {
+    const evaluate = () => ({ decision: 'allow' as const })
+    const config = defineAgentConfig({
+      model: new ScriptedModelAdapter({ script: [] }),
+      toolGuard: { evaluate, approvalTimeoutMs: 90_000 },
+    })
+
+    expect(config.toolGuard).toEqual({ evaluate, approvalTimeoutMs: 90_000 })
+    expect(Object.isFrozen(config.toolGuard)).toBe(true)
+  })
+
+  it('rejects invalid Tool Guard configuration before a Run starts', () => {
+    const model = new ScriptedModelAdapter({ script: [] })
+    expect(() => defineAgentConfig({
+      model,
+      toolGuard: { evaluate: () => ({ decision: 'allow' }), approvalTimeoutMs: 0 },
+    })).toThrow('approvalTimeoutMs 必须是 1 到 2147483647 的整数')
+
+    expect(() => defineAgentConfig({
+      model,
+      // 验证运行时边界，而不依赖 TypeScript 编译期检查。
+      toolGuard: { evaluate: undefined },
+    } as unknown as Parameters<typeof defineAgentConfig>[0])).toThrow('evaluate 必须是函数')
+  })
+
   it('automatically registers all built-in tools by default', () => {
     const config = defineAgentConfig({
       model: new ScriptedModelAdapter({ script: [] }),

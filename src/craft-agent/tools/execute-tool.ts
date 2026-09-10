@@ -102,6 +102,7 @@ export async function executeTool<
     )
   }
 
+  // Policy 只能看到 Schema 已校验的数据，避免拿畸形模型参数参与路径、资源或权限判断。
   const policyRequest = {
     callId: options.callId,
     ...(options.runId ? { runId: options.runId } : {}),
@@ -114,6 +115,7 @@ export async function executeTool<
 
   let policyDecision: unknown
   try {
+    // 未注入部署侧策略时使用 fail-closed 的 safeToolPolicy，而不是默认允许所有工具。
     policyDecision = await (options.policy ?? safeToolPolicy).evaluate(policyRequest)
   }
   catch (error) {
@@ -151,6 +153,7 @@ export async function executeTool<
   })
 
   if (policyDecision.decision === 'deny') {
+    // deny 发生在 attempt 循环之前，所以业务 execute 不会运行，attempts 固定为 0。
     return await finishFailure(
       permissionDeniedError(policyDecision.reason),
       0,
@@ -161,6 +164,7 @@ export async function executeTool<
   }
 
   if (policyDecision.decision === 'ask') {
+    // 先发核心轨迹，再调用交互处理器；该轨迹不携带 Server 自己生成的 approvalId。
     await emit(options.onEvent, {
       ...base(),
       type: 'tool.approval.requested',
@@ -173,9 +177,15 @@ export async function executeTool<
     }
     else if (options.requestApproval) {
       try {
+        // await 只暂停当前工具 Promise，不会阻塞 Node.js 事件循环或其他 HTTP 请求。
         outcome = await options.requestApproval({
           ...policyRequest,
           reason: policyDecision.reason,
+          ...(policyDecision.title ? { title: policyDecision.title } : {}),
+          ...(policyDecision.details ? { details: policyDecision.details } : {}),
+          ...(policyDecision.approvalTimeoutMs !== undefined
+            ? { approvalTimeoutMs: policyDecision.approvalTimeoutMs }
+            : {}),
         })
       }
       catch {
@@ -191,6 +201,7 @@ export async function executeTool<
     })
 
     if (outcome !== 'allowed-once') {
+      // rejected/unavailable 是标准权限失败；aborted 保留独立取消错误语义。
       const error = outcome === 'aborted'
         ? abortedError()
         : permissionDeniedError(`工具审批结果：${outcome}`)
@@ -198,6 +209,7 @@ export async function executeTool<
     }
   }
 
+  // 只有 allow 或 ask -> allowed-once 能到达执行尝试；审批不会因自动重试而重复询问。
   const maxAttempts = tool.retry?.maxAttempts ?? 1
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (callerSignal.aborted) {

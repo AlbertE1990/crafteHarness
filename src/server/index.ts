@@ -1,6 +1,6 @@
 import process, { loadEnvFile } from 'node:process'
 import Agent from '../craft-agent'
-import { serverTools, trustedServerToolPolicy } from './agent-tools'
+import { serverToolGuard, serverTools } from './agent-tools'
 import { createServerApp } from './app'
 import {
   createPostgresPool,
@@ -8,7 +8,6 @@ import {
   readPostgresRuntimeConfig,
 } from './database/postgres'
 import { PostgresSessionStore } from './stores/postgres-session-store'
-import { ToolApprovalBroker } from './tool-approval-broker'
 
 loadEnvFile('.env.local')
 const PORT = Number(process.env.PORT ?? 3000)
@@ -19,8 +18,6 @@ if (!apiKey)
 // Runtime 持有连接池生命周期；CraftAgent 只接收 SessionStore 协议。
 const databasePool = createPostgresPool(readPostgresRuntimeConfig())
 const postgresSessionStore = new PostgresSessionStore(databasePool)
-// Broker 只保存尚未决定的短期审批，不承担 Session 或业务数据持久化。
-const toolApprovalBroker = new ToolApprovalBroker()
 const agent = new Agent({
   model: {
     provider: 'deepseek',
@@ -39,11 +36,11 @@ const agent = new Agent({
   tools: {
     additional: serverTools,
   },
-  toolPolicy: trustedServerToolPolicy,
-  requestToolApproval: toolApprovalBroker.requestApproval,
+  // 应用只实现风险评估规则；等待、超时、取消和防重复提交都由 Agent 内部完成。
+  toolGuard: serverToolGuard,
   store: postgresSessionStore,
 })
-const fastify = createServerApp({ agent, approvalBroker: toolApprovalBroker })
+const fastify = createServerApp({ agent })
 fastify.addHook('onClose', async () => {
   await databasePool.end()
 })

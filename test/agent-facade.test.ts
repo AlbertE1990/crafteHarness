@@ -7,7 +7,8 @@ import type {
   SessionStore,
 } from '../src/craft-agent'
 import { describe, expect, it, vi } from 'vitest'
-import Agent, { MemorySessionStore } from '../src/craft-agent'
+import { z } from 'zod'
+import Agent, { defineTool, MemorySessionStore } from '../src/craft-agent'
 import { ScriptedModelAdapter } from '../src/craft-agent/adapters/testing'
 
 /** 构造门面测试使用的单候选标准流块。 */
@@ -130,5 +131,88 @@ describe('agent facade', () => {
     await expect(agent.listSessions()).rejects.toThrow(
       '当前 SessionStore 未实现 list() 会话目录能力',
     )
+  })
+
+  it('owns approval waiting and lets the application resolve it through the Agent instance', async () => {
+    const tool = defineTool({
+      name: 'write_demo',
+      description: '写入演示数据',
+      inputSchema: z.strictObject({ value: z.string() }),
+      outputSchema: z.strictObject({ saved: z.boolean() }),
+      security: { risk: 'write', idempotent: false },
+      execute: () => ({ saved: true }),
+    })
+    const adapter = new ScriptedModelAdapter({
+      script: [
+        {
+          method: 'stream',
+          chunks: [{
+            id: 'chunk-tool-call',
+            choices: [{
+              index: 0,
+              finish_reason: 'tool_calls',
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: 'call-write',
+                  type: 'function',
+                  function: { name: 'write_demo', arguments: '{"value":"hello"}' },
+                }],
+              },
+            }],
+            created: 1_788_748_800,
+            model: 'scripted-model',
+            object: 'chat.completion.chunk',
+          }],
+        },
+        { method: 'stream', chunks: [chunk('审批后完成')] },
+      ],
+    })
+    let eventId = 0
+    const agent = new Agent({
+      model: adapter,
+      tools: { mode: 'replace', tools: [tool] },
+      toolGuard: {
+        approvalTimeoutMs: 120_000,
+        evaluate: () => ({
+          decision: 'ask',
+          reason: '需要写入数据',
+          approvalTimeoutMs: 45_000,
+        }),
+      },
+      createId: kind => kind === 'event' ? `event-${++eventId}` : `${kind}-facade`,
+      now: () => new Date('2026-09-10T02:00:00.000Z'),
+    })
+    const output: AgentOutputEvent[] = []
+
+    const result = await agent.run({ sessionId: 'approval-facade', input: '写入' }, {
+      onEvent(event) {
+        output.push(event)
+        if (event.type === 'tool.approval.requested') {
+          expect(agent.resolveToolApproval({
+            approvalId: event.approvalId,
+            decision: 'allow',
+          })).toEqual({ accepted: true })
+        }
+      },
+    })
+
+    expect(result).toMatchObject({ status: 'completed', content: '审批后完成' })
+    expect(output).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'tool.approval.requested',
+        approvalId: 'approval-facade',
+        approvalTimeoutMs: 45_000,
+        expiresAt: '2026-09-10T02:00:45.000Z',
+      }),
+      expect.objectContaining({
+        type: 'tool.approval.resolved',
+        outcome: 'allowed',
+      }),
+    ]))
+    expect(agent.resolveToolApproval({
+      approvalId: 'approval-facade',
+      decision: 'deny',
+    })).toEqual({ accepted: false, reason: 'not-found-or-settled' })
   })
 })

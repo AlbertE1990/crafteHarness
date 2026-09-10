@@ -461,6 +461,8 @@ export class AgentLoop {
           })
         : await this.executeToolCall(state, step, toolCall, signals.signal, eventBase, listener)
 
+      // 成功、业务失败、用户拒绝和策略拒绝都必须产生对应的 role=tool 消息。
+      // 这样下一 Model Step 能看到明确结果，不会留下只有 assistant tool_call、没有响应的悬空历史。
       await this.appendMessage(state, {
         role: 'tool',
         tool_call_id: toolCall.id,
@@ -505,6 +507,7 @@ export class AgentLoop {
       sessionId: state.sessionId,
       signal,
       ...(this.config.toolPolicy ? { policy: this.config.toolPolicy } : {}),
+      // AgentLoop 不理解前端或 HTTP；它只把 Agent 配置中的审批函数继续传给 Tool Harness。
       ...(this.config.requestToolApproval
         ? { requestApproval: this.config.requestToolApproval }
         : {}),

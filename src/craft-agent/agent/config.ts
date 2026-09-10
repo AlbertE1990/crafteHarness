@@ -15,11 +15,10 @@ import type {
   AgentTool,
 } from '../core'
 import type {
-  ToolApprovalHandler,
   ToolEventListener,
-  ToolPolicy,
 } from '../tools'
 import type { AgentToolDefinitionInput } from './normalize-tools'
+import type { DefinedToolGuardConfig, ToolGuardConfig } from './tool-guard'
 import { randomUUID } from 'node:crypto'
 import { DeepSeekModelAdapter } from '../adapters/deepseek'
 import { OpenAICompatibleModelAdapter } from '../adapters/openai-compatible'
@@ -27,6 +26,7 @@ import { builtinToolNames, createBuiltinTools } from '../builtins/registry'
 import { createLimits } from '../core/stop-policy'
 import { MemorySessionStore } from '../sessions'
 import { normalizeAgentToolDefinitions } from './normalize-tools'
+import { defineToolGuardConfig } from './tool-guard'
 
 /** 使用内置 DeepSeek Adapter 时需要的声明式配置。 */
 export interface DeepSeekAgentModelConfig extends DeepSeekModelAdapterConfig {
@@ -74,15 +74,16 @@ export interface AgentConfigInput {
   readonly store?: SessionStore
   readonly systemPrompt?: string
   readonly limits?: Partial<AgentLoopLimits>
-  readonly toolPolicy?: ToolPolicy
-  readonly requestToolApproval?: ToolApprovalHandler
+  /** 工具风险评估与通用审批时限的唯一配置入口；等待用户由 Agent 内部完成。 */
+  readonly toolGuard?: ToolGuardConfig
+  /** Tool Harness 的完整生命周期观察器，不参与授权或其他控制流。 */
   readonly onToolEvent?: ToolEventListener
   /** 所有低层 AgentEvent 的全局观察器。 */
   readonly onTrace?: AgentEventListener
   /** 测试或宿主环境可注入的时钟。 */
   readonly now?: () => Date
-  /** 测试或宿主环境可注入的 Run/Turn ID 生成器。 */
-  readonly createId?: (kind: 'run' | 'turn') => string
+  /** 测试或宿主环境可注入的 Run、Turn、Event 和 Approval ID 生成器。 */
+  readonly createId?: (kind: 'run' | 'turn' | 'event' | 'approval') => string
   /** 未指定 sessionId 时使用的 ID 生成器。 */
   readonly createSessionId?: () => string
 }
@@ -94,12 +95,11 @@ export interface DefinedAgentConfig {
   readonly store: SessionStore
   readonly systemPrompt?: string
   readonly limits: AgentLoopLimits
-  readonly toolPolicy?: ToolPolicy
-  readonly requestToolApproval?: ToolApprovalHandler
+  readonly toolGuard: DefinedToolGuardConfig
   readonly onToolEvent?: ToolEventListener
   readonly onTrace?: AgentEventListener
   readonly now: () => Date
-  readonly createId?: (kind: 'run' | 'turn') => string
+  readonly createId?: (kind: 'run' | 'turn' | 'event' | 'approval') => string
   readonly createSessionId: () => string
 }
 
@@ -127,6 +127,7 @@ export function defineAgentConfig(input: AgentConfigInput): DefinedAgentConfig {
   const model = createModelAdapter(input.model)
   const tools = createTools(input.tools)
   const limits = createLimits(input.limits)
+  const toolGuard = defineToolGuardConfig(input.toolGuard)
   const systemPrompt = input.systemPrompt?.trim()
   const now = input.now ?? (() => new Date())
   const createSessionId = input.createSessionId
@@ -138,10 +139,7 @@ export function defineAgentConfig(input: AgentConfigInput): DefinedAgentConfig {
     store: input.store ?? new MemorySessionStore({ now }),
     ...(systemPrompt ? { systemPrompt } : {}),
     limits,
-    ...(input.toolPolicy ? { toolPolicy: input.toolPolicy } : {}),
-    ...(input.requestToolApproval
-      ? { requestToolApproval: input.requestToolApproval }
-      : {}),
+    toolGuard,
     ...(input.onToolEvent ? { onToolEvent: input.onToolEvent } : {}),
     ...(input.onTrace ? { onTrace: input.onTrace } : {}),
     now,
