@@ -3,6 +3,7 @@ import type {
   ModelMessage,
   SessionEventDraft,
 } from '../contracts'
+import type { HarnessLocale } from '../locale'
 import type { ToolExecutionResult } from '../tools'
 import type { ModelStepResult } from './model-stream'
 import type { MutableRunState } from './run-state'
@@ -22,6 +23,7 @@ import type {
   AgentTool,
 } from './types'
 import { randomUUID } from 'node:crypto'
+import { diagnostic, resolveLocale } from '../locale'
 import { deriveModelMessages, readSessionSnapshot, SessionStoreError } from '../sessions'
 import {
   createToolFailure,
@@ -53,27 +55,35 @@ export class AgentLoop<TContext = undefined> {
 
   private readonly config: AgentLoopConfig<TContext>
   private readonly tools: ReadonlyMap<string, AgentTool<TContext>>
+  private readonly locale: HarnessLocale
   private readonly now: () => Date
   private readonly createId: (kind: 'run' | 'turn' | 'event') => string
 
   constructor(config: AgentLoopConfig<TContext>) {
-    validateConfig(config)
+    const locale = resolveLocale(
+      typeof config === 'object' && config !== null
+        ? (config as { readonly locale?: unknown }).locale
+        : undefined,
+    )
+    validateConfig(config, locale)
     const model = defineAgentLoopModelExecutionOptions(undefined, {
       stream: true,
       id: config.model.id,
       ...(config.model.reasoningEffort === undefined
         ? {}
         : { reasoningEffort: config.model.reasoningEffort }),
-    })
+    }, locale)
     this.config = Object.freeze({
       ...config,
+      locale,
       model: Object.freeze({
         id: model.id,
         ...(model.reasoningEffort === undefined ? {} : { reasoningEffort: model.reasoningEffort }),
       }),
     })
-    this.limits = createLimits(config.limits)
-    this.tools = createAgentToolMap(config.tools ?? [])
+    this.locale = locale
+    this.limits = createLimits(config.limits, locale)
+    this.tools = createAgentToolMap(config.tools ?? [], locale)
     this.now = config.now ?? (() => new Date())
     this.createId = config.createId ?? (kind => `${kind}-${randomUUID()}`)
   }
@@ -85,7 +95,7 @@ export class AgentLoop<TContext = undefined> {
    * AgentRunResult，并通过 onEvent 输出实时过程。
    */
   async run(request: AgentRunRequest<TContext>, options: AgentRunOptions = {}): Promise<AgentRunResult> {
-    const input = validateRequest(request)
+    const input = validateRequest(request, this.locale)
     // 一次 Run 只解析一次模型设置，工具往返后的后续 Step 继续使用相同配置。
     const modelExecution = defineAgentLoopModelExecutionOptions(options.model, {
       stream: true,
@@ -93,9 +103,9 @@ export class AgentLoop<TContext = undefined> {
       ...(this.config.model.reasoningEffort === undefined
         ? {}
         : { reasoningEffort: this.config.model.reasoningEffort }),
-    })
+    }, this.locale)
     const state = this.createRunState(request, options)
-    const signals = createRunSignals(this.limits.maxDurationMs, options.signal)
+    const signals = createRunSignals(this.limits.maxDurationMs, options.signal, this.locale)
     const eventBase = (): AgentEventBase => ({
       runId: state.runId,
       turnId: state.turnId,
@@ -131,7 +141,7 @@ export class AgentLoop<TContext = undefined> {
       await emit(options.onEvent, { ...eventBase(), type: 'agent.turn.started' })
 
       while (state.steps < this.limits.maxModelSteps) {
-        const interruption = getInterruption(signals)
+        const interruption = getInterruption(signals, this.locale)
         if (interruption) {
           return await this.finishStopped(
             state,
@@ -149,7 +159,7 @@ export class AgentLoop<TContext = undefined> {
           return await this.finishStopped(
             state,
             'max_total_tokens',
-            createStopError('AGENT_MAX_TOTAL_TOKENS', 'Run 已达到总 token 预算'),
+            createStopError('AGENT_MAX_TOTAL_TOKENS', diagnostic(this.locale, 'Run 已达到总 token 预算', 'Run reached its total token budget')),
             eventBase,
             options.onEvent,
           )
@@ -175,7 +185,7 @@ export class AgentLoop<TContext = undefined> {
           )
         }
         catch (error) {
-          const interrupted = getInterruption(signals)
+          const interrupted = getInterruption(signals, this.locale)
           if (interrupted) {
             return await this.finishStopped(
               state,
@@ -211,7 +221,7 @@ export class AgentLoop<TContext = undefined> {
         appendReasoning(state, stepResult.reasoning)
         addUsage(state, stepResult.usage)
 
-        const interrupted = getInterruption(signals)
+        const interrupted = getInterruption(signals, this.locale)
         if (interrupted) {
           return await this.finishStopped(
             state,
@@ -227,7 +237,7 @@ export class AgentLoop<TContext = undefined> {
             return await this.finishStopped(
               state,
               'max_tool_calls',
-              createStopError('AGENT_MAX_TOOL_CALLS', '模型请求的工具调用超过 Run 预算'),
+              createStopError('AGENT_MAX_TOOL_CALLS', diagnostic(this.locale, '模型请求的工具调用超过 Run 预算', 'Model-requested tool calls exceeded the Run budget')),
               eventBase,
               options.onEvent,
             )
@@ -279,7 +289,7 @@ export class AgentLoop<TContext = undefined> {
             'model_protocol_error',
             {
               code: 'MODEL_PROTOCOL_ERROR',
-              message: '模型既没有返回最终文本，也没有返回工具调用',
+              message: diagnostic(this.locale, '模型既没有返回最终文本，也没有返回工具调用', 'The model returned neither final text nor tool calls'),
             },
             eventBase,
             options.onEvent,
@@ -314,7 +324,7 @@ export class AgentLoop<TContext = undefined> {
           ...(stepResult.usage ? { usage: stepResult.usage } : {}),
         })
 
-        const finishStop = getModelFinishStop(stepResult.finishReason)
+        const finishStop = getModelFinishStop(stepResult.finishReason, this.locale)
         if (finishStop) {
           return await this.finishStopped(
             state,
@@ -331,7 +341,7 @@ export class AgentLoop<TContext = undefined> {
       return await this.finishStopped(
         state,
         'max_model_steps',
-        createStopError('AGENT_MAX_MODEL_STEPS', 'Run 已达到最大模型 Step 数'),
+        createStopError('AGENT_MAX_MODEL_STEPS', diagnostic(this.locale, 'Run 已达到最大模型 Step 数', 'Run reached the maximum number of model Steps')),
         eventBase,
         options.onEvent,
       )
@@ -345,8 +355,8 @@ export class AgentLoop<TContext = undefined> {
   private createRunState(request: AgentRunRequest<TContext>, options: AgentRunOptions): MutableRunState {
     const runId = options.runId ?? this.createId('run')
     const turnId = options.turnId ?? this.createId('turn')
-    validateIdentifier(runId, 'runId')
-    validateIdentifier(turnId, 'turnId')
+    validateIdentifier(runId, 'runId', this.locale)
+    validateIdentifier(turnId, 'turnId', this.locale)
 
     return {
       runId,
@@ -376,6 +386,7 @@ export class AgentLoop<TContext = undefined> {
     const snapshot = await readSessionSnapshot(
       { scopeId: state.scopeId, sessionId: state.sessionId },
       this.config.store,
+      { locale: this.locale },
     )
     const events: SessionEventDraft[] = []
 
@@ -432,11 +443,12 @@ export class AgentLoop<TContext = undefined> {
     const snapshot = await readSessionSnapshot(
       { scopeId: state.scopeId, sessionId: state.sessionId },
       this.config.store,
+      { locale: this.locale },
     )
     if (snapshot.version !== state.sessionVersion) {
       throw new SessionStoreError({
         code: 'SESSION_VERSION_CONFLICT',
-        message: `Session ${state.sessionId} 在 Run 执行期间被其他写入者修改`,
+        message: diagnostic(this.locale, `Session ${state.sessionId} 在 Run 执行期间被其他写入者修改`, `Session ${state.sessionId} was modified by another writer during the Run`),
         sessionId: state.sessionId,
         expectedVersion: state.sessionVersion,
         actualVersion: snapshot.version,
@@ -453,7 +465,7 @@ export class AgentLoop<TContext = undefined> {
     const toolModels = [...this.tools.values()].map(tool => tool.model)
     const request = {
       model: modelExecution.id,
-      messages: deriveModelMessages(snapshot.events),
+      messages: deriveModelMessages(snapshot.events, this.locale),
       ...(toolModels.length > 0
         ? { tools: toolModels, parallel_tool_calls: false as const }
         : {}),
@@ -466,6 +478,7 @@ export class AgentLoop<TContext = undefined> {
       signal,
       runId: state.runId,
       sessionId: state.sessionId,
+      locale: this.locale,
     }
 
     if (!modelExecution.stream) {
@@ -476,7 +489,7 @@ export class AgentLoop<TContext = undefined> {
         step,
         completion,
       })
-      return consumeModelCompletion(completion, this.config.adapter.provider)
+      return consumeModelCompletion(completion, this.config.adapter.provider, this.locale)
     }
 
     const stream = await this.config.adapter.stream(request, callOptions)
@@ -488,7 +501,7 @@ export class AgentLoop<TContext = undefined> {
         step,
         chunk,
       })
-    }, this.config.adapter.provider)
+    }, this.config.adapter.provider, this.locale)
   }
 
   /** 按模型返回顺序串行执行工具，并在每次执行后立即持久化对应 tool 消息。 */
@@ -512,7 +525,7 @@ export class AgentLoop<TContext = undefined> {
         arguments: toolCall.function.arguments,
       })
 
-      const interrupted = getInterruption(signals)
+      const interrupted = getInterruption(signals, this.locale)
       const result = interrupted
         ? createToolFailure({
             code: 'TOOL_ABORTED',
@@ -561,12 +574,12 @@ export class AgentLoop<TContext = undefined> {
     if (!tool) {
       return createToolFailure({
         code: 'TOOL_NOT_FOUND',
-        message: `工具 ${toolCall.function.name} 不存在`,
+        message: diagnostic(this.locale, `工具 ${toolCall.function.name} 不存在`, `Tool ${toolCall.function.name} does not exist`),
         retryable: false,
       })
     }
 
-    const parsed = parseToolArguments(toolCall.function.arguments)
+    const parsed = parseToolArguments(toolCall.function.arguments, this.locale)
     if (!parsed.ok)
       return createToolFailure(parsed.error)
 
@@ -576,6 +589,7 @@ export class AgentLoop<TContext = undefined> {
       sessionId: state.sessionId,
       context,
       signal,
+      locale: this.locale,
       ...(tool.guard !== undefined ? { guardOverride: tool.guard } : {}),
       ...(this.config.globalGuard ? { globalGuard: this.config.globalGuard } : {}),
       // AgentLoop 不理解前端或 HTTP；它只把 Agent 配置中的审批函数继续传给 Tool Harness。
@@ -763,45 +777,45 @@ export class AgentLoop<TContext = undefined> {
   private getTimestamp(): string {
     const value = this.now()
     if (!Number.isFinite(value.getTime()))
-      throw new TypeError('AgentLoop now() 必须返回有效 Date')
+      throw new TypeError(diagnostic(this.locale, 'AgentLoop now() 必须返回有效 Date', 'AgentLoop now() must return a valid Date'))
     return value.toISOString()
   }
 }
 
 /** 构造时验证不可缺少的 Ports 和可选系统指令。 */
-function validateConfig<TContext>(config: AgentLoopConfig<TContext>): void {
+function validateConfig<TContext>(config: AgentLoopConfig<TContext>, locale: HarnessLocale): void {
   if (!config || typeof config !== 'object')
-    throw new TypeError('AgentLoop config 必须是对象')
+    throw new TypeError(diagnostic(locale, 'AgentLoop config 必须是对象', 'AgentLoop config must be an object'))
   if (!config.adapter
     || typeof config.adapter.complete !== 'function'
     || typeof config.adapter.stream !== 'function') {
-    throw new TypeError('AgentLoop config.adapter 必须实现 ModelAdapter')
+    throw new TypeError(diagnostic(locale, 'AgentLoop config.adapter 必须实现 ModelAdapter', 'AgentLoop config.adapter must implement ModelAdapter'))
   }
   if (typeof config.model !== 'object' || config.model === null)
-    throw new TypeError('AgentLoop config.model 必须是模型选择对象')
+    throw new TypeError(diagnostic(locale, 'AgentLoop config.model 必须是模型选择对象', 'AgentLoop config.model must be a model selection object'))
   if (!config.store || typeof config.store.read !== 'function' || typeof config.store.append !== 'function')
-    throw new TypeError('AgentLoop config.store 必须实现 SessionStore')
+    throw new TypeError(diagnostic(locale, 'AgentLoop config.store 必须实现 SessionStore', 'AgentLoop config.store must implement SessionStore'))
   if (config.systemPrompt !== undefined && !config.systemPrompt.trim())
-    throw new TypeError('AgentLoop systemPrompt 不能是空字符串')
+    throw new TypeError(diagnostic(locale, 'AgentLoop systemPrompt 不能是空字符串', 'AgentLoop systemPrompt cannot be an empty string'))
 }
 
 /** Run 请求在写 Session 前完成校验。 */
-function validateRequest<TContext>(request: AgentRunRequest<TContext>): string {
+function validateRequest<TContext>(request: AgentRunRequest<TContext>, locale: HarnessLocale): string {
   if (!request || typeof request !== 'object')
-    throw new TypeError('AgentRunRequest 必须是对象')
-  validateIdentifier(request.sessionId, 'sessionId')
-  validateIdentifier(request.scopeId, 'scopeId')
+    throw new TypeError(diagnostic(locale, 'AgentRunRequest 必须是对象', 'AgentRunRequest must be an object'))
+  validateIdentifier(request.sessionId, 'sessionId', locale)
+  validateIdentifier(request.scopeId, 'scopeId', locale)
   if (request.sessionName !== undefined)
-    validateIdentifier(request.sessionName, 'sessionName')
+    validateIdentifier(request.sessionName, 'sessionName', locale)
   if (typeof request.input !== 'string' || !request.input.trim())
-    throw new TypeError('input 必须是非空字符串')
+    throw new TypeError(diagnostic(locale, 'input 必须是非空字符串', 'input must be a non-empty string'))
   return request.input.trim()
 }
 
 /** 验证关联 ID，参数顺序遵循“业务值在前、诊断字段名在后”。 */
-function validateIdentifier(value: string, field: string): void {
+function validateIdentifier(value: string, field: string, locale: HarnessLocale): void {
   if (typeof value !== 'string' || !value.trim())
-    throw new TypeError(`${field} 必须是非空字符串`)
+    throw new TypeError(diagnostic(locale, `${field} 必须是非空字符串`, `${field} must be a non-empty string`))
 }
 
 /** Agent 观察器属于旁路，抛错不能改变执行和持久化结果。 */

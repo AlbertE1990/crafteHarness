@@ -1,7 +1,9 @@
 import type { z } from 'zod'
+import type { HarnessLocale } from '../locale'
 import type { DefinedTool } from '../tools'
 import type { JsonObject } from '../types/json'
 import type { AgentTool } from './types'
+import { DEFAULT_LOCALE, diagnostic } from '../locale'
 import { executeTool } from '../tools'
 
 /**
@@ -29,11 +31,12 @@ export function createAgentTool<
 /** 构造只读工具索引，并在 Agent 启动时拒绝重复名称。 */
 export function createAgentToolMap<TContext = undefined>(
   tools: readonly AgentTool<TContext>[],
+  locale: HarnessLocale = DEFAULT_LOCALE,
 ): ReadonlyMap<string, AgentTool<TContext>> {
   const entries = new Map<string, AgentTool<TContext>>()
   for (const tool of tools) {
     if (entries.has(tool.name))
-      throw new TypeError(`Agent 工具名称重复：${tool.name}`)
+      throw new TypeError(diagnostic(locale, `Agent 工具名称重复：${tool.name}`, `Duplicate Agent tool name: ${tool.name}`))
     entries.set(tool.name, tool)
   }
   return entries

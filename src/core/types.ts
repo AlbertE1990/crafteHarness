@@ -6,6 +6,7 @@ import type {
   ModelTokenUsage,
   SessionStore,
 } from '../contracts'
+import type { HarnessLocale } from '../locale'
 import type {
   ExecuteToolOptions,
   ToolApprovalHandler,
@@ -33,6 +34,8 @@ export interface AgentLoopLimits {
 
 /** 创建 AgentLoop 时注入的模型、存储、工具和部署侧策略。 */
 export interface AgentLoopConfig<TContext = undefined> {
+  /** Harness 自身诊断文本的语言；默认 zh-CN。 */
+  readonly locale?: HarnessLocale
   readonly adapter: ModelAdapter
   /** 未按 Run 覆盖时使用的默认模型选择。 */
   readonly model: ModelSelection

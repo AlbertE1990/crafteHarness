@@ -12,6 +12,7 @@ import type {
   ModelRequest,
   ModelStreamChunk,
 } from '../../contracts'
+import type { HarnessLocale } from '../../locale'
 import type { OpenAICompatibleRequestParams } from '../openai-compatible'
 import { REASONING_OFF } from '../../contracts'
 import {
@@ -29,6 +30,7 @@ type DeepSeekThinkingMode = 'enabled' | 'disabled'
 
 /** DeepSeek Chat Completions Adapter 的连接配置。 */
 export interface DeepSeekAdapterConfig {
+  readonly locale?: HarnessLocale
   readonly apiKey: string
   readonly baseURL?: string
 }
@@ -68,6 +70,7 @@ export class DeepSeekAdapter extends OpenAICompatibleAdapter {
   constructor(config: DeepSeekAdapterConfig, client?: OpenAI) {
     super({
       provider: DEEPSEEK_PROVIDER,
+      locale: config.locale,
       apiKey: config.apiKey,
       baseURL: config.baseURL?.trim() || DEEPSEEK_DEFAULT_BASE_URL,
     }, client)
@@ -149,8 +152,8 @@ export class DeepSeekAdapter extends OpenAICompatibleAdapter {
   }
 
   /** 使用通用 OpenAI SDK 错误分类，并固定供应商来源。 */
-  protected override normalizeError(error: unknown): ModelError {
-    return normalizeDeepSeekError(error)
+  protected override normalizeError(error: unknown, locale: HarnessLocale): ModelError {
+    return normalizeDeepSeekError(error, locale)
   }
 }
 
@@ -173,6 +176,6 @@ export function normalizeDeepSeekChunk(chunk: ChatCompletionChunk): ModelStreamC
 }
 
 /** 使用官方兼容层的稳定错误分类，不在 Adapter 内执行重试。 */
-export function normalizeDeepSeekError(error: unknown): ModelError {
-  return normalizeOpenAICompatibleError(error, DEEPSEEK_PROVIDER)
+export function normalizeDeepSeekError(error: unknown, locale?: HarnessLocale): ModelError {
+  return normalizeOpenAICompatibleError(error, DEEPSEEK_PROVIDER, locale)
 }

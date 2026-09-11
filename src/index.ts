@@ -109,6 +109,8 @@ export type {
   AgentTool,
   DefinedAgentLoopModelExecutionOptions,
 } from './core'
+export { DEFAULT_LOCALE, SUPPORTED_LOCALES } from './locale'
+export type { HarnessLocale } from './locale'
 
 export {
   deriveModelMessages,
@@ -138,6 +140,7 @@ export {
 /** 工具定义、执行、策略、错误和轨迹协议。 */
 export type {
   DefinedTool,
+  DefineToolOptions,
   ExecuteToolOptions,
   MaybePromise,
   ToolApprovalHandler,
@@ -169,6 +172,7 @@ export {
 export type {
   BuiltinToolName,
   CalculatorOperation,
+  CalculatorToolOptions,
   Clock,
   CurrentTimeToolOptions,
   WorkspaceToolsOptions,

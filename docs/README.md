@@ -16,6 +16,7 @@
 - [Session Log 协议](./standards/protocols/session-log.md)
 - [Agent Loop 协议](./standards/protocols/agent-loop.md)
 - [Agent 门面协议](./standards/protocols/agent.md)
+- [本地化诊断协议](./standards/protocols/localized-diagnostics.md)
 - [Server Runtime 接入规范](./standards/integrations/server-runtime.md)
 - [安全与信任模型](./standards/security/trust-model.md)
 
@@ -69,6 +70,7 @@
 - `agent.invoke()/stream()` 可把可信租户、用户和环境数据仅传给本次 Guard 与工具执行。
 - 工具级 `guard` 与全局 `tools.guard` 共用同一协议和请求 context；持久化通过根 `sessionStore` 注入。
 - 公共配置不要求 ID 工厂，Agent 内部统一生成带语义前缀的 UUID。
+- Harness 自产诊断默认中文并支持实例级 `en-US`；错误码不随语言变化，也不存在全局语言竞态。
 - Agent 内置一次性审批、超时、取消和重复提交控制。
 - 真实 DeepSeek 冒烟仍需在配置 API Key 后执行。
 - 官方案例的 Fastify Runtime 已迁移到 Agent 门面；持久化轨迹查询接口是下一阶段。

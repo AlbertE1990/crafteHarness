@@ -19,6 +19,7 @@ import Agent from 'craft-harness'
 import { DeepSeekAdapter } from 'craft-harness/adapters'
 
 const agent = new Agent({
+  locale: 'zh-CN', // 改为 en-US 可获得英文 Harness 诊断
   adapter: new DeepSeekAdapter({
     apiKey: process.env.DEEPSEEK_API_KEY!,
   }),
@@ -58,6 +59,7 @@ for await (const event of agent.stream({ scopeId: 'tenant-42', input: '讲个笑
 | 追加式 Session Log | 事件只追加不覆盖，消息从固定快照推导；`SessionStore` 是可替换的持久化 Port（内置内存实现）      |
 | 供应商无关模型契约 | `ModelAdapter` 是 Core 唯一依赖；官方提供 OpenAI 兼容与 DeepSeek 两个差异层                     |
 | 标准应用事件       | `AgentOutputEvent` 可被 Runtime 直接输出，不需要为前端再裁剪一套协议                            |
+| 双语诊断           | Harness 自产异常支持实例级 `zh-CN` / `en-US`，错误码和控制流不随语言变化                        |
 
 ## 高级入口
 

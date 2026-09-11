@@ -1,4 +1,5 @@
 import type { z } from 'zod'
+import type { HarnessLocale } from '../locale'
 import type { JsonObject, JsonSchema } from '../types/json'
 import type { ToolGuardEvaluator } from './guard'
 
@@ -36,6 +37,8 @@ export interface ToolRunContext<TContext = undefined> {
   readonly runId?: string
   readonly sessionId?: string
   readonly attempt: number
+  /** Harness 当前诊断语言，供工具生成一致的错误消息。 */
+  readonly locale: HarnessLocale
   /** 当前 Agent 请求注入的业务上下文；不会自动持久化或发送给模型。 */
   readonly context: TContext
   /** 工具必须观察或继续向下游传递此取消信号。 */

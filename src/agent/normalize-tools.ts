@@ -1,5 +1,6 @@
 import type { z } from 'zod'
 import type { AgentTool } from '../core'
+import type { HarnessLocale } from '../locale'
 import type {
   DefinedTool,
   ToolExecutionConfig,
@@ -8,6 +9,7 @@ import type {
 } from '../tools'
 import type { JsonObject, JsonSchema } from '../types/json'
 import { createAgentTool } from '../core'
+import { DEFAULT_LOCALE, diagnostic } from '../locale'
 
 /**
  * Agent 配置可接受的 `defineTool()` 结果结构。
@@ -43,14 +45,15 @@ export interface AgentToolInput<TContext = undefined> {
  */
 export function normalizeAgentToolDefinitions<TContext = undefined>(
   tools: readonly AgentToolInput<TContext>[],
+  locale: HarnessLocale = DEFAULT_LOCALE,
 ): AgentTool<TContext>[] {
-  return tools.map(tool => normalizeToolDefinition(tool))
+  return tools.map(tool => normalizeToolDefinition(tool, locale))
 }
 
 /** 在唯一的类型擦除边界把任意具体 Zod Schema 工具交给 Tool Harness。 */
-function normalizeToolDefinition<TContext>(value: AgentToolInput<TContext>): AgentTool<TContext> {
+function normalizeToolDefinition<TContext>(value: AgentToolInput<TContext>, locale: HarnessLocale): AgentTool<TContext> {
   if (!isAgentToolDefinition(value))
-    throw new TypeError('Agent 工具必须由 defineTool() 创建')
+    throw new TypeError(diagnostic(locale, 'Agent 工具必须由 defineTool() 创建', 'Agent tools must be created by defineTool()'))
 
   return createAgentTool(value as DefinedTool<z.ZodType, z.ZodType, TContext>)
 }

@@ -1,4 +1,6 @@
+import type { HarnessLocale } from '../../locale'
 import { z } from 'zod'
+import { diagnostic, resolveLocale } from '../../locale'
 import { defineTool } from '../define-tool'
 import { ToolError } from '../errors'
 
@@ -17,12 +19,18 @@ const calculatorOperations = [
 /** 计算器支持的确定性运算。 */
 export type CalculatorOperation = typeof calculatorOperations[number]
 
+/** 创建计算器工具时使用的诊断选项。 */
+export interface CalculatorToolOptions {
+  readonly locale?: HarnessLocale
+}
+
 /**
  * 创建不使用 eval 的结构化计算器工具。
  *
  * 模型必须显式给出运算名称和数值数组，避免任意表达式执行与代码注入风险。
  */
-export function createCalculatorTool() {
+export function createCalculatorTool(options: CalculatorToolOptions = {}) {
+  const locale = resolveLocale(options.locale)
   return defineTool({
     name: 'calculator',
     description: '执行加、减、乘、除、乘方、取模、平方根、绝对值和舍入等确定性数学运算。',
@@ -46,11 +54,11 @@ export function createCalculatorTool() {
       result: z.number(),
     }),
     execute(input) {
-      const result = calculate(input.operation, input.values, input.precision)
+      const result = calculate(input.operation, input.values, input.precision, locale)
       if (!Number.isFinite(result)) {
         throw new ToolError({
           code: 'NON_FINITE_RESULT',
-          message: '计算结果不是有限数字',
+          message: diagnostic(locale, '计算结果不是有限数字', 'Calculation result is not a finite number'),
         })
       }
 
@@ -60,7 +68,7 @@ export function createCalculatorTool() {
         result,
       }
     },
-  })
+  }, { locale })
 }
 
 /** 根据运算类型检查参数数量并执行确定性计算。 */
@@ -68,6 +76,7 @@ function calculate(
   operation: CalculatorOperation,
   values: number[],
   precision?: number,
+  locale: HarnessLocale = 'zh-CN',
 ): number {
   if (operation === 'add')
     return values.reduce((sum, value) => sum + value, 0)
@@ -75,28 +84,28 @@ function calculate(
     return values.reduce((product, value) => product * value, 1)
 
   if (operation === 'sqrt') {
-    requireCount(operation, values, 1)
+    requireCount(operation, values, 1, locale)
     if (values[0] < 0)
-      throw invalidCalculation('平方根的输入不能是负数')
+      throw invalidCalculation(diagnostic(locale, '平方根的输入不能是负数', 'Square root input cannot be negative'))
     return Math.sqrt(values[0])
   }
 
   if (operation === 'absolute') {
-    requireCount(operation, values, 1)
+    requireCount(operation, values, 1, locale)
     return Math.abs(values[0])
   }
 
   if (operation === 'round') {
-    requireCount(operation, values, 1)
+    requireCount(operation, values, 1, locale)
     const digits = precision ?? 0
     const factor = 10 ** digits
     return Math.round((values[0] + Number.EPSILON) * factor) / factor
   }
 
-  requireCount(operation, values, 2)
+  requireCount(operation, values, 2, locale)
   const [left, right] = values
   if ((operation === 'divide' || operation === 'modulo') && right === 0)
-    throw invalidCalculation('除数不能为 0')
+    throw invalidCalculation(diagnostic(locale, '除数不能为 0', 'Divisor cannot be 0'))
 
   if (operation === 'subtract')
     return left - right
@@ -112,10 +121,15 @@ function requireCount(
   operation: CalculatorOperation,
   values: number[],
   expected: number,
+  locale: HarnessLocale,
 ): void {
   if (values.length !== expected) {
     throw invalidCalculation(
-      `${operation} 需要 ${expected} 个运算数，实际收到 ${values.length} 个`,
+      diagnostic(
+        locale,
+        `${operation} 需要 ${expected} 个运算数，实际收到 ${values.length} 个`,
+        `${operation} requires ${expected} operand(s); received ${values.length}`,
+      ),
     )
   }
 }

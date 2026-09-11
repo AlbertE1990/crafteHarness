@@ -413,7 +413,19 @@ flowchart LR
 [ADR-0014](./decisions/adr-0014-explicit-adapter-and-model-selection.md)与
 [ADR-0015](./decisions/adr-0015-opt-in-workspace-tools.md)。
 
-## 26. 阶段 5：轨迹持久化与查询（下一阶段）
+## 26. 阶段 4.18：双语异常与实例级语言配置（已完成）
+
+已完成范围：
+
+- Harness 自产异常支持 `zh-CN` 与 `en-US`，默认保持中文兼容。
+- Agent 根 locale 显式传播到 Loop、Adapter 调用、Tool Harness、默认 Store 与自动内置工具。
+- 独立公共入口提供同名 locale 选项，不使用进程全局可变语言状态。
+- 错误码和结构化详情保持稳定，第三方原始异常不做文本翻译。
+
+详细交付见[Delivery 022](./deliveries/delivery-022-localized-diagnostics.md)，当前规则见
+[本地化诊断协议](../standards/protocols/localized-diagnostics.md)。
+
+## 27. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -423,7 +435,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 craft-harness 核心协议。
 
-## 27. 阶段 6：异常诊断
+## 28. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -436,7 +448,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 28. 阶段 7：长期安全与扩展（最低优先级）
+## 29. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

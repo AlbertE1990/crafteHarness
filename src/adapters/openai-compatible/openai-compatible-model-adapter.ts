@@ -22,6 +22,7 @@ import type {
   ModelTokenUsage,
   ModelToolCall,
 } from '../../contracts'
+import type { HarnessLocale } from '../../locale'
 import OpenAI, {
   APIConnectionError,
   APIConnectionTimeoutError,
@@ -34,9 +35,12 @@ import OpenAI, {
   RateLimitError,
 } from 'openai'
 import { ModelError, REASONING_OFF } from '../../contracts'
+import { diagnostic, resolveLocale } from '../../locale'
 
 /** OpenAI Compatible Adapter 的连接与诊断来源配置。 */
 export interface OpenAICompatibleAdapterConfig {
+  /** 直接调用 Adapter 且调用选项未覆盖时使用的诊断语言。 */
+  readonly locale?: HarnessLocale
   readonly apiKey: string
   readonly baseURL?: string
   readonly provider?: string
@@ -59,16 +63,19 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
   readonly provider: string
 
   private readonly client: OpenAI
+  private readonly locale: HarnessLocale
 
   /** 创建兼容 Adapter；测试可以注入不访问网络的 OpenAI 客户端替身。 */
   constructor(config: OpenAICompatibleAdapterConfig, client?: OpenAI) {
+    const locale = resolveLocale(config.locale)
     const apiKey = config.apiKey.trim()
     const provider = config.provider?.trim() || 'openai'
 
     if (!apiKey)
-      throw new Error(`${provider} apiKey 不能为空`)
+      throw new Error(diagnostic(locale, `${provider} apiKey 不能为空`, `${provider} apiKey cannot be empty`))
 
     this.provider = provider
+    this.locale = locale
     this.client = client ?? new OpenAI({
       apiKey,
       ...(config.baseURL?.trim() ? { baseURL: config.baseURL.trim() } : {}),
@@ -88,7 +95,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       return this.normalizeCompletion(response)
     }
     catch (error) {
-      throw this.normalizeError(error)
+      throw this.normalizeError(error, options.locale ?? this.locale)
     }
   }
 
@@ -102,10 +109,10 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         this.createStreamingParams(request),
         { signal: options.signal },
       )
-      return this.normalizeStream(stream)
+      return this.normalizeStream(stream, options.locale ?? this.locale)
     }
     catch (error) {
-      throw this.normalizeError(error)
+      throw this.normalizeError(error, options.locale ?? this.locale)
     }
   }
 
@@ -163,8 +170,8 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
   }
 
   /** 将 SDK 异常映射为稳定模型错误；Adapter 不在此处重试。 */
-  protected normalizeError(error: unknown): ModelError {
-    return normalizeOpenAICompatibleError(error, this.provider)
+  protected normalizeError(error: unknown, locale: HarnessLocale): ModelError {
+    return normalizeOpenAICompatibleError(error, this.provider, locale)
   }
 
   /** 创建非流式 SDK 参数。 */
@@ -191,13 +198,14 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
   /** 延迟标准化供应商流，确保迭代期间的错误也经过同一分类钩子。 */
   private async* normalizeStream(
     stream: AsyncIterable<ChatCompletionChunk>,
+    locale: HarnessLocale,
   ): AsyncGenerator<ModelStreamChunk> {
     try {
       for await (const chunk of stream)
         yield this.normalizeChunk(chunk)
     }
     catch (error) {
-      throw this.normalizeError(error)
+      throw this.normalizeError(error, locale)
     }
   }
 }
@@ -429,6 +437,7 @@ export function normalizeOpenAICompatibleChunk(
 export function normalizeOpenAICompatibleError(
   error: unknown,
   provider: string,
+  locale: HarnessLocale = 'zh-CN',
 ): ModelError {
   if (error instanceof ModelError)
     return error
@@ -436,7 +445,7 @@ export function normalizeOpenAICompatibleError(
   if (error instanceof APIUserAbortError) {
     return new ModelError({
       code: 'MODEL_ABORTED',
-      message: '模型调用已取消',
+      message: diagnostic(locale, '模型调用已取消', 'Model call was cancelled'),
       provider,
       cause: error,
     })
@@ -445,7 +454,7 @@ export function normalizeOpenAICompatibleError(
   if (error instanceof APIConnectionTimeoutError) {
     return new ModelError({
       code: 'MODEL_TIMEOUT',
-      message: '模型服务连接超时',
+      message: diagnostic(locale, '模型服务连接超时', 'Model service connection timed out'),
       provider,
       retryable: true,
       cause: error,

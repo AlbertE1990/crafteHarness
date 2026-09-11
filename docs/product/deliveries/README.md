@@ -24,5 +24,6 @@
 - [Delivery 019：阶段 4.13 可搜索、多用户 Session Catalog](./delivery-019-searchable-multi-user-session-catalog.md)
 - [Delivery 020：阶段 4.16 工作区工具与示例契约收口](./delivery-020-workspace-tools-and-sample-contract.md)
 - [Delivery 021：阶段 4.17 模型选择与内置工具边界收口](./delivery-021-model-selection-and-tool-layout.md)
+- [Delivery 022：阶段 4.18 双语异常与实例级语言配置](./delivery-022-localized-diagnostics.md)
 
 交付记录不是当前协议的权威来源。后续阶段改变行为时更新规范并新增交付记录，不覆盖旧记录中的历史状态。

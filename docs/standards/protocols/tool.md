@@ -101,6 +101,7 @@ interface ToolRunContext<TContext> {
   runId?: string
   sessionId?: string
   attempt: number
+  locale: 'zh-CN' | 'en-US'
   context: TContext
   signal: AbortSignal
 }
@@ -108,6 +109,7 @@ interface ToolRunContext<TContext> {
 
 `context` 来自当前 Agent 请求。它用于传递租户、用户、角色、部署环境或请求级服务，
 只在本次 Run 内存在；craft-harness 不会把它发送给模型、写入 Session Log、发给前端或保存在 Agent 单例。
+`locale` 来自 Harness 配置，只供工具生成一致的诊断文本，不是业务身份数据。
 
 ## 5. 两层 Tool Guard
 

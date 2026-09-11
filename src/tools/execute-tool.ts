@@ -1,4 +1,5 @@
 import type { z } from 'zod'
+import type { HarnessLocale } from '../locale'
 import type { JsonObject } from '../types/json'
 import type { ToolErrorInfo } from './errors'
 import type { ToolEventBase, ToolEventListener, ToolExecutionEvent } from './events'
@@ -10,6 +11,7 @@ import type {
 } from './guard'
 import type { DefinedTool, ToolRetryPolicy, ToolRunContext } from './types'
 import { Buffer } from 'node:buffer'
+import { diagnostic, resolveLocale } from '../locale'
 import { normalizeToolError, validationIssuesToJson } from './errors'
 import { normalizeToolGuardDecision } from './guard-validation'
 
@@ -17,6 +19,8 @@ const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024
 
 /** Tool Harness 单次调用所需的运行参数。 */
 export interface ExecuteToolOptions<TContext = undefined> {
+  /** Harness 自身诊断文本的语言；默认 zh-CN。 */
+  readonly locale?: HarnessLocale
   /** 由 Agent Loop 生成并在重试期间保持不变的调用 ID。 */
   readonly callId: string
   readonly runId?: string
@@ -77,6 +81,7 @@ export async function executeTool<
   rawInput: unknown,
   options: ExecuteToolOptions<TContext>,
 ): Promise<ToolExecutionResult<z.output<TOutputSchema>>> {
+  const locale = resolveLocale(options.locale)
   const startedAt = Date.now()
   const now = options.now ?? (() => new Date())
   const base = createEventBase(tool.name, options, now)
@@ -90,7 +95,7 @@ export async function executeTool<
   const callerSignal = options.signal ?? new AbortController().signal
   if (callerSignal.aborted) {
     return await finishFailure(
-      abortedError(),
+      abortedError(locale),
       0,
       startedAt,
       base,
@@ -98,12 +103,12 @@ export async function executeTool<
     )
   }
 
-  const inputResult = safelyParse(tool.inputSchema, rawInput)
+  const inputResult = safelyParse(tool.inputSchema, rawInput, locale)
   if (!inputResult.success) {
     return await finishFailure(
       {
         code: 'INVALID_TOOL_ARGUMENTS',
-        message: `工具 ${tool.name} 的参数未通过校验`,
+        message: diagnostic(locale, `工具 ${tool.name} 的参数未通过校验`, `Tool ${tool.name} arguments failed validation`),
         retryable: false,
         details: validationIssuesToJson(inputResult.issues),
       },
@@ -138,13 +143,16 @@ export async function executeTool<
         ? tool.guard
         : options.guardOverride ?? undefined,
       options.globalGuard,
+      locale,
     )
   }
   catch (error) {
     return await finishFailure(
       {
         code: 'TOOL_GUARD_FAILED',
-        message: error instanceof Error ? error.message : '工具 Guard 执行失败',
+        message: error instanceof Error
+          ? error.message
+          : diagnostic(locale, '工具 Guard 执行失败', 'Tool Guard execution failed'),
         retryable: false,
       },
       0,
@@ -211,8 +219,8 @@ export async function executeTool<
     if (outcome !== 'allowed-once') {
       // rejected/unavailable 是标准权限失败；aborted 保留独立取消错误语义。
       const error = outcome === 'aborted'
-        ? abortedError()
-        : permissionDeniedError(`工具审批结果：${outcome}`)
+        ? abortedError(locale)
+        : permissionDeniedError(diagnostic(locale, `工具审批结果：${outcome}`, `Tool approval outcome: ${outcome}`))
       return await finishFailure(error, 0, startedAt, base, options.onEvent)
     }
   }
@@ -222,7 +230,7 @@ export async function executeTool<
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (callerSignal.aborted) {
       return await finishFailure(
-        abortedError(),
+        abortedError(locale),
         attempt - 1,
         startedAt,
         base,
@@ -294,7 +302,7 @@ export async function executeTool<
     const waited = await waitForRetry(delayMs, callerSignal)
     if (!waited) {
       return await finishFailure(
-        abortedError(),
+        abortedError(locale),
         attempt,
         startedAt,
         base,
@@ -307,7 +315,7 @@ export async function executeTool<
   return await finishFailure(
     {
       code: 'TOOL_EXECUTION_FAILED',
-      message: `工具 ${tool.name} 执行失败`,
+      message: diagnostic(locale, `工具 ${tool.name} 执行失败`, `Tool ${tool.name} execution failed`),
       retryable: false,
     },
     maxAttempts,
@@ -337,26 +345,28 @@ async function evaluateToolGuards<
   request: ToolGuardRequest<TContext, TInput, TMetadata>,
   localGuard: ToolGuardEvaluator<TContext, TInput, TMetadata> | undefined,
   globalGuard: ToolGuardEvaluator<TContext> | undefined,
+  locale: HarnessLocale,
 ): Promise<ToolGuardDecision> {
   const decisions: SourcedGuardDecision[] = []
   if (localGuard) {
     decisions.push({
       source: 'tool',
-      value: normalizeToolGuardDecision(await localGuard(request)),
+      value: normalizeToolGuardDecision(await localGuard(request), undefined, locale),
     })
   }
   if (globalGuard) {
     decisions.push({
       source: 'global',
-      value: normalizeToolGuardDecision(await globalGuard(request)),
+      value: normalizeToolGuardDecision(await globalGuard(request), undefined, locale),
     })
   }
-  return mergeGuardDecisions(decisions)
+  return mergeGuardDecisions(decisions, locale)
 }
 
 /** 按固定优先级收口两层结果；两层相同终态时保留来源化原因和详情。 */
 function mergeGuardDecisions(
   decisions: readonly SourcedGuardDecision[],
+  locale: HarnessLocale,
 ): ToolGuardDecision {
   const denied = decisions.filter(
     (item): item is SourcedGuardDecision & { value: Extract<ToolGuardDecision, { decision: 'deny' }> } => (
@@ -366,7 +376,7 @@ function mergeGuardDecisions(
   if (denied.length > 0) {
     return Object.freeze({
       decision: 'deny' as const,
-      reason: joinGuardReasons(denied),
+      reason: joinGuardReasons(denied, locale),
       ...mergeGuardMetadata(denied),
     })
   }
@@ -384,7 +394,7 @@ function mergeGuardDecisions(
     )
     return Object.freeze({
       decision: 'ask' as const,
-      reason: joinGuardReasons(asked),
+      reason: joinGuardReasons(asked, locale),
       ...(globalAsk?.title ?? toolAsk?.title
         ? { title: globalAsk?.title ?? toolAsk?.title }
         : {}),
@@ -410,12 +420,17 @@ function joinGuardReasons(
   decisions: readonly (SourcedGuardDecision & {
     value: Extract<ToolGuardDecision, { decision: 'deny' | 'ask' }>
   })[],
+  locale: HarnessLocale,
 ): string {
   if (decisions.length === 1)
     return decisions[0].value.reason
   return decisions
-    .map(item => `${item.source === 'tool' ? '工具级' : '全局'} Guard：${item.value.reason}`)
-    .join('；')
+    .map(item => diagnostic(
+      locale,
+      `${item.source === 'tool' ? '工具级' : '全局'} Guard：${item.value.reason}`,
+      `${item.source === 'tool' ? 'Tool-level' : 'Global'} Guard: ${item.value.reason}`,
+    ))
+    .join(diagnostic(locale, '；', '; '))
 }
 
 /** 两层 details 都存在时使用命名空间，只有一层时保持使用者原始结构。 */
@@ -494,6 +509,7 @@ async function executeAttempt<
     ...(options.runId ? { runId: options.runId } : {}),
     ...(options.sessionId ? { sessionId: options.sessionId } : {}),
     attempt,
+    locale: resolveLocale(options.locale),
     context: options.context as TContext,
     signal,
   }
@@ -501,17 +517,17 @@ async function executeAttempt<
   try {
     const rawOutput = await tool.execute(input, context)
     if (callerSignal.aborted)
-      return { ok: false, error: abortedError() }
+      return { ok: false, error: abortedError(context.locale) }
     if (timeoutController.signal.aborted)
-      return { ok: false, error: timeoutError(tool.name, timeoutMs!) }
+      return { ok: false, error: timeoutError(tool.name, timeoutMs!, context.locale) }
 
-    const outputResult = safelyParse(tool.outputSchema, rawOutput)
+    const outputResult = safelyParse(tool.outputSchema, rawOutput, context.locale)
     if (!outputResult.success) {
       return {
         ok: false,
         error: {
           code: 'INVALID_TOOL_OUTPUT',
-          message: `工具 ${tool.name} 返回值未通过 outputSchema 校验`,
+          message: diagnostic(context.locale, `工具 ${tool.name} 返回值未通过 outputSchema 校验`, `Tool ${tool.name} output failed outputSchema validation`),
           retryable: false,
           details: validationIssuesToJson(outputResult.issues),
         },
@@ -522,14 +538,16 @@ async function executeAttempt<
     try {
       content = tool.renderOutput
         ? tool.renderOutput(outputResult.data)
-        : renderOutput(outputResult.data)
+        : renderOutput(outputResult.data, context.locale)
     }
     catch (error) {
       return {
         ok: false,
         error: {
           code: 'TOOL_OUTPUT_RENDER_FAILED',
-          message: error instanceof Error ? error.message : '工具结果无法转换为模型内容',
+          message: error instanceof Error
+            ? error.message
+            : diagnostic(context.locale, '工具结果无法转换为模型内容', 'Tool result could not be rendered as model content'),
           retryable: false,
         },
       }
@@ -541,7 +559,7 @@ async function executeAttempt<
         ok: false,
         error: {
           code: 'TOOL_OUTPUT_TOO_LARGE',
-          message: `工具 ${tool.name} 的模型可见结果超过 ${maxOutputBytes} 字节`,
+          message: diagnostic(context.locale, `工具 ${tool.name} 的模型可见结果超过 ${maxOutputBytes} 字节`, `Tool ${tool.name} model-visible result exceeds ${maxOutputBytes} bytes`),
           retryable: false,
         },
       }
@@ -551,10 +569,10 @@ async function executeAttempt<
   }
   catch (error) {
     if (callerSignal.aborted)
-      return { ok: false, error: abortedError() }
+      return { ok: false, error: abortedError(context.locale) }
     if (timeoutController.signal.aborted)
-      return { ok: false, error: timeoutError(tool.name, timeoutMs!) }
-    return { ok: false, error: normalizeToolError(error) }
+      return { ok: false, error: timeoutError(tool.name, timeoutMs!, context.locale) }
+    return { ok: false, error: normalizeToolError(error, context.locale) }
   }
   finally {
     if (timeout !== undefined)
@@ -566,6 +584,7 @@ async function executeAttempt<
 function safelyParse<TSchema extends z.ZodType>(
   schema: TSchema,
   value: unknown,
+  locale: HarnessLocale,
 ):
   | { readonly success: true, readonly data: z.output<TSchema> }
   | {
@@ -583,7 +602,7 @@ function safelyParse<TSchema extends z.ZodType>(
       success: false,
       issues: [{
         code: 'schema_parse_failed',
-        message: error instanceof Error ? error.message : 'Schema 解析失败',
+        message: error instanceof Error ? error.message : diagnostic(locale, 'Schema 解析失败', 'Schema parsing failed'),
         path: [],
       }],
     }
@@ -591,13 +610,13 @@ function safelyParse<TSchema extends z.ZodType>(
 }
 
 /** 默认保留字符串，其余成功值使用 JSON 序列化。 */
-function renderOutput(value: unknown): string {
+function renderOutput(value: unknown, locale: HarnessLocale): string {
   if (typeof value === 'string')
     return value
 
   const content = JSON.stringify(value)
   if (content === undefined)
-    throw new TypeError('工具成功值不能序列化为 JSON')
+    throw new TypeError(diagnostic(locale, '工具成功值不能序列化为 JSON', 'Tool success value cannot be serialized as JSON'))
   return content
 }
 
@@ -690,19 +709,19 @@ async function finishFailure(
 }
 
 /** 取消始终不可重试。 */
-function abortedError(): ToolErrorInfo {
+function abortedError(locale: HarnessLocale): ToolErrorInfo {
   return {
     code: 'ABORTED',
-    message: '工具调用已取消',
+    message: diagnostic(locale, '工具调用已取消', 'Tool call was cancelled'),
     retryable: false,
   }
 }
 
 /** 超时是否实际重试仍由工具作者显式配置的重试策略决定。 */
-function timeoutError(toolName: string, timeoutMs: number): ToolErrorInfo {
+function timeoutError(toolName: string, timeoutMs: number, locale: HarnessLocale): ToolErrorInfo {
   return {
     code: 'TOOL_TIMEOUT',
-    message: `工具 ${toolName} 在 ${timeoutMs}ms 内未完成`,
+    message: diagnostic(locale, `工具 ${toolName} 在 ${timeoutMs}ms 内未完成`, `Tool ${toolName} did not complete within ${timeoutMs}ms`),
     retryable: true,
   }
 }

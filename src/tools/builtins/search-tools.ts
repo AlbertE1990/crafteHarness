@@ -1,9 +1,11 @@
+import type { HarnessLocale } from '../../locale'
 import type { WorkspaceRuntime } from './workspace'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { rgPath } from '@vscode/ripgrep'
 import { z } from 'zod'
+import { diagnostic } from '../../locale'
 import { defineTool } from '../define-tool'
 import { ToolError } from '../errors'
 
@@ -43,7 +45,7 @@ function createGlobTool(runtime: WorkspaceRuntime) {
         '--glob',
         input.pattern,
         '.',
-      ], target.absolutePath, context.signal)
+      ], target.absolutePath, context.signal, runtime.options.locale)
       const found = result.stdout.split('\0').filter(Boolean)
       return {
         paths: found.slice(0, runtime.options.globLimit).map(file => (
@@ -56,7 +58,7 @@ function createGlobTool(runtime: WorkspaceRuntime) {
       const body = value.paths.join('\n') || '[no files found]'
       return value.truncated ? `${body}\n[results truncated]` : body
     },
-  })
+  }, { locale: runtime.options.locale })
 }
 
 function createGrepTool(runtime: WorkspaceRuntime) {
@@ -85,7 +87,7 @@ function createGrepTool(runtime: WorkspaceRuntime) {
       if (input.include)
         args.push('--glob', input.include)
       args.push('--regexp', input.pattern, target.absolutePath)
-      const result = await runRipgrep(args, root.absolutePath, context.signal)
+      const result = await runRipgrep(args, root.absolutePath, context.signal, runtime.options.locale)
       const found = parseMatches(result.stdout, root.absolutePath)
       return {
         matches: found.slice(0, runtime.options.grepLimit),
@@ -97,10 +99,15 @@ function createGrepTool(runtime: WorkspaceRuntime) {
         || '[no matches found]'
       return value.truncated ? `${body}\n[results truncated]` : body
     },
-  })
+  }, { locale: runtime.options.locale })
 }
 
-async function runRipgrep(args: readonly string[], cwd: string, signal: AbortSignal) {
+async function runRipgrep(
+  args: readonly string[],
+  cwd: string,
+  signal: AbortSignal,
+  locale: HarnessLocale,
+) {
   return await new Promise<{ stdout: string, truncated: boolean }>((resolve, reject) => {
     const child = spawn(rgPath, args, { cwd, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout: Buffer<ArrayBufferLike> = Buffer.alloc(0)
@@ -125,7 +132,7 @@ async function runRipgrep(args: readonly string[], cwd: string, signal: AbortSig
       settled = true
       signal.removeEventListener('abort', onAbort)
       child.kill()
-      reject(new ToolError({ code: 'SEARCH_FAILED', message: '无法启动内置 ripgrep', cause: error }))
+      reject(new ToolError({ code: 'SEARCH_FAILED', message: diagnostic(locale, '无法启动内置 ripgrep', 'Could not start the bundled ripgrep'), cause: error }))
     })
     child.once('close', (code) => {
       if (settled)
@@ -133,13 +140,14 @@ async function runRipgrep(args: readonly string[], cwd: string, signal: AbortSig
       settled = true
       signal.removeEventListener('abort', onAbort)
       if (signal.aborted) {
-        reject(new ToolError({ code: 'ABORTED', message: '搜索已取消' }))
+        reject(new ToolError({ code: 'ABORTED', message: diagnostic(locale, '搜索已取消', 'Search was cancelled') }))
         return
       }
       if (code !== 0 && code !== 1 && !truncated) {
         reject(new ToolError({
           code: 'SEARCH_FAILED',
-          message: stderr.toString('utf8').trim() || `ripgrep 退出码：${String(code)}`,
+          message: stderr.toString('utf8').trim()
+            || diagnostic(locale, `ripgrep 退出码：${String(code)}`, `ripgrep exit code: ${String(code)}`),
         }))
         return
       }

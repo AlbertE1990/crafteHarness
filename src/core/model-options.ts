@@ -1,8 +1,10 @@
+import type { HarnessLocale } from '../locale'
 import type {
   AgentLoopModelExecutionOptions,
   DefinedAgentLoopModelExecutionOptions,
 } from './types'
 import { REASONING_OFF } from '../contracts'
+import { DEFAULT_LOCALE, diagnostic } from '../locale'
 
 /**
  * 校验并归一化单个推理强度。
@@ -15,9 +17,13 @@ import { REASONING_OFF } from '../contracts'
  * Adapter 不重复这套校验，它们只消费归一化后的结果，并按 REASONING_OFF 把保留值翻译成
  * 自己协议上的关闭语义。`path` 只用于诊断，让错误信息指向调用方实际书写的位置。
  */
-export function normalizeReasoningEffort(value: unknown, path: string): string {
+export function normalizeReasoningEffort(
+  value: unknown,
+  path: string,
+  locale: HarnessLocale = DEFAULT_LOCALE,
+): string {
   if (typeof value !== 'string' || !value.trim())
-    throw new TypeError(`${path} 必须是非空字符串`)
+    throw new TypeError(diagnostic(locale, `${path} 必须是非空字符串`, `${path} must be a non-empty string`))
 
   const effort = value.trim()
   return effort.toLowerCase() === REASONING_OFF ? REASONING_OFF : effort
@@ -32,21 +38,24 @@ export function normalizeReasoningEffort(value: unknown, path: string): string {
 export function defineAgentLoopModelExecutionOptions(
   input: AgentLoopModelExecutionOptions | undefined,
   base: DefinedAgentLoopModelExecutionOptions,
+  locale: HarnessLocale = DEFAULT_LOCALE,
 ): DefinedAgentLoopModelExecutionOptions {
-  assertOptionsObject(input, 'Agent model execution options')
+  assertOptionsObject(input, 'Agent model execution options', locale)
   assertKnownFields(
     input,
     ['id', 'reasoningEffort', 'stream'],
     'Agent model execution options',
+    locale,
   )
 
   if (input?.stream !== undefined && typeof input.stream !== 'boolean')
-    throw new TypeError('Agent model execution options.stream 必须是 boolean')
+    throw new TypeError(diagnostic(locale, 'Agent model execution options.stream 必须是 boolean', 'Agent model execution options.stream must be a boolean'))
 
   const stream = input?.stream ?? base.stream
   const id = normalizeModelId(
     input?.id ?? base.id,
     'Agent model execution options.id',
+    locale,
   )
   // 一旦覆盖模型选择，就整体替换默认选择，避免新模型继承旧模型的推理强度。
   const selectedEffort = input === undefined ? base.reasoningEffort : input.reasoningEffort
@@ -55,6 +64,7 @@ export function defineAgentLoopModelExecutionOptions(
     : normalizeReasoningEffort(
         selectedEffort,
         'Agent model execution options.reasoningEffort',
+        locale,
       )
 
   return Object.freeze({
@@ -65,17 +75,21 @@ export function defineAgentLoopModelExecutionOptions(
 }
 
 /** 模型 ID 是供应商标识，不是展示名称。 */
-export function normalizeModelId(value: unknown, path: string): string {
+export function normalizeModelId(
+  value: unknown,
+  path: string,
+  locale: HarnessLocale = DEFAULT_LOCALE,
+): string {
   if (typeof value !== 'string' || !value.trim())
-    throw new TypeError(`${path} 必须是非空字符串`)
+    throw new TypeError(diagnostic(locale, `${path} 必须是非空字符串`, `${path} must be a non-empty string`))
   return value.trim()
 }
 
 /** 可选配置必须是非数组对象。 */
-function assertOptionsObject(value: unknown, path: string): void {
+function assertOptionsObject(value: unknown, path: string, locale: HarnessLocale): void {
   if (value !== undefined
     && (typeof value !== 'object' || value === null || Array.isArray(value))) {
-    throw new TypeError(`${path} 必须是对象`)
+    throw new TypeError(diagnostic(locale, `${path} 必须是对象`, `${path} must be an object`))
   }
 }
 
@@ -84,11 +98,12 @@ function assertKnownFields(
   value: object | undefined,
   allowedFields: readonly string[],
   path: string,
+  locale: HarnessLocale,
 ): void {
   if (value === undefined)
     return
   const allowed = new Set(allowedFields)
   const unknown = Object.keys(value).find(field => !allowed.has(field))
   if (unknown)
-    throw new TypeError(`${path} 包含未知字段：${unknown}`)
+    throw new TypeError(diagnostic(locale, `${path} 包含未知字段：${unknown}`, `${path} contains unknown field: ${unknown}`))
 }

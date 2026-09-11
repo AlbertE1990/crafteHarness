@@ -1,3 +1,4 @@
+import type { HarnessLocale } from '../locale'
 import type { ToolModelDefinition } from '../tools'
 import type { JsonObject } from '../types/json'
 import type { ModelAssistantMessage, ModelMessage } from './message'
@@ -62,6 +63,8 @@ export interface ModelRequest {
 
 /** 单次模型调用的取消与关联选项。 */
 export interface ModelCallOptions {
+  /** Adapter 自身产生诊断文本时使用的语言；默认 zh-CN。 */
+  readonly locale?: HarnessLocale
   readonly signal?: AbortSignal
   readonly runId?: string
   readonly sessionId?: string

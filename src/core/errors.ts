@@ -1,11 +1,16 @@
+import type { HarnessLocale } from '../locale'
 import type { ToolErrorInfo, ToolExecutionFailure } from '../tools'
 import type { JsonObject } from '../types/json'
 import type { AgentRunErrorInfo } from './types'
 import { ModelError } from '../contracts'
+import { DEFAULT_LOCALE, diagnostic } from '../locale'
 import { SessionStoreError } from '../sessions'
 
 /** 解析模型提供的 JSON 参数；空文本按空对象处理。 */
-export function parseToolArguments(argumentsText: string):
+export function parseToolArguments(
+  argumentsText: string,
+  locale: HarnessLocale = DEFAULT_LOCALE,
+):
   | { readonly ok: true, readonly value: unknown }
   | { readonly ok: false, readonly error: ToolErrorInfo } {
   try {
@@ -16,7 +21,9 @@ export function parseToolArguments(argumentsText: string):
       ok: false,
       error: {
         code: 'INVALID_TOOL_ARGUMENTS',
-        message: error instanceof Error ? error.message : '工具参数不是有效 JSON',
+        message: error instanceof Error
+          ? error.message
+          : diagnostic(locale, '工具参数不是有效 JSON', 'Tool arguments are not valid JSON'),
         retryable: false,
       },
     }

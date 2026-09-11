@@ -1,4 +1,5 @@
 import type { AgentTool } from '../../core'
+import type { HarnessLocale } from '../../locale'
 import { createAgentTool } from '../../core'
 import { createCalculatorTool } from './calculator'
 import { createCurrentTimeTool } from './current-time'
@@ -21,13 +22,13 @@ export type BuiltinToolName = typeof builtinToolNames[number]
 
 /** 每次创建 Agent 配置时生成独立的内置工具注册项。 */
 export function createBuiltinTools<TContext = undefined>(
-  options: { readonly workspaceRoot?: string } = {},
+  options: { readonly workspaceRoot?: string, readonly locale?: HarnessLocale } = {},
 ): readonly AgentTool<TContext>[] {
   return Object.freeze([
-    createAgentTool(createCurrentTimeTool()) as unknown as AgentTool<TContext>,
-    createAgentTool(createCalculatorTool()) as unknown as AgentTool<TContext>,
+    createAgentTool(createCurrentTimeTool({ locale: options.locale })) as unknown as AgentTool<TContext>,
+    createAgentTool(createCalculatorTool({ locale: options.locale })) as unknown as AgentTool<TContext>,
     ...(options.workspaceRoot
-      ? createWorkspaceTools({ workspaceRoot: options.workspaceRoot }).map(
+      ? createWorkspaceTools({ workspaceRoot: options.workspaceRoot, locale: options.locale }).map(
           tool => createAgentTool(tool as never) as unknown as AgentTool<TContext>,
         )
       : []),

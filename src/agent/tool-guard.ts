@@ -1,7 +1,9 @@
+import type { HarnessLocale } from '../locale'
 import type {
   ToolGuardEvaluator,
 } from '../tools'
 import type { JsonObject } from '../types/json'
+import { DEFAULT_LOCALE, diagnostic } from '../locale'
 import { validateApprovalTimeout } from '../tools/guard-validation'
 
 /** 公共 Guard 决定与请求协议定义在 tools 层，此处统一从 Agent 入口转出。 */
@@ -91,13 +93,14 @@ export interface DefinedToolGuardConfig<TContext = undefined> {
 export function defineToolGuardConfig<TContext = undefined>(
   guard: ToolGuardEvaluator<TContext> | undefined,
   approvalTimeoutInput: number | undefined,
+  locale: HarnessLocale = DEFAULT_LOCALE,
 ): DefinedToolGuardConfig<TContext> {
   if (guard !== undefined && typeof guard !== 'function')
-    throw new TypeError('Agent config.tools.guard 必须是函数')
+    throw new TypeError(diagnostic(locale, 'Agent config.tools.guard 必须是函数', 'Agent config.tools.guard must be a function'))
 
   const approvalTimeoutMs = approvalTimeoutInput
     ?? DEFAULT_TOOL_APPROVAL_TIMEOUT_MS
-  validateApprovalTimeout(approvalTimeoutMs, 'Agent config.tools.approvalTimeoutMs')
+  validateApprovalTimeout(approvalTimeoutMs, 'Agent config.tools.approvalTimeoutMs', locale)
 
   return Object.freeze({
     ...(guard ? { guard } : {}),

@@ -1,3 +1,6 @@
+import type { HarnessLocale } from '../locale'
+import { DEFAULT_LOCALE, diagnostic } from '../locale'
+
 /** 一个最多保留一个待消费事件的内部异步通道，生产者会自然服从消费者背压。 */
 export class AsyncEventStream<T> implements AsyncIterableIterator<T> {
   private state: 'open' | 'closed' | 'failed' = 'open'
@@ -15,6 +18,8 @@ export class AsyncEventStream<T> implements AsyncIterableIterator<T> {
     reject: (reason?: unknown) => void
   }
 
+  constructor(private readonly locale: HarnessLocale = DEFAULT_LOCALE) {}
+
   [Symbol.asyncIterator](): AsyncIterableIterator<T> {
     return this
   }
@@ -22,9 +27,9 @@ export class AsyncEventStream<T> implements AsyncIterableIterator<T> {
   /** 写入会等待消费者接走事件，避免慢客户端导致无界内存增长。 */
   async write(value: T): Promise<void> {
     if (this.state !== 'open')
-      throw this.failure ?? new Error('Agent 输出流已关闭')
+      throw this.failure ?? new Error(diagnostic(this.locale, 'Agent 输出流已关闭', 'Agent output stream is closed'))
     if (this.pendingWrite)
-      throw new Error('Agent 输出流只允许串行写入')
+      throw new Error(diagnostic(this.locale, 'Agent 输出流只允许串行写入', 'Agent output stream only supports serial writes'))
 
     const reader = this.pendingRead
     if (reader) {
@@ -40,7 +45,7 @@ export class AsyncEventStream<T> implements AsyncIterableIterator<T> {
 
   async next(): Promise<IteratorResult<T>> {
     if (this.pendingRead)
-      throw new Error('Agent 输出流只允许串行读取')
+      throw new Error(diagnostic(this.locale, 'Agent 输出流只允许串行读取', 'Agent output stream only supports serial reads'))
 
     const writer = this.pendingWrite
     if (writer) {
@@ -78,7 +83,7 @@ export class AsyncEventStream<T> implements AsyncIterableIterator<T> {
   }
 
   async return(): Promise<IteratorResult<T>> {
-    this.fail(new Error('Agent 输出流已由消费者取消'))
+    this.fail(new Error(diagnostic(this.locale, 'Agent 输出流已由消费者取消', 'Agent output stream was cancelled by the consumer')))
     return { done: true, value: undefined }
   }
 }

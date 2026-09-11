@@ -1,6 +1,8 @@
 import type { ModelSelection } from '../contracts'
 import type { AgentLoopModelExecutionOptions } from '../core'
+import type { HarnessLocale } from '../locale'
 import { normalizeModelId, normalizeReasoningEffort } from '../core'
+import { DEFAULT_LOCALE, diagnostic } from '../locale'
 
 /**
  * 解析单次 Run 的模型选择。请求一旦提供 model 就整体替换默认选择，避免跨模型继承推理强度。
@@ -8,18 +10,19 @@ import { normalizeModelId, normalizeReasoningEffort } from '../core'
 export function resolveAgentModelSelection(
   input: ModelSelection | undefined,
   base: Readonly<ModelSelection>,
+  locale: HarnessLocale = DEFAULT_LOCALE,
 ): Readonly<ModelSelection> {
   if (input === undefined)
     return base
   if (typeof input !== 'object' || input === null || Array.isArray(input))
-    throw new TypeError('Agent request.model 必须是模型选择对象')
+    throw new TypeError(diagnostic(locale, 'Agent request.model 必须是模型选择对象', 'Agent request.model must be a model selection object'))
   const unknown = Object.keys(input).find(field => field !== 'id' && field !== 'reasoningEffort')
   if (unknown)
-    throw new TypeError(`Agent request.model 包含未知字段：${unknown}`)
-  const id = normalizeModelId(input.id, 'Agent request.model.id')
+    throw new TypeError(diagnostic(locale, `Agent request.model 包含未知字段：${unknown}`, `Agent request.model contains unknown field: ${unknown}`))
+  const id = normalizeModelId(input.id, 'Agent request.model.id', locale)
   const reasoningEffort = input.reasoningEffort === undefined
     ? undefined
-    : normalizeReasoningEffort(input.reasoningEffort, 'Agent request.model.reasoningEffort')
+    : normalizeReasoningEffort(input.reasoningEffort, 'Agent request.model.reasoningEffort', locale)
   return Object.freeze({ id, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) })
 }
 

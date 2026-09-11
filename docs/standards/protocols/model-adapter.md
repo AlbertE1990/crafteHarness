@@ -146,7 +146,8 @@ Completions 主体字段，并和 chunk 一样透传未知新增字段。用量�
 
 ## 6. 取消与错误
 
-每次调用通过 `ModelCallOptions.signal` 传入 `AbortSignal`。Adapter 将 SDK 异常分类为：
+每次调用通过 `ModelCallOptions.signal` 传入 `AbortSignal`，并通过 `ModelCallOptions.locale` 接收本次
+Harness 诊断语言。Adapter 将 SDK 异常分类为：
 
 - 取消、连接超时。
 - 鉴权失败、权限拒绝。

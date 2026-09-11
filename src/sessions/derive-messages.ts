@@ -5,10 +5,14 @@ import type {
   SessionSnapshot,
   SessionStore,
 } from '../contracts'
+import type { HarnessLocale } from '../locale'
+import { DEFAULT_LOCALE, diagnostic, resolveLocale } from '../locale'
 import { SessionStoreError } from './errors'
 
 /** 读取完整 Session 快照时使用的分页参数。 */
 export interface ReadSessionSnapshotOptions {
+  /** 快照校验诊断文本的语言；默认 zh-CN。 */
+  readonly locale?: HarnessLocale
   /** 内部每页读取数量，默认 100，最大值由 Store 决定。 */
   readonly pageSize?: number
 }
@@ -18,7 +22,10 @@ export interface ReadSessionSnapshotOptions {
  *
  * 输入必须是同一 Session 从 sequence=1 开始的连续快照；函数不会重新排序或静默跳过坏序列。
  */
-export function deriveModelMessages(events: readonly SessionEvent[]): readonly ModelMessage[] {
+export function deriveModelMessages(
+  events: readonly SessionEvent[],
+  locale: HarnessLocale = DEFAULT_LOCALE,
+): readonly ModelMessage[] {
   if (events.length === 0)
     return Object.freeze([])
 
@@ -31,7 +38,7 @@ export function deriveModelMessages(events: readonly SessionEvent[]): readonly M
       || event.sequence !== expectedSequence) {
       throw new SessionStoreError({
         code: 'SESSION_INVALID_EVENT_SEQUENCE',
-        message: `Session 快照必须来自同一 Session 且 sequence 连续；索引 ${index} 期望 ${expectedSequence}`,
+        message: diagnostic(locale, `Session 快照必须来自同一 Session 且 sequence 连续；索引 ${index} 期望 ${expectedSequence}`, `Session snapshot must come from one Session with contiguous sequence values; index ${index} expected ${expectedSequence}`),
         sessionId,
       })
     }
@@ -40,7 +47,7 @@ export function deriveModelMessages(events: readonly SessionEvent[]): readonly M
   if (events[0]?.type !== 'session.created') {
     throw new SessionStoreError({
       code: 'SESSION_INVALID_EVENT_SEQUENCE',
-      message: `Session ${sessionId} 的快照必须以 session.created 开始`,
+      message: diagnostic(locale, `Session ${sessionId} 的快照必须以 session.created 开始`, `Session ${sessionId} snapshot must start with session.created`),
       sessionId,
     })
   }
@@ -56,6 +63,7 @@ export async function readSessionSnapshot(
   store: SessionStore,
   options: ReadSessionSnapshotOptions = {},
 ): Promise<SessionSnapshot> {
+  const locale = resolveLocale(options.locale)
   const pageSize = options.pageSize ?? 100
   let afterSequence = 0
   let snapshotVersion: number | undefined
@@ -72,7 +80,7 @@ export async function readSessionSnapshot(
     if (page.scopeId !== identity.scopeId || page.sessionId !== identity.sessionId) {
       throw new SessionStoreError({
         code: 'SESSION_INVALID_EVENT_SEQUENCE',
-        message: `Session ${identity.sessionId} 的 Store 返回了其他作用域或 Session`,
+        message: diagnostic(locale, `Session ${identity.sessionId} 的 Store 返回了其他作用域或 Session`, `Store for Session ${identity.sessionId} returned a different scope or Session`),
         sessionId: identity.sessionId,
       })
     }
@@ -83,7 +91,7 @@ export async function readSessionSnapshot(
       && page.sessionName !== sessionName) {
       throw new SessionStoreError({
         code: 'SESSION_INVALID_EVENT_SEQUENCE',
-        message: `Session ${identity.sessionId} 的 Store 分页名称不一致`,
+        message: diagnostic(locale, `Session ${identity.sessionId} 的 Store 分页名称不一致`, `Store pages for Session ${identity.sessionId} returned inconsistent session names`),
         sessionId: identity.sessionId,
       })
     }
@@ -91,7 +99,7 @@ export async function readSessionSnapshot(
     if (page.hasMore && page.nextAfterSequence <= afterSequence) {
       throw new SessionStoreError({
         code: 'SESSION_INVALID_EVENT_SEQUENCE',
-        message: `Session ${identity.sessionId} 的 Store 分页游标没有前进`,
+        message: diagnostic(locale, `Session ${identity.sessionId} 的 Store 分页游标没有前进`, `Store pagination cursor for Session ${identity.sessionId} did not advance`),
         sessionId: identity.sessionId,
       })
     }
@@ -113,7 +121,8 @@ export async function readSessionSnapshot(
 export async function loadModelMessages(
   identity: SessionIdentity,
   store: SessionStore,
+  options: ReadSessionSnapshotOptions = {},
 ): Promise<readonly ModelMessage[]> {
-  const snapshot = await readSessionSnapshot(identity, store)
-  return deriveModelMessages(snapshot.events)
+  const snapshot = await readSessionSnapshot(identity, store, options)
+  return deriveModelMessages(snapshot.events, resolveLocale(options.locale))
 }

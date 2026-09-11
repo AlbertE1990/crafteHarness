@@ -20,6 +20,7 @@ import type {
 } from './types'
 import { randomUUID } from 'node:crypto'
 import { AgentLoop } from '../core'
+import { diagnostic } from '../locale'
 import { readSessionSnapshot } from '../sessions'
 import { defineAgentConfig } from './config'
 import { AsyncEventStream } from './event-stream'
@@ -52,8 +53,10 @@ export class Agent<TContext = undefined> {
     this.approvalManager = new ToolApprovalManager({
       defaultTimeoutMs: this.config.tools.approvalTimeoutMs,
       now: this.config.execution.now,
+      locale: this.config.locale,
     })
     this.loop = new AgentLoop({
+      locale: this.config.locale,
       adapter: this.config.adapter,
       model: this.config.model,
       store: this.store,
@@ -98,20 +101,20 @@ export class Agent<TContext = undefined> {
     output?: AgentOutputSink,
   ): Promise<AgentRunResult> {
     if (typeof request !== 'object' || request === null)
-      throw new TypeError('Agent request 必须是对象')
+      throw new TypeError(diagnostic(this.config.locale, 'Agent request 必须是对象', 'Agent request must be an object'))
     const input = typeof request.input === 'string' ? request.input.trim() : ''
     if (!input)
-      throw new TypeError('Agent request.input 不能为空')
+      throw new TypeError(diagnostic(this.config.locale, 'Agent request.input 不能为空', 'Agent request.input cannot be empty'))
     const scopeId = typeof request.scopeId === 'string' ? request.scopeId.trim() : ''
     if (!scopeId)
-      throw new TypeError('Agent request.scopeId 不能为空')
+      throw new TypeError(diagnostic(this.config.locale, 'Agent request.scopeId 不能为空', 'Agent request.scopeId cannot be empty'))
     const sessionName = request.sessionName === undefined
       ? undefined
       : typeof request.sessionName === 'string'
         ? request.sessionName.trim()
         : ''
     if (sessionName === '')
-      throw new TypeError('Agent request.sessionName 必须是非空字符串')
+      throw new TypeError(diagnostic(this.config.locale, 'Agent request.sessionName 必须是非空字符串', 'Agent request.sessionName must be a non-empty string'))
 
     const generatedSessionId = request.sessionId === undefined
       ? `session-${randomUUID()}`
@@ -122,11 +125,11 @@ export class Agent<TContext = undefined> {
         ? generatedSessionId.trim()
         : ''
     if (!sessionId)
-      throw new TypeError('Agent sessionId 不能为空')
+      throw new TypeError(diagnostic(this.config.locale, 'Agent sessionId 不能为空', 'Agent sessionId cannot be empty'))
 
     const runId = createRunId()
     // 在进入循环前一次性解析，确保同一 Run 的多个模型 Step 不会使用不同设置。
-    const model = resolveAgentModelSelection(request.model, this.config.model)
+    const model = resolveAgentModelSelection(request.model, this.config.model, this.config.locale)
     const loopModelExecution = createAgentLoopModelExecution(model, stream)
     // 没有应用事件出口时 ask 会得到 unavailable；这避免无法展示的审批长期占用内存。
     const stopObservingApprovals = output
@@ -171,7 +174,7 @@ export class Agent<TContext = undefined> {
   ): AsyncGenerator<AgentOutputEvent> {
     const localController = new AbortController()
     const combined = combineAbortSignals(signal, localController.signal)
-    const events = new AsyncEventStream<AgentOutputEvent>()
+    const events = new AsyncEventStream<AgentOutputEvent>(this.config.locale)
     const execution = this.execute(
       request,
       true,
@@ -217,24 +220,24 @@ export class Agent<TContext = undefined> {
     request: GetAgentSessionRequest,
   ): Promise<AgentSessionDetail | undefined> {
     if (typeof request !== 'object' || request === null)
-      throw new TypeError('Agent getSession request 必须是对象')
+      throw new TypeError(diagnostic(this.config.locale, 'Agent getSession request 必须是对象', 'Agent getSession request must be an object'))
     const scopeId = typeof request.scopeId === 'string' ? request.scopeId.trim() : ''
     if (!scopeId)
-      throw new TypeError('scopeId 不能为空')
+      throw new TypeError(diagnostic(this.config.locale, 'scopeId 不能为空', 'scopeId cannot be empty'))
     const normalizedId = typeof request.sessionId === 'string' ? request.sessionId.trim() : ''
     if (!normalizedId)
-      throw new TypeError('sessionId 不能为空')
+      throw new TypeError(diagnostic(this.config.locale, 'sessionId 不能为空', 'sessionId cannot be empty'))
 
     const snapshot = await readSessionSnapshot(
       { scopeId, sessionId: normalizedId },
       this.store,
-      { pageSize: request.pageSize },
+      { pageSize: request.pageSize, locale: this.config.locale },
     )
     if (snapshot.version === 0)
       return undefined
     const created = snapshot.events[0]
     if (!created || created.type !== 'session.created')
-      throw new Error(`Session ${normalizedId} 缺少 session.created`)
+      throw new Error(diagnostic(this.config.locale, `Session ${normalizedId} 缺少 session.created`, `Session ${normalizedId} is missing session.created`))
 
     return Object.freeze({
       scopeId,
@@ -254,12 +257,12 @@ export class Agent<TContext = undefined> {
    */
   async listSessions(options: ListSessionsOptions): Promise<SessionListPage> {
     if (typeof options !== 'object' || options === null)
-      throw new TypeError('Agent listSessions options 必须是对象')
+      throw new TypeError(diagnostic(this.config.locale, 'Agent listSessions options 必须是对象', 'Agent listSessions options must be an object'))
     const scopeId = typeof options.scopeId === 'string' ? options.scopeId.trim() : ''
     if (!scopeId)
-      throw new TypeError('scopeId 不能为空')
+      throw new TypeError(diagnostic(this.config.locale, 'scopeId 不能为空', 'scopeId cannot be empty'))
     if (!isSessionCatalogStore(this.store))
-      throw new TypeError('当前 SessionStore 未实现 list() 会话目录能力')
+      throw new TypeError(diagnostic(this.config.locale, '当前 SessionStore 未实现 list() 会话目录能力', 'The current SessionStore does not implement the list() session catalog capability'))
 
     return await this.store.list({ ...options, scopeId })
   }

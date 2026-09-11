@@ -12,6 +12,7 @@
 - [Session Log 协议](./protocols/session-log.md)：append-only 事实、乐观并发、一致性分页和消息推导。
 - [Agent Loop 协议](./protocols/agent-loop.md)：Run/Turn/Step、模型流组装、工具调度、预算、终态和实时事件。
 - [Agent 门面协议](./protocols/agent.md)：统一配置、工具组装、精简输出、完整轨迹和会话查询。
+- [本地化诊断协议](./protocols/localized-diagnostics.md)：中英文错误、实例级 locale、传播与第三方文本边界。
 - [安全与信任模型](./security/trust-model.md)：当前威胁模型和长期隔离边界。
 - [Server Runtime 接入规范](./integrations/server-runtime.md)：官方案例 `sample/` 的 Fastify Runtime 组装边界与部署配置。
 

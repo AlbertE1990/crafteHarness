@@ -1,4 +1,5 @@
 import type { Stats } from 'node:fs'
+import type { HarnessLocale } from '../../locale'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import {
@@ -14,10 +15,13 @@ import {
 } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
+import { DEFAULT_LOCALE, diagnostic, resolveLocale } from '../../locale'
 import { ToolError } from '../errors'
 
 /** 创建工作区工具时可调整的路径与资源上限。 */
 export interface WorkspaceToolsOptions {
+  /** 工作区工具自身诊断文本的语言；默认 zh-CN。 */
+  readonly locale?: HarnessLocale
   /** 所有文件路径和终端 workdir 的根目录，默认创建工具时的 process.cwd()。 */
   readonly workspaceRoot?: string
   readonly readLimit?: number
@@ -34,6 +38,7 @@ export interface WorkspaceToolsOptions {
 
 /** 经过校验并补齐默认值的内部配置。 */
 export interface DefinedWorkspaceToolsOptions {
+  readonly locale: HarnessLocale
   readonly workspaceRoot: string
   readonly readLimit: number
   readonly readMaxBytes: number
@@ -70,19 +75,19 @@ export class WorkspaceRuntime {
     const root = this.options.workspaceRoot
     const candidate = path.resolve(root, inputPath)
     if (!isWithin(root, candidate))
-      throw pathDenied(inputPath)
+      throw pathDenied(inputPath, this.options.locale)
 
-    this.rootRealPath ??= resolveWorkspaceRoot(this.options.workspaceRoot)
+    this.rootRealPath ??= resolveWorkspaceRoot(this.options.workspaceRoot, this.options.locale)
     const rootRealPath = await this.rootRealPath
     let actualPath: string
     try {
       actualPath = await resolveThroughExistingAncestor(candidate)
     }
     catch (error) {
-      throw fileSystemError('inspect', portable(path.relative(root, candidate)), error)
+      throw fileSystemError('inspect', portable(path.relative(root, candidate)), error, this.options.locale)
     }
     if (!isWithin(rootRealPath, actualPath))
-      throw pathDenied(inputPath)
+      throw pathDenied(inputPath, this.options.locale)
 
     return Object.freeze({
       absolutePath: actualPath,
@@ -101,13 +106,13 @@ export class WorkspaceRuntime {
     if (observed === undefined) {
       throw new ToolError({
         code: 'FS_NOT_OBSERVED',
-        message: `不能修改“${target.relativePath}”：尚未读取该文件，请先调用 read`,
+        message: diagnostic(this.options.locale, `不能修改“${target.relativePath}”：尚未读取该文件，请先调用 read`, `Cannot modify "${target.relativePath}": the file has not been read; call read first`),
       })
     }
     if (observed !== fileVersion(fileStat)) {
       throw new ToolError({
         code: 'FS_STALE_VERSION',
-        message: `不能修改“${target.relativePath}”：文件在读取后已变化，请重新调用 read`,
+        message: diagnostic(this.options.locale, `不能修改“${target.relativePath}”：文件在读取后已变化，请重新调用 read`, `Cannot modify "${target.relativePath}": the file changed after it was read; call read again`),
       })
     }
   }
@@ -139,14 +144,14 @@ export async function readWorkspaceText(runtime: WorkspaceRuntime, target: Works
     before = await stat(target.absolutePath)
   }
   catch (error) {
-    throw fileSystemError('read', target.relativePath, error)
+    throw fileSystemError('read', target.relativePath, error, runtime.options.locale)
   }
   if (!before.isFile())
-    throw new ToolError({ code: 'FS_NOT_FILE', message: `不能读取“${target.relativePath}”：目标不是普通文件` })
+    throw new ToolError({ code: 'FS_NOT_FILE', message: diagnostic(runtime.options.locale, `不能读取“${target.relativePath}”：目标不是普通文件`, `Cannot read "${target.relativePath}": target is not a regular file`) })
   if (before.size > runtime.options.maxFileBytes) {
     throw new ToolError({
       code: 'FS_FILE_TOO_LARGE',
-      message: `不能读取“${target.relativePath}”：文件超过 ${runtime.options.maxFileBytes} 字节上限`,
+      message: diagnostic(runtime.options.locale, `不能读取“${target.relativePath}”：文件超过 ${runtime.options.maxFileBytes} 字节上限`, `Cannot read "${target.relativePath}": file exceeds the ${runtime.options.maxFileBytes}-byte limit`),
     })
   }
 
@@ -156,7 +161,7 @@ export async function readWorkspaceText(runtime: WorkspaceRuntime, target: Works
     if (fileVersion(before) !== fileVersion(after)) {
       throw new ToolError({
         code: 'FS_CHANGED_DURING_READ',
-        message: `不能读取“${target.relativePath}”：文件在读取过程中发生变化，请重试`,
+        message: diagnostic(runtime.options.locale, `不能读取“${target.relativePath}”：文件在读取过程中发生变化，请重试`, `Cannot read "${target.relativePath}": file changed while being read; retry`),
         retryable: true,
       })
     }
@@ -167,13 +172,13 @@ export async function readWorkspaceText(runtime: WorkspaceRuntime, target: Works
       }
     }
     catch (error) {
-      throw new ToolError({ code: 'FS_NOT_UTF8', message: `不能读取“${target.relativePath}”：文件不是有效 UTF-8 文本`, cause: error })
+      throw new ToolError({ code: 'FS_NOT_UTF8', message: diagnostic(runtime.options.locale, `不能读取“${target.relativePath}”：文件不是有效 UTF-8 文本`, `Cannot read "${target.relativePath}": file is not valid UTF-8 text`), cause: error })
     }
   }
   catch (error) {
     if (error instanceof ToolError)
       throw error
-    throw fileSystemError('read', target.relativePath, error)
+    throw fileSystemError('read', target.relativePath, error, runtime.options.locale)
   }
 }
 
@@ -182,6 +187,7 @@ export async function writeWorkspaceTextAtomically(
   target: WorkspaceTarget,
   content: string,
   replaceExisting: boolean,
+  locale: HarnessLocale = DEFAULT_LOCALE,
 ): Promise<Stats> {
   const temporaryPath = path.join(path.dirname(target.absolutePath), `.craft-harness-${randomUUID()}.tmp`)
   let temporaryExists = false
@@ -207,7 +213,7 @@ export async function writeWorkspaceTextAtomically(
     return await stat(target.absolutePath)
   }
   catch (error) {
-    throw fileSystemError('write', target.relativePath, error)
+    throw fileSystemError('write', target.relativePath, error, locale)
   }
   finally {
     if (temporaryExists)
@@ -216,7 +222,7 @@ export async function writeWorkspaceTextAtomically(
 }
 
 /** 判断路径是否存在，不把权限错误误认为不存在。 */
-export async function pathExists(target: WorkspaceTarget): Promise<boolean> {
+export async function pathExists(target: WorkspaceTarget, locale: HarnessLocale = DEFAULT_LOCALE): Promise<boolean> {
   try {
     await lstat(target.absolutePath)
     return true
@@ -224,55 +230,63 @@ export async function pathExists(target: WorkspaceTarget): Promise<boolean> {
   catch (error) {
     if (hasErrorCode(error, 'ENOENT'))
       return false
-    throw fileSystemError('inspect', target.relativePath, error)
+    throw fileSystemError('inspect', target.relativePath, error, locale)
   }
 }
 
 /** 把文件系统异常转换成不泄漏主机绝对路径的稳定错误。 */
-export function fileSystemError(operation: 'inspect' | 'read' | 'write', relativePath: string, error: unknown) {
+export function fileSystemError(
+  operation: 'inspect' | 'read' | 'write',
+  relativePath: string,
+  error: unknown,
+  locale: HarnessLocale = DEFAULT_LOCALE,
+) {
   if (error instanceof ToolError)
     return error
   const code = getErrorCode(error)
   const verb = operation === 'inspect' ? '检查' : operation === 'read' ? '读取' : '写入'
+  const englishVerb = operation === 'inspect' ? 'inspect' : operation === 'read' ? 'read' : 'write'
   if (code === 'ENOENT')
-    return new ToolError({ code: 'FS_NOT_FOUND', message: `无法${verb}“${relativePath}”：目标不存在`, cause: error })
+    return new ToolError({ code: 'FS_NOT_FOUND', message: diagnostic(locale, `无法${verb}“${relativePath}”：目标不存在`, `Cannot ${englishVerb} "${relativePath}": target does not exist`), cause: error })
   if (code === 'EACCES' || code === 'EPERM')
-    return new ToolError({ code: 'FS_PERMISSION_DENIED', message: `无法${verb}“${relativePath}”：操作系统拒绝访问`, cause: error })
+    return new ToolError({ code: 'FS_PERMISSION_DENIED', message: diagnostic(locale, `无法${verb}“${relativePath}”：操作系统拒绝访问`, `Cannot ${englishVerb} "${relativePath}": access denied by the operating system`), cause: error })
   if (code === 'EEXIST')
-    return new ToolError({ code: 'FS_STALE_VERSION', message: `无法写入“${relativePath}”：目标已被其他操作创建`, cause: error })
-  return new ToolError({ code: 'FS_IO_ERROR', message: `无法${verb}“${relativePath}”`, cause: error })
+    return new ToolError({ code: 'FS_STALE_VERSION', message: diagnostic(locale, `无法写入“${relativePath}”：目标已被其他操作创建`, `Cannot write "${relativePath}": target was created by another operation`), cause: error })
+  return new ToolError({ code: 'FS_IO_ERROR', message: diagnostic(locale, `无法${verb}“${relativePath}”`, `Cannot ${englishVerb} "${relativePath}"`), cause: error })
 }
 
 function defineOptions(options: WorkspaceToolsOptions): DefinedWorkspaceToolsOptions {
+  const locale = resolveLocale(options.locale)
   if (options.workspaceRoot !== undefined && !options.workspaceRoot.trim())
-    throw new TypeError('Workspace tools workspaceRoot 必须是非空字符串')
+    throw new TypeError(diagnostic(locale, 'Workspace tools workspaceRoot 必须是非空字符串', 'Workspace tools workspaceRoot must be a non-empty string'))
   return Object.freeze({
+    locale,
     workspaceRoot: path.resolve(options.workspaceRoot ?? process.cwd()),
-    readLimit: positive(options.readLimit, 2_000, 'readLimit'),
-    readMaxBytes: positive(options.readMaxBytes, 50 * 1024, 'readMaxBytes'),
-    readMaxLineLength: positive(options.readMaxLineLength, 2_000, 'readMaxLineLength'),
-    maxFileBytes: positive(options.maxFileBytes, 10 * 1024 * 1024, 'maxFileBytes'),
-    writeMaxBytes: positive(options.writeMaxBytes, 2 * 1024 * 1024, 'writeMaxBytes'),
-    globLimit: positive(options.globLimit, 100, 'globLimit'),
-    grepLimit: positive(options.grepLimit, 250, 'grepLimit'),
-    searchTimeoutMs: timer(options.searchTimeoutMs, 30_000, 'searchTimeoutMs'),
-    terminalTimeoutMs: timer(options.terminalTimeoutMs, 120_000, 'terminalTimeoutMs'),
-    terminalMaxOutputBytes: positive(options.terminalMaxOutputBytes, 64 * 1024, 'terminalMaxOutputBytes'),
+    readLimit: positive(options.readLimit, 2_000, 'readLimit', locale),
+    readMaxBytes: positive(options.readMaxBytes, 50 * 1024, 'readMaxBytes', locale),
+    readMaxLineLength: positive(options.readMaxLineLength, 2_000, 'readMaxLineLength', locale),
+    maxFileBytes: positive(options.maxFileBytes, 10 * 1024 * 1024, 'maxFileBytes', locale),
+    writeMaxBytes: positive(options.writeMaxBytes, 2 * 1024 * 1024, 'writeMaxBytes', locale),
+    globLimit: positive(options.globLimit, 100, 'globLimit', locale),
+    grepLimit: positive(options.grepLimit, 250, 'grepLimit', locale),
+    searchTimeoutMs: timer(options.searchTimeoutMs, 30_000, 'searchTimeoutMs', locale),
+    terminalTimeoutMs: timer(options.terminalTimeoutMs, 120_000, 'terminalTimeoutMs', locale),
+    terminalMaxOutputBytes: positive(options.terminalMaxOutputBytes, 64 * 1024, 'terminalMaxOutputBytes', locale),
   })
 }
 
-async function resolveWorkspaceRoot(root: string): Promise<string> {
+async function resolveWorkspaceRoot(root: string, locale: HarnessLocale): Promise<string> {
   try {
     await access(root, constants.R_OK)
     const info = await stat(root)
     if (!info.isDirectory())
-      throw new ToolError({ code: 'FS_NOT_DIRECTORY', message: 'workspaceRoot 不是目录' })
+      throw new ToolError({ code: 'FS_NOT_DIRECTORY', message: diagnostic(locale, 'workspaceRoot 不是目录', 'workspaceRoot is not a directory') })
     return await realpath(root)
   }
   catch (error) {
     if (error instanceof ToolError)
       throw error
-    throw new ToolError({ code: 'FS_WORKSPACE_UNAVAILABLE', message: 'workspaceRoot 不可访问', cause: error })
+    throw new ToolError({ code: 'FS_WORKSPACE_UNAVAILABLE', message: diagnostic(locale, 'workspaceRoot 不可访问', 'workspaceRoot is not accessible'), cause: error })
   }
 }
 
@@ -303,8 +317,8 @@ function fileVersion(value: Stats): string {
   return `${value.dev}:${value.ino}:${value.size}:${value.mtimeMs}:${value.ctimeMs}`
 }
 
-function pathDenied(inputPath: string) {
-  return new ToolError({ code: 'FS_PATH_OUTSIDE_WORKSPACE', message: `路径“${inputPath}”超出允许的 workspace` })
+function pathDenied(inputPath: string, locale: HarnessLocale) {
+  return new ToolError({ code: 'FS_PATH_OUTSIDE_WORKSPACE', message: diagnostic(locale, `路径“${inputPath}”超出允许的 workspace`, `Path "${inputPath}" is outside the allowed workspace`) })
 }
 
 function hasErrorCode(error: unknown, code: string): boolean {
@@ -318,17 +332,17 @@ function getErrorCode(error: unknown): string | undefined {
     : undefined
 }
 
-function positive(value: number | undefined, fallback: number, field: string): number {
+function positive(value: number | undefined, fallback: number, field: string, locale: HarnessLocale): number {
   const resolved = value ?? fallback
   if (!Number.isSafeInteger(resolved) || resolved < 1)
-    throw new RangeError(`Workspace tools ${field} 必须是正安全整数`)
+    throw new RangeError(diagnostic(locale, `Workspace tools ${field} 必须是正安全整数`, `Workspace tools ${field} must be a positive safe integer`))
   return resolved
 }
 
-function timer(value: number | undefined, fallback: number, field: string): number {
-  const resolved = positive(value, fallback, field)
+function timer(value: number | undefined, fallback: number, field: string, locale: HarnessLocale): number {
+  const resolved = positive(value, fallback, field, locale)
   if (resolved > 2_147_483_647)
-    throw new RangeError(`Workspace tools ${field} 不能超过 2147483647`)
+    throw new RangeError(diagnostic(locale, `Workspace tools ${field} 不能超过 2147483647`, `Workspace tools ${field} cannot exceed 2147483647`))
   return resolved
 }
 

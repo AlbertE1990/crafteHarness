@@ -1,3 +1,4 @@
+import type { HarnessLocale } from '../locale'
 import type {
   ToolApprovalHandler,
   ToolApprovalOutcome,
@@ -10,6 +11,7 @@ import type {
   ToolGuardOutputListener,
 } from './tool-guard'
 import { randomUUID } from 'node:crypto'
+import { DEFAULT_LOCALE, diagnostic, resolveLocale } from '../locale'
 import {
   DEFAULT_TOOL_APPROVAL_TIMEOUT_MS,
   MAX_TOOL_APPROVAL_TIMEOUT_MS,
@@ -17,6 +19,7 @@ import {
 
 /** ApprovalManager 的时钟和 ID 依赖可注入，便于宿主测试确定时间与关联字段。 */
 export interface ToolApprovalManagerOptions {
+  readonly locale?: HarnessLocale
   readonly defaultTimeoutMs?: number
   readonly createApprovalId?: () => string
   readonly now?: () => Date
@@ -45,11 +48,13 @@ export class ToolApprovalManager<TContext = undefined> {
   private readonly defaultTimeoutMs: number
   private readonly createApprovalId: () => string
   private readonly now: () => Date
+  private readonly locale: HarnessLocale
 
   constructor(options: ToolApprovalManagerOptions = {}) {
+    this.locale = resolveLocale(options.locale)
     const defaultTimeoutMs = options.defaultTimeoutMs
       ?? DEFAULT_TOOL_APPROVAL_TIMEOUT_MS
-    validateTimeout(defaultTimeoutMs)
+    validateTimeout(defaultTimeoutMs, this.locale)
     this.defaultTimeoutMs = defaultTimeoutMs
     this.createApprovalId = options.createApprovalId
       ?? (() => `approval-${randomUUID()}`)
@@ -62,11 +67,11 @@ export class ToolApprovalManager<TContext = undefined> {
    * 返回的清理函数会令该 Run 尚未完成的审批按 unavailable 收口，防止 Run 结束后遗留 Promise。
    */
   observeRun(runId: string, listener: ToolGuardOutputListener): () => void {
-    validateIdentifier(runId, 'runId')
+    validateIdentifier(runId, 'runId', this.locale)
     if (typeof listener !== 'function')
-      throw new TypeError('ToolGuardOutputListener 必须是函数')
+      throw new TypeError(diagnostic(this.locale, 'ToolGuardOutputListener 必须是函数', 'ToolGuardOutputListener must be a function'))
     if (this.listeners.has(runId))
-      throw new Error(`Run ${runId} 已注册工具审批监听器`)
+      throw new Error(diagnostic(this.locale, `Run ${runId} 已注册工具审批监听器`, `Run ${runId} already has a tool approval listener`))
 
     this.listeners.set(runId, listener)
     return () => {
@@ -99,7 +104,7 @@ export class ToolApprovalManager<TContext = undefined> {
 
     const approvalTimeoutMs = request.approvalTimeoutMs
       ?? this.defaultTimeoutMs
-    validateTimeout(approvalTimeoutMs)
+    validateTimeout(approvalTimeoutMs, this.locale)
     const approvalId = this.allocateApprovalId()
     const requestedAtDate = this.now()
     const requestedAt = requestedAtDate.toISOString()
@@ -177,10 +182,10 @@ export class ToolApprovalManager<TContext = undefined> {
   /** 提交一次用户决定；已完成、过期、未知或重复的 approvalId 不会再次生效。 */
   resolve(request: ResolveToolApprovalRequest): ResolveToolApprovalResult {
     if (typeof request !== 'object' || request === null)
-      throw new TypeError('工具审批决定必须是对象')
-    validateIdentifier(request.approvalId, 'approvalId')
+      throw new TypeError(diagnostic(this.locale, '工具审批决定必须是对象', 'Tool approval decision must be an object'))
+    validateIdentifier(request.approvalId, 'approvalId', this.locale)
     if (request.decision !== 'allow' && request.decision !== 'deny')
-      throw new TypeError('工具审批决定必须是 allow 或 deny')
+      throw new TypeError(diagnostic(this.locale, '工具审批决定必须是 allow 或 deny', 'Tool approval decision must be allow or deny'))
 
     const pending = this.pending.get(request.approvalId)
     if (!pending)
@@ -205,7 +210,7 @@ export class ToolApprovalManager<TContext = undefined> {
       if (approvalId && !this.pending.has(approvalId))
         return approvalId
     }
-    throw new Error('无法生成唯一的工具审批 ID')
+    throw new Error(diagnostic(this.locale, '无法生成唯一的工具审批 ID', 'Could not generate a unique tool approval ID'))
   }
 }
 
@@ -231,18 +236,22 @@ async function safelyNotify(
 }
 
 /** 校验关联 ID，业务值排在诊断字段名之前。 */
-function validateIdentifier(value: string, field: string): void {
+function validateIdentifier(value: string, field: string, locale: HarnessLocale): void {
   if (typeof value !== 'string' || !value.trim())
-    throw new TypeError(`${field} 必须是非空字符串`)
+    throw new TypeError(diagnostic(locale, `${field} 必须是非空字符串`, `${field} must be a non-empty string`))
 }
 
 /** 审批时限接受 -1（永久等待）或 setTimeout 可稳定表达的正整数。 */
-function validateTimeout(value: number): void {
+function validateTimeout(value: number, locale: HarnessLocale = DEFAULT_LOCALE): void {
   if (value === -1)
     return
   if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_TOOL_APPROVAL_TIMEOUT_MS) {
     throw new TypeError(
-      `approvalTimeoutMs 必须是 -1，或 1 到 ${MAX_TOOL_APPROVAL_TIMEOUT_MS} 的整数`,
+      diagnostic(
+        locale,
+        `approvalTimeoutMs 必须是 -1，或 1 到 ${MAX_TOOL_APPROVAL_TIMEOUT_MS} 的整数`,
+        `approvalTimeoutMs must be -1 or an integer from 1 to ${MAX_TOOL_APPROVAL_TIMEOUT_MS}`,
+      ),
     )
   }
 }

@@ -8,6 +8,7 @@ import type {
   AgentLoopLimits,
   AgentTool,
 } from '../core'
+import type { HarnessLocale } from '../locale'
 import type {
   ToolEventListener,
   ToolGuardEvaluator,
@@ -16,6 +17,7 @@ import type { BuiltinToolName } from '../tools/builtins/registry'
 import type { AgentToolInput } from './normalize-tools'
 import { normalizeModelId, normalizeReasoningEffort } from '../core'
 import { createLimits } from '../core/stop-policy'
+import { diagnostic, resolveLocale } from '../locale'
 import { MemorySessionStore } from '../sessions'
 import { builtinToolNames, createBuiltinTools } from '../tools/builtins/registry'
 import { normalizeAgentToolDefinitions } from './normalize-tools'
@@ -76,6 +78,8 @@ export interface AgentObservabilityConfig {
 
 /** 创建 CraftAgent 时由开发者提供的单一配置根。 */
 export interface AgentConfigInput<TContext = undefined> {
+  /** Harness 自身诊断文本的语言；默认 zh-CN。 */
+  readonly locale?: HarnessLocale
   /** 处理供应商连接、鉴权和线协议，不绑定具体模型。 */
   readonly adapter: ModelAdapter
   /** 默认模型选择；请求级 model 会整体替换它。 */
@@ -113,6 +117,7 @@ export interface DefinedAgentObservabilityConfig {
 
 /** defineAgentConfig() 返回的已归一化、只读配置。 */
 export interface DefinedAgentConfig<TContext = undefined> {
+  readonly locale: HarnessLocale
   readonly adapter: ModelAdapter
   readonly model: Readonly<ModelSelection>
   readonly tools: DefinedAgentToolsConfig<TContext>
@@ -131,45 +136,53 @@ export interface DefinedAgentConfig<TContext = undefined> {
 export function defineAgentConfig<TContext = undefined>(
   input: AgentConfigInput<TContext>,
 ): DefinedAgentConfig<TContext> {
+  const locale = resolveLocale(
+    typeof input === 'object' && input !== null
+      ? (input as { readonly locale?: unknown }).locale
+      : undefined,
+  )
   if (typeof input !== 'object' || input === null)
-    throw new TypeError('Agent 配置必须是对象')
+    throw new TypeError(diagnostic(locale, 'Agent 配置必须是对象', 'Agent config must be an object'))
   assertKnownConfigFields(
     input,
-    ['adapter', 'model', 'systemPrompt', 'tools', 'sessionStore', 'execution', 'observability'],
+    ['locale', 'adapter', 'model', 'systemPrompt', 'tools', 'sessionStore', 'execution', 'observability'],
     'Agent config',
+    locale,
   )
-  assertOptionalConfigGroup(input.execution, 'execution')
-  assertOptionalConfigGroup(input.observability, 'observability')
-  assertKnownConfigFields(input.execution, ['limits', 'now'], 'Agent config.execution')
+  assertOptionalConfigGroup(input.execution, 'execution', locale)
+  assertOptionalConfigGroup(input.observability, 'observability', locale)
+  assertKnownConfigFields(input.execution, ['limits', 'now'], 'Agent config.execution', locale)
   assertKnownConfigFields(
     input.observability,
     ['onToolEvent', 'onTrace'],
     'Agent config.observability',
+    locale,
   )
 
   if (input.sessionStore !== undefined
     && (typeof input.sessionStore.append !== 'function'
       || typeof input.sessionStore.read !== 'function')) {
-    throw new TypeError('Agent config.sessionStore 必须实现 SessionStore')
+    throw new TypeError(diagnostic(locale, 'Agent config.sessionStore 必须实现 SessionStore', 'Agent config.sessionStore must implement SessionStore'))
   }
   if (input.execution?.now !== undefined && typeof input.execution.now !== 'function')
-    throw new TypeError('Agent config.execution.now 必须是函数')
+    throw new TypeError(diagnostic(locale, 'Agent config.execution.now 必须是函数', 'Agent config.execution.now must be a function'))
   if (input.observability?.onToolEvent !== undefined
     && typeof input.observability.onToolEvent !== 'function') {
-    throw new TypeError('Agent config.observability.onToolEvent 必须是函数')
+    throw new TypeError(diagnostic(locale, 'Agent config.observability.onToolEvent 必须是函数', 'Agent config.observability.onToolEvent must be a function'))
   }
   if (input.observability?.onTrace !== undefined
     && typeof input.observability.onTrace !== 'function') {
-    throw new TypeError('Agent config.observability.onTrace 必须是函数')
+    throw new TypeError(diagnostic(locale, 'Agent config.observability.onTrace 必须是函数', 'Agent config.observability.onTrace must be a function'))
   }
 
-  validateModelAdapter(input.adapter)
-  const model = defineModelSelection(input.model, 'Agent config.model')
-  const registeredTools = createTools<TContext>(input.tools)
-  const limits = createLimits(input.execution?.limits)
+  validateModelAdapter(input.adapter, locale)
+  const model = defineModelSelection(input.model, 'Agent config.model', locale)
+  const registeredTools = createTools<TContext>(input.tools, locale)
+  const limits = createLimits(input.execution?.limits, locale)
   const guardConfig = defineToolGuardConfig(
     input.tools?.guard,
     input.tools?.approvalTimeoutMs,
+    locale,
   )
   const systemPrompt = input.systemPrompt?.trim()
   const now = input.execution?.now ?? (() => new Date())
@@ -192,21 +205,22 @@ export function defineAgentConfig<TContext = undefined>(
   })
 
   return Object.freeze({
+    locale,
     adapter: input.adapter,
     model,
     tools,
     ...(systemPrompt ? { systemPrompt } : {}),
-    sessionStore: input.sessionStore ?? new MemorySessionStore({ now }),
+    sessionStore: input.sessionStore ?? new MemorySessionStore({ now, locale }),
     execution,
     observability,
   })
 }
 
 /** 可选配置组必须是普通对象，避免数组或原始值在归一化时被静默忽略。 */
-function assertOptionalConfigGroup(value: unknown, name: string): void {
+function assertOptionalConfigGroup(value: unknown, name: string, locale: HarnessLocale): void {
   if (value !== undefined
     && (typeof value !== 'object' || value === null || Array.isArray(value))) {
-    throw new TypeError(`Agent config.${name} 必须是对象`)
+    throw new TypeError(diagnostic(locale, `Agent config.${name} 必须是对象`, `Agent config.${name} must be an object`))
   }
 }
 
@@ -215,6 +229,7 @@ function assertKnownConfigFields(
   value: object | undefined,
   allowedFields: readonly string[],
   path: string,
+  locale: HarnessLocale,
 ): void {
   if (value === undefined)
     return
@@ -222,31 +237,33 @@ function assertKnownConfigFields(
   const allowed = new Set(allowedFields)
   const unknownField = Object.keys(value).find(field => !allowed.has(field))
   if (unknownField)
-    throw new TypeError(`${path} 包含未知字段：${unknownField}`)
+    throw new TypeError(diagnostic(locale, `${path} 包含未知字段：${unknownField}`, `${path} contains unknown field: ${unknownField}`))
 }
 
 /** 将工具选择配置解析为 AgentLoop 可直接消费的最终只读集合。 */
 function createTools<TContext = undefined>(
   input: AgentToolsInput<TContext> | undefined,
+  locale: HarnessLocale,
 ): readonly AgentTool<TContext>[] {
   if (input === undefined)
-    return createBuiltinTools<TContext>()
+    return createBuiltinTools<TContext>({ locale })
   if (typeof input !== 'object' || input === null || Array.isArray(input))
-    throw new TypeError('Agent config.tools 必须是工具配置对象')
+    throw new TypeError(diagnostic(locale, 'Agent config.tools 必须是工具配置对象', 'Agent config.tools must be a tool config object'))
 
   if (input.mode === 'replace') {
-    rejectReplaceOnlyFields(input)
+    rejectReplaceOnlyFields(input, locale)
     assertKnownConfigFields(
       input,
       ['mode', 'tools', 'guard', 'approvalTimeoutMs'],
       'Agent config.tools',
+      locale,
     )
     if (!Array.isArray(input.tools))
-      throw new TypeError('Agent config.tools.tools 必须是数组')
-    return freezeUniqueTools(normalizeAgentToolDefinitions<TContext>(input.tools))
+      throw new TypeError(diagnostic(locale, 'Agent config.tools.tools 必须是数组', 'Agent config.tools.tools must be an array'))
+    return freezeUniqueTools(normalizeAgentToolDefinitions<TContext>(input.tools, locale), locale)
   }
   if (input.mode !== undefined && input.mode !== 'extend')
-    throw new TypeError('Agent config.tools.mode 必须是 extend 或 replace')
+    throw new TypeError(diagnostic(locale, 'Agent config.tools.mode 必须是 extend 或 replace', 'Agent config.tools.mode must be extend or replace'))
 
   const extend = input as ExtendAgentToolsConfig<TContext>
   assertKnownConfigFields(
@@ -262,35 +279,36 @@ function createTools<TContext = undefined>(
       'approvalTimeoutMs',
     ],
     'Agent config.tools',
+    locale,
   )
   if (extend.disabledBuiltins !== undefined
     && !Array.isArray(extend.disabledBuiltins)) {
-    throw new TypeError('Agent config.tools.disabledBuiltins 必须是数组')
+    throw new TypeError(diagnostic(locale, 'Agent config.tools.disabledBuiltins 必须是数组', 'Agent config.tools.disabledBuiltins must be an array'))
   }
   if (extend.additional !== undefined && !Array.isArray(extend.additional))
-    throw new TypeError('Agent config.tools.additional 必须是数组')
+    throw new TypeError(diagnostic(locale, 'Agent config.tools.additional 必须是数组', 'Agent config.tools.additional must be an array'))
   if (extend.workspaceRoot !== undefined
     && (typeof extend.workspaceRoot !== 'string' || !extend.workspaceRoot.trim())) {
-    throw new TypeError('Agent config.tools.workspaceRoot 必须是非空字符串')
+    throw new TypeError(diagnostic(locale, 'Agent config.tools.workspaceRoot 必须是非空字符串', 'Agent config.tools.workspaceRoot must be a non-empty string'))
   }
   if (extend.overrides !== undefined
     && (typeof extend.overrides !== 'object'
       || extend.overrides === null
       || Array.isArray(extend.overrides))) {
-    throw new TypeError('Agent config.tools.overrides 必须是对象')
+    throw new TypeError(diagnostic(locale, 'Agent config.tools.overrides 必须是对象', 'Agent config.tools.overrides must be an object'))
   }
   if (extend.guardOverrides !== undefined
     && (typeof extend.guardOverrides !== 'object'
       || extend.guardOverrides === null
       || Array.isArray(extend.guardOverrides))) {
-    throw new TypeError('Agent config.tools.guardOverrides 必须是对象')
+    throw new TypeError(diagnostic(locale, 'Agent config.tools.guardOverrides 必须是对象', 'Agent config.tools.guardOverrides must be an object'))
   }
 
   const builtinNames = new Set<string>(builtinToolNames)
   const disabled = new Set<string>()
   for (const name of extend.disabledBuiltins ?? []) {
     if (!builtinNames.has(name))
-      throw new TypeError(`未知的内置工具：${name}`)
+      throw new TypeError(diagnostic(locale, `未知的内置工具：${name}`, `Unknown built-in tool: ${name}`))
     disabled.add(name)
   }
 
@@ -298,30 +316,31 @@ function createTools<TContext = undefined>(
   const normalizedOverrides: Partial<Record<BuiltinToolName, AgentTool<TContext>>> = {}
   for (const name of Object.keys(overrides)) {
     if (!builtinNames.has(name))
-      throw new TypeError(`不能覆盖未知的内置工具：${name}`)
+      throw new TypeError(diagnostic(locale, `不能覆盖未知的内置工具：${name}`, `Cannot override unknown built-in tool: ${name}`))
     if (disabled.has(name))
-      throw new TypeError(`内置工具不能同时禁用和覆盖：${name}`)
+      throw new TypeError(diagnostic(locale, `内置工具不能同时禁用和覆盖：${name}`, `Built-in tool cannot be disabled and overridden at the same time: ${name}`))
     const builtinName = name as BuiltinToolName
     const source = overrides[builtinName]
-    const tool = source ? normalizeAgentToolDefinitions<TContext>([source])[0] : undefined
+    const tool = source ? normalizeAgentToolDefinitions<TContext>([source], locale)[0] : undefined
     if (!tool || tool.name !== name)
-      throw new TypeError(`内置工具 ${name} 的覆盖实现必须使用相同名称`)
+      throw new TypeError(diagnostic(locale, `内置工具 ${name} 的覆盖实现必须使用相同名称`, `Override for built-in tool ${name} must use the same name`))
     normalizedOverrides[builtinName] = tool
   }
 
   const guardOverrides = extend.guardOverrides ?? {}
   for (const name of Object.keys(guardOverrides)) {
     if (!builtinNames.has(name))
-      throw new TypeError(`不能覆盖未知内置工具的 Guard：${name}`)
+      throw new TypeError(diagnostic(locale, `不能覆盖未知内置工具的 Guard：${name}`, `Cannot override the guard of unknown built-in tool: ${name}`))
     if (disabled.has(name))
-      throw new TypeError(`内置工具不能同时禁用和覆盖 Guard：${name}`)
+      throw new TypeError(diagnostic(locale, `内置工具不能同时禁用和覆盖 Guard：${name}`, `Built-in tool cannot be disabled and have its guard overridden at the same time: ${name}`))
     const guard = guardOverrides[name as BuiltinToolName]
     if (guard !== null && guard !== undefined && typeof guard !== 'function')
-      throw new TypeError(`内置工具 ${name} 的 Guard 覆盖必须是函数或 null`)
+      throw new TypeError(diagnostic(locale, `内置工具 ${name} 的 Guard 覆盖必须是函数或 null`, `Guard override for built-in tool ${name} must be a function or null`))
   }
 
   const builtins = createBuiltinTools<TContext>({
     ...(extend.workspaceRoot ? { workspaceRoot: extend.workspaceRoot } : {}),
+    locale,
   })
   const resolved = builtins.flatMap((tool) => {
     if (disabled.has(tool.name))
@@ -347,12 +366,12 @@ function createTools<TContext = undefined>(
       execute,
     })]
   })
-  const additional = normalizeAgentToolDefinitions<TContext>(extend.additional ?? [])
-  return freezeUniqueTools([...resolved, ...additional])
+  const additional = normalizeAgentToolDefinitions<TContext>(extend.additional ?? [], locale)
+  return freezeUniqueTools([...resolved, ...additional], locale)
 }
 
 /** replace 是互斥模式，运行时也拒绝混入 extend 专属字段。 */
-function rejectReplaceOnlyFields<TContext>(input: ReplaceAgentToolsConfig<TContext>): void {
+function rejectReplaceOnlyFields<TContext>(input: ReplaceAgentToolsConfig<TContext>, locale: HarnessLocale): void {
   const value = input as ReplaceAgentToolsConfig<TContext> & {
     readonly disabledBuiltins?: unknown
     readonly overrides?: unknown
@@ -365,34 +384,35 @@ function rejectReplaceOnlyFields<TContext>(input: ReplaceAgentToolsConfig<TConte
     || value.additional !== undefined
     || value.guardOverrides !== undefined
     || value.workspaceRoot !== undefined) {
-    throw new TypeError('Agent config.tools 的 replace 模式不能配置 workspaceRoot、禁用、覆盖或追加字段')
+    throw new TypeError(diagnostic(locale, 'Agent config.tools 的 replace 模式不能配置 workspaceRoot、禁用、覆盖或追加字段', 'Agent config.tools cannot configure workspaceRoot, disable, override, or append fields in replace mode'))
   }
 }
 
 /** 冻结工具集合，并在 Agent 启动阶段拒绝空名称和任何重复注册。 */
 function freezeUniqueTools<TContext>(
   tools: readonly AgentTool<TContext>[],
+  locale: HarnessLocale,
 ): readonly AgentTool<TContext>[] {
   const names = new Set<string>()
   for (const tool of tools) {
     if (typeof tool !== 'object' || tool === null || typeof tool.name !== 'string' || !tool.name.trim())
-      throw new TypeError('Agent 工具必须提供非空名称')
+      throw new TypeError(diagnostic(locale, 'Agent 工具必须提供非空名称', 'Agent tools must provide a non-empty name'))
     if (names.has(tool.name))
-      throw new TypeError(`Agent 工具名称重复：${tool.name}`)
+      throw new TypeError(diagnostic(locale, `Agent 工具名称重复：${tool.name}`, `Duplicate Agent tool name: ${tool.name}`))
     names.add(tool.name)
   }
   return Object.freeze([...tools])
 }
 
 /** 归一化模型选择；配置与请求使用同一形状。 */
-function defineModelSelection(input: ModelSelection, path: string): Readonly<ModelSelection> {
+function defineModelSelection(input: ModelSelection, path: string, locale: HarnessLocale): Readonly<ModelSelection> {
   if (typeof input !== 'object' || input === null || Array.isArray(input))
-    throw new TypeError(`${path} 必须是模型选择对象`)
-  assertKnownConfigFields(input, ['id', 'reasoningEffort'], path)
-  const id = normalizeModelId(input.id, `${path}.id`)
+    throw new TypeError(diagnostic(locale, `${path} 必须是模型选择对象`, `${path} must be a model selection object`))
+  assertKnownConfigFields(input, ['id', 'reasoningEffort'], path, locale)
+  const id = normalizeModelId(input.id, `${path}.id`, locale)
   const reasoningEffort = input.reasoningEffort === undefined
     ? undefined
-    : normalizeReasoningEffort(input.reasoningEffort, `${path}.reasoningEffort`)
+    : normalizeReasoningEffort(input.reasoningEffort, `${path}.reasoningEffort`, locale)
   return Object.freeze({
     id,
     ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
@@ -400,11 +420,11 @@ function defineModelSelection(input: ModelSelection, path: string): Readonly<Mod
 }
 
 /** 在 AgentLoop 启动前检查 Adapter 的最小稳定身份。 */
-function validateModelAdapter(adapter: ModelAdapter): void {
+function validateModelAdapter(adapter: ModelAdapter, locale: HarnessLocale): void {
   if (typeof adapter !== 'object' || adapter === null)
-    throw new TypeError('Agent config.adapter 必须实现 ModelAdapter')
+    throw new TypeError(diagnostic(locale, 'Agent config.adapter 必须实现 ModelAdapter', 'Agent config.adapter must implement ModelAdapter'))
   if (typeof adapter.provider !== 'string' || !adapter.provider.trim())
-    throw new TypeError('ModelAdapter 的 provider 不能为空')
+    throw new TypeError(diagnostic(locale, 'ModelAdapter 的 provider 不能为空', 'ModelAdapter provider cannot be empty'))
   if (typeof adapter.complete !== 'function' || typeof adapter.stream !== 'function')
-    throw new TypeError('ModelAdapter 必须实现 complete() 和 stream()')
+    throw new TypeError(diagnostic(locale, 'ModelAdapter 必须实现 complete() 和 stream()', 'ModelAdapter must implement complete() and stream()'))
 }

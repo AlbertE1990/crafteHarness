@@ -115,6 +115,7 @@ interface ToolRunContext<TContext> {
   runId?: string
   sessionId?: string
   attempt: number
+  locale: 'zh-CN' | 'en-US'
   context: TContext
   signal: AbortSignal
 }
@@ -122,6 +123,7 @@ interface ToolRunContext<TContext> {
 
 - `callId` 在同一逻辑调用的所有重试中保持不变，可作为幂等键。
 - `attempt` 从 1 开始，每次自动重试递增。
+- `locale` 是当前 Harness 诊断语言，内置工具用它生成本地化错误。
 - `context` 是当前 Agent Run 的租户、用户和环境等宿主数据。
 - `signal` 合并调用方取消和单次工具超时。
 

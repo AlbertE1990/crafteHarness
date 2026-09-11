@@ -1,9 +1,11 @@
+import type { HarnessLocale } from '../../locale'
 import type { WorkspaceRuntime } from './workspace'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import process from 'node:process'
 import { z } from 'zod'
+import { diagnostic } from '../../locale'
 import { defineTool } from '../define-tool'
 import { ToolError } from '../errors'
 import { fileSystemError } from './workspace'
@@ -42,16 +44,17 @@ export function createTerminalTool(runtime: WorkspaceRuntime) {
         info = await stat(target.absolutePath)
       }
       catch (error) {
-        throw fileSystemError('inspect', target.relativePath, error)
+        throw fileSystemError('inspect', target.relativePath, error, runtime.options.locale)
       }
       if (!info.isDirectory())
-        throw new ToolError({ code: 'FS_NOT_DIRECTORY', message: `终端 workdir“${target.relativePath}”不是目录` })
+        throw new ToolError({ code: 'FS_NOT_DIRECTORY', message: diagnostic(runtime.options.locale, `终端 workdir“${target.relativePath}”不是目录`, `Terminal workdir "${target.relativePath}" is not a directory`) })
       return await runCommand(
         input.command,
         target.absolutePath,
         input.timeout_ms ?? runtime.options.terminalTimeoutMs,
         runtime.options.terminalMaxOutputBytes,
         context.signal,
+        runtime.options.locale,
       )
     },
     renderOutput(value) {
@@ -62,10 +65,17 @@ export function createTerminalTool(runtime: WorkspaceRuntime) {
         value.truncated ? '[output truncated; tail retained]' : '',
       ].filter(Boolean).join('\n')
     },
-  })
+  }, { locale: runtime.options.locale })
 }
 
-async function runCommand(command: string, cwd: string, timeoutMs: number, maxBytes: number, signal: AbortSignal) {
+async function runCommand(
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+  maxBytes: number,
+  signal: AbortSignal,
+  locale: HarnessLocale,
+) {
   return await new Promise<{ exit_code: number | null, stdout: string, stderr: string, truncated: boolean }>((resolve, reject) => {
     const shell = process.platform === 'win32'
       ? { executable: 'powershell.exe', args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command] }
@@ -102,7 +112,7 @@ async function runCommand(command: string, cwd: string, timeoutMs: number, maxBy
         return
       settled = true
       cleanup()
-      reject(new ToolError({ code: 'TERMINAL_START_FAILED', message: '无法启动系统 shell', cause: error }))
+      reject(new ToolError({ code: 'TERMINAL_START_FAILED', message: diagnostic(locale, '无法启动系统 shell', 'Could not start the system shell'), cause: error }))
     })
     child.once('close', (code) => {
       if (settled)
@@ -110,11 +120,11 @@ async function runCommand(command: string, cwd: string, timeoutMs: number, maxBy
       settled = true
       cleanup()
       if (timedOut) {
-        reject(new ToolError({ code: 'TERMINAL_TIMEOUT', message: `命令在 ${timeoutMs}ms 内未完成`, retryable: true }))
+        reject(new ToolError({ code: 'TERMINAL_TIMEOUT', message: diagnostic(locale, `命令在 ${timeoutMs}ms 内未完成`, `Command did not complete within ${timeoutMs}ms`), retryable: true }))
         return
       }
       if (signal.aborted) {
-        reject(new ToolError({ code: 'ABORTED', message: '终端命令已取消' }))
+        reject(new ToolError({ code: 'ABORTED', message: diagnostic(locale, '终端命令已取消', 'Terminal command was cancelled') }))
         return
       }
       resolve({ exit_code: code, stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8'), truncated })

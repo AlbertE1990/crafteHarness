@@ -1,4 +1,6 @@
+import type { HarnessLocale } from '../../locale'
 import { z } from 'zod'
+import { diagnostic, resolveLocale } from '../../locale'
 import { defineTool } from '../define-tool'
 import { ToolError } from '../errors'
 
@@ -9,6 +11,7 @@ export interface Clock {
 
 /** 创建当前时间工具时可以覆盖的运行参数。 */
 export interface CurrentTimeToolOptions {
+  readonly locale?: HarnessLocale
   readonly defaultTimezone?: string
   readonly clock?: Clock
 }
@@ -23,7 +26,8 @@ const systemClock: Clock = {
  * 工具接受 IANA 时区并返回带偏移量的 ISO 8601 墙上时间；空值使用创建时配置的默认时区。
  */
 export function createCurrentTimeTool(options: CurrentTimeToolOptions = {}) {
-  const defaultTimezone = validateTimezone(options.defaultTimezone ?? 'Asia/Shanghai')
+  const locale = resolveLocale(options.locale)
+  const defaultTimezone = validateTimezone(options.defaultTimezone ?? 'Asia/Shanghai', locale)
   const clock = options.clock ?? systemClock
 
   return defineTool({
@@ -45,12 +49,12 @@ export function createCurrentTimeTool(options: CurrentTimeToolOptions = {}) {
       utcOffset: z.string(),
     }),
     execute(input) {
-      const timezone = validateTimezone(input.timezone ?? defaultTimezone)
+      const timezone = validateTimezone(input.timezone ?? defaultTimezone, locale)
       const now = clock.now()
       if (!Number.isFinite(now.getTime())) {
         throw new ToolError({
           code: 'INVALID_CLOCK_VALUE',
-          message: '时钟返回了无效日期',
+          message: diagnostic(locale, '时钟返回了无效日期', 'Clock returned an invalid date'),
         })
       }
 
@@ -71,7 +75,7 @@ export function createCurrentTimeTool(options: CurrentTimeToolOptions = {}) {
         utcOffset,
       }
     },
-  })
+  }, { locale })
 }
 
 /** 时间格式化所需的数字字段。 */
@@ -85,7 +89,7 @@ interface DateTimeParts {
 }
 
 /** 验证 IANA 时区名称，并将底层 RangeError 转成稳定工具错误。 */
-function validateTimezone(timezone: string): string {
+function validateTimezone(timezone: string, locale: HarnessLocale): string {
   const normalized = timezone.trim()
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: normalized }).format()
@@ -93,7 +97,7 @@ function validateTimezone(timezone: string): string {
   catch (error) {
     throw new ToolError({
       code: 'INVALID_TIMEZONE',
-      message: `不支持的 IANA 时区：${normalized}`,
+      message: diagnostic(locale, `不支持的 IANA 时区：${normalized}`, `Unsupported IANA timezone: ${normalized}`),
       cause: error,
     })
   }

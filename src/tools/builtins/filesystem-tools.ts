@@ -2,6 +2,7 @@ import type { WorkspaceRuntime } from './workspace'
 import { Buffer } from 'node:buffer'
 import { stat } from 'node:fs/promises'
 import { z } from 'zod'
+import { diagnostic } from '../../locale'
 import { defineTool } from '../define-tool'
 import { ToolError } from '../errors'
 import { fileSystemError, pathExists, readWorkspaceText, writeWorkspaceTextAtomically } from './workspace'
@@ -66,7 +67,7 @@ function createReadTool(runtime: WorkspaceRuntime) {
       const footer = `[${value.file_path}: lines ${value.offset}-${end} of ${value.total_lines}${value.truncated ? '; truncated' : ''}]`
       return body ? `${body}\n${footer}` : footer
     },
-  })
+  }, { locale: runtime.options.locale })
 }
 
 function createWriteTool(runtime: WorkspaceRuntime) {
@@ -90,23 +91,23 @@ function createWriteTool(runtime: WorkspaceRuntime) {
       details: { file_path: input.file_path },
     }),
     async execute(input) {
-      assertWriteSize(input.content, runtime.options.writeMaxBytes)
+      assertWriteSize(input.content, runtime.options.writeMaxBytes, runtime.options.locale)
       const target = await runtime.resolve(input.file_path)
       return await runtime.withPathLock(target, async () => {
-        const existing = await pathExists(target)
+        const existing = await pathExists(target, runtime.options.locale)
         if (existing) {
           let current
           try {
             current = await stat(target.absolutePath)
           }
           catch (error) {
-            throw fileSystemError('inspect', target.relativePath, error)
+            throw fileSystemError('inspect', target.relativePath, error, runtime.options.locale)
           }
           if (!current.isFile())
-            throw new ToolError({ code: 'FS_NOT_FILE', message: `不能写入“${target.relativePath}”：目标不是普通文件` })
+            throw new ToolError({ code: 'FS_NOT_FILE', message: diagnostic(runtime.options.locale, `不能写入“${target.relativePath}”：目标不是普通文件`, `Cannot write "${target.relativePath}": target is not a regular file`) })
           runtime.requireFreshObservation(target, current)
         }
-        const written = await writeWorkspaceTextAtomically(target, input.content, existing)
+        const written = await writeWorkspaceTextAtomically(target, input.content, existing, runtime.options.locale)
         runtime.observe(target, written)
         return {
           file_path: target.relativePath,
@@ -115,7 +116,7 @@ function createWriteTool(runtime: WorkspaceRuntime) {
         }
       })
     },
-  })
+  }, { locale: runtime.options.locale })
 }
 
 function createEditTool(runtime: WorkspaceRuntime) {
@@ -141,26 +142,26 @@ function createEditTool(runtime: WorkspaceRuntime) {
       details: { file_path: input.file_path, replace_all: input.replace_all ?? false },
     }),
     async execute(input) {
-      assertWriteSize(input.old_string, runtime.options.writeMaxBytes)
-      assertWriteSize(input.new_string, runtime.options.writeMaxBytes)
+      assertWriteSize(input.old_string, runtime.options.writeMaxBytes, runtime.options.locale)
+      assertWriteSize(input.new_string, runtime.options.writeMaxBytes, runtime.options.locale)
       const target = await runtime.resolve(input.file_path)
       return await runtime.withPathLock(target, async () => {
         const result = await readWorkspaceText(runtime, target)
         runtime.requireFreshObservation(target, result.stat)
         const matches = countOccurrences(result.content, input.old_string)
         if (matches === 0)
-          throw new ToolError({ code: 'FS_EDIT_NO_MATCH', message: `不能编辑“${target.relativePath}”：old_string 未找到` })
+          throw new ToolError({ code: 'FS_EDIT_NO_MATCH', message: diagnostic(runtime.options.locale, `不能编辑“${target.relativePath}”：old_string 未找到`, `Cannot edit "${target.relativePath}": old_string was not found`) })
         if (!input.replace_all && matches !== 1) {
           throw new ToolError({
             code: 'FS_EDIT_AMBIGUOUS',
-            message: `不能编辑“${target.relativePath}”：old_string 出现 ${matches} 次，请增加上下文或启用 replace_all`,
+            message: diagnostic(runtime.options.locale, `不能编辑“${target.relativePath}”：old_string 出现 ${matches} 次，请增加上下文或启用 replace_all`, `Cannot edit "${target.relativePath}": old_string occurs ${matches} times; add context or enable replace_all`),
           })
         }
         const updated = input.replace_all
           ? result.content.split(input.old_string).join(input.new_string)
           : result.content.replace(input.old_string, input.new_string)
-        assertWriteSize(updated, runtime.options.writeMaxBytes)
-        const written = await writeWorkspaceTextAtomically(target, updated, true)
+        assertWriteSize(updated, runtime.options.writeMaxBytes, runtime.options.locale)
+        const written = await writeWorkspaceTextAtomically(target, updated, true, runtime.options.locale)
         runtime.observe(target, written)
         return {
           file_path: target.relativePath,
@@ -169,7 +170,7 @@ function createEditTool(runtime: WorkspaceRuntime) {
         }
       })
     },
-  })
+  }, { locale: runtime.options.locale })
 }
 
 function splitLines(content: string): string[] {
@@ -197,7 +198,7 @@ function countOccurrences(content: string, needle: string): number {
   }
 }
 
-function assertWriteSize(content: string, maxBytes: number): void {
+function assertWriteSize(content: string, maxBytes: number, locale: import('../../locale').HarnessLocale): void {
   if (Buffer.byteLength(content, 'utf8') > maxBytes)
-    throw new ToolError({ code: 'FS_WRITE_TOO_LARGE', message: `写入内容超过 ${maxBytes} 字节上限` })
+    throw new ToolError({ code: 'FS_WRITE_TOO_LARGE', message: diagnostic(locale, `写入内容超过 ${maxBytes} 字节上限`, `Write content exceeds the ${maxBytes}-byte limit`) })
 }

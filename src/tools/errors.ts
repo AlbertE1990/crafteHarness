@@ -1,4 +1,6 @@
+import type { HarnessLocale } from '../locale'
 import type { JsonObject, JsonValue } from '../types/json'
+import { DEFAULT_LOCALE, diagnostic } from '../locale'
 
 /** 可安全进入日志与轨迹的工具错误信息。 */
 export interface ToolErrorInfo {
@@ -37,7 +39,10 @@ export class ToolError extends Error {
 }
 
 /** 将任意异常转换为稳定、可序列化的工具错误。 */
-export function normalizeToolError(error: unknown): ToolErrorInfo {
+export function normalizeToolError(
+  error: unknown,
+  locale: HarnessLocale = DEFAULT_LOCALE,
+): ToolErrorInfo {
   if (error instanceof ToolError) {
     return {
       code: error.code,
@@ -49,18 +54,18 @@ export function normalizeToolError(error: unknown): ToolErrorInfo {
 
   return {
     code: 'TOOL_EXECUTION_FAILED',
-    message: error instanceof Error ? error.message : safelyStringify(error),
+    message: error instanceof Error ? error.message : safelyStringify(error, locale),
     retryable: false,
   }
 }
 
 /** 在未知值无法正常转成字符串时仍返回安全的诊断文本。 */
-function safelyStringify(value: unknown): string {
+function safelyStringify(value: unknown, locale: HarnessLocale): string {
   try {
     return String(value)
   }
   catch {
-    return '[无法读取的工具异常]'
+    return diagnostic(locale, '[无法读取的工具异常]', '[Unreadable tool error]')
   }
 }
 

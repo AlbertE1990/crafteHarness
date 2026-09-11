@@ -6,6 +6,9 @@ import type {
   AgentObservabilityConfig,
   AgentToolInput,
   AgentToolsCommonConfig,
+  CalculatorToolOptions,
+  DefineToolOptions,
+  HarnessLocale,
   ModelAdapter,
   ModelSelection,
   SessionStore,
@@ -22,6 +25,7 @@ import Agent, {
   defineAgentConfig,
   defineTool,
   MemorySessionStore,
+  SUPPORTED_LOCALES,
 } from '../src'
 import * as publicApi from '../src'
 import {
@@ -33,6 +37,9 @@ import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 /** 编译期覆盖普通使用者需要命名的配置与扩展端口类型。 */
 function acceptsPublicTypes(_value: {
   config: AgentConfigInput
+  locale?: HarnessLocale
+  defineToolOptions?: DefineToolOptions
+  calculatorOptions?: CalculatorToolOptions
   execution?: AgentExecutionConfig
   observability?: AgentObservabilityConfig
   tools?: AgentToolsCommonConfig
@@ -68,6 +75,7 @@ describe('craft-harness public API', () => {
     expect('run' in new Agent(config)).toBe(false)
     expect(defineTool).toBeTypeOf('function')
     expect(DEFAULT_TOOL_APPROVAL_TIMEOUT_MS).toBeGreaterThan(0)
+    expect(SUPPORTED_LOCALES).toEqual(['zh-CN', 'en-US'])
     expect('normalizeAgentToolDefinitions' in publicApi).toBe(false)
     expect('ToolApprovalManager' in publicApi).toBe(false)
   })

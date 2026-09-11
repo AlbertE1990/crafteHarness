@@ -16,6 +16,7 @@ import Agent, { defineTool } from 'craft-harness'
 import { DeepSeekAdapter } from 'craft-harness/adapters'
 
 const agent = new Agent({
+  locale: 'zh-CN',
   adapter: new DeepSeekAdapter({
     apiKey: process.env.DEEPSEEK_API_KEY!,
   }),
@@ -64,6 +65,7 @@ const kimiAgent = new Agent({
 归一化规则：
 
 - `adapter` 校验为 `ModelAdapter`，但保持调用方注入的实例不变。
+- `locale` 缺省为 `zh-CN`，支持 `en-US`，并显式传入一次 Run 的模型、工具与 Session 诊断边界。
 - `model.id` 与可选 `model.reasoningEffort` 被裁空白并冻结；`'off'` 表示显式关闭推理。
 - `execution.limits` 由 AgentLoop 的同一规则补齐并校验。
 - 工具配置解析为包含内置、覆盖和应用追加工具的最终只读数组。
@@ -75,16 +77,19 @@ const kimiAgent = new Agent({
 
 配置按业务意图组织：
 
-| 位置            | 字段                                               | 职责                            |
-| --------------- | -------------------------------------------------- | ------------------------------- |
-| 根配置          | `adapter`、`model`、`systemPrompt`、`sessionStore` | 连接依赖、模型选择与 Agent 行为 |
-| `tools`         | 集合操作、`workspaceRoot`、Guard 与审批            | 工具注册、工作区、风险决策      |
-| `execution`     | `limits`、`now`                                    | 预算和可注入时钟                |
-| `observability` | `onTrace`、`onToolEvent`                           | 不参与控制流的全局观察器        |
+| 位置            | 字段                                                         | 职责                                      |
+| --------------- | ------------------------------------------------------------ | ----------------------------------------- |
+| 根配置          | `locale`、`adapter`、`model`、`systemPrompt`、`sessionStore` | 诊断语言、连接依赖、模型选择与 Agent 行为 |
+| `tools`         | 集合操作、`workspaceRoot`、Guard 与审批                      | 工具注册、工作区、风险决策                |
+| `execution`     | `limits`、`now`                                              | 预算和可注入时钟                          |
+| `observability` | `onTrace`、`onToolEvent`                                     | 不参与控制流的全局观察器                  |
 
 `systemPrompt` 描述 Agent 行为，因此不放入模型供应商连接配置。全局 Guard 与工具集合和局部 Guard 紧密协作，
 因此配置为 `tools.guard`，不放入容易暗示沙箱或身份认证能力的 `security`。`sessionStore` 已经完整表达依赖，
 不再套只有一个字段的 `session`。项目尚未发布，旧配置形态不属于兼容输入。
+
+`locale` 只影响 Harness 自产诊断，不改变 prompt、模型输出和第三方异常；完整规则见
+[本地化诊断协议](./localized-diagnostics.md)。
 
 ## 4. 工具组装
 
