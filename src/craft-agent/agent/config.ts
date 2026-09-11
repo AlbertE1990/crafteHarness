@@ -19,16 +19,12 @@ import type {
   ToolGuardEvaluator,
 } from '../tools'
 import type { AgentToolInput } from './normalize-tools'
-import type {
-  AgentModelExecutionOptions,
-  DefinedAgentModelExecutionOptions,
-} from './types'
 import { DeepSeekModelAdapter } from '../adapters/deepseek'
 import { OpenAICompatibleModelAdapter } from '../adapters/openai-compatible'
 import { builtinToolNames, createBuiltinTools } from '../builtins/registry'
+import { normalizeReasoningEffort } from '../core'
 import { createLimits } from '../core/stop-policy'
 import { MemorySessionStore } from '../sessions'
-import { defineAgentModelExecutionOptions } from './model-options'
 import { normalizeAgentToolDefinitions } from './normalize-tools'
 import { defineToolGuardConfig } from './tool-guard'
 
@@ -37,6 +33,8 @@ export interface DeepSeekAgentModelConfig extends DeepSeekModelAdapterConfig {
   /** DeepSeek 存在 thinking、reasoning 和消息回放差异，因此需要显式选择专属差异层。 */
   readonly adapter: 'deepseek'
   readonly apiKey: string
+  /** 模型名属于部署配置；库不内置会过期的默认模型名。 */
+  readonly model: string
 }
 
 /**
@@ -94,8 +92,13 @@ export type AgentToolsInput<TContext = undefined>
 
 /** AgentLoop 的模型调用方式、预算和确定性运行基础设施。 */
 export interface AgentExecutionConfig {
-  /** 所有请求默认采用的推理设置；AgentRequest.model 可以按次覆盖。 */
-  readonly model?: AgentModelExecutionOptions
+  /**
+   * 所有请求默认采用的推理等级；AgentRequest.reasoningEffort 可以按次覆盖。
+   *
+   * `'off'` 表示默认关闭推理，其他非空字符串是供应商定义的等级；省略时不下发
+   * 任何推理参数，由供应商或模型自身默认值决定。
+   */
+  readonly reasoningEffort?: string
   /** 单次 Run 的模型步数、工具调用数、耗时和 Token 预算。 */
   readonly limits?: Partial<AgentLoopLimits>
   /** 测试或宿主环境可注入的时钟。 */
@@ -134,7 +137,7 @@ export interface DefinedAgentToolsConfig<TContext = undefined> {
 
 /** defineAgentConfig() 归一化后的执行配置。 */
 export interface DefinedAgentExecutionConfig {
-  readonly model: DefinedAgentModelExecutionOptions
+  readonly reasoningEffort?: string
   readonly limits: AgentLoopLimits
   readonly now: () => Date
 }
@@ -173,7 +176,7 @@ export function defineAgentConfig<TContext = undefined>(
   )
   assertOptionalConfigGroup(input.execution, 'execution')
   assertOptionalConfigGroup(input.observability, 'observability')
-  assertKnownConfigFields(input.execution, ['model', 'limits', 'now'], 'Agent config.execution')
+  assertKnownConfigFields(input.execution, ['reasoningEffort', 'limits', 'now'], 'Agent config.execution')
   assertKnownConfigFields(
     input.observability,
     ['onToolEvent', 'onTrace'],
@@ -199,7 +202,12 @@ export function defineAgentConfig<TContext = undefined>(
   const model = createModelAdapter(input.model)
   const registeredTools = createTools<TContext>(input.tools)
   const limits = createLimits(input.execution?.limits)
-  const modelExecution = defineAgentModelExecutionOptions(input.execution?.model)
+  const reasoningEffort = input.execution?.reasoningEffort === undefined
+    ? undefined
+    : normalizeReasoningEffort(
+        input.execution.reasoningEffort,
+        'Agent config.execution.reasoningEffort',
+      )
   const guardConfig = defineToolGuardConfig(
     input.tools?.guard,
     input.tools?.approvalTimeoutMs,
@@ -212,7 +220,7 @@ export function defineAgentConfig<TContext = undefined>(
     approvalTimeoutMs: guardConfig.approvalTimeoutMs,
   })
   const execution = Object.freeze({
-    model: modelExecution,
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     limits,
     now,
   })
@@ -426,8 +434,8 @@ function createModelAdapter(input: AgentModelInput): ModelAdapter {
     )
     return new DeepSeekModelAdapter({
       apiKey: config.apiKey,
+      model: config.model,
       ...(config.baseURL ? { baseURL: config.baseURL } : {}),
-      ...(config.model ? { model: config.model } : {}),
     })
   }
   if (config.adapter !== undefined && config.adapter !== 'openai-compatible')

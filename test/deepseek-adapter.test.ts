@@ -3,6 +3,7 @@ import type {
   ChatCompletion,
   ChatCompletionChunk,
 } from 'openai/resources/chat/completions'
+import type { DeepSeekModelAdapterConfig } from '../src/craft-agent/adapters/deepseek'
 import { describe, expect, it, vi } from 'vitest'
 import {
   DeepSeekModelAdapter,
@@ -104,7 +105,7 @@ describe('deepSeek model adapter', () => {
         description: '查询天气',
         inputSchema: { type: 'object', additionalProperties: false },
       }],
-      reasoning: { enabled: true, effort: 'high' },
+      reasoningEffort: 'high',
     })
     const chunks = []
     for await (const chunk of stream)
@@ -190,18 +191,105 @@ describe('deepSeek model adapter', () => {
     })
   })
 
-  it('rejects unsupported reasoning effort in the dialect adapter', async () => {
+  it('passes a provider-defined reasoning effort through without a library enum', async () => {
+    const response = {
+      id: 'completion-3',
+      choices: [{
+        finish_reason: 'stop',
+        index: 0,
+        logprobs: null,
+        message: { role: 'assistant', content: '回答', refusal: null },
+      }],
+      created: 1_788_748_800,
+      model: 'deepseek-v4-flash',
+      object: 'chat.completion',
+    } as unknown as ChatCompletion
+    const create = vi.fn().mockResolvedValue(response)
     const adapter = new DeepSeekModelAdapter({
       apiKey: 'test-key',
-    }, createMockClient(vi.fn()))
+      model: 'deepseek-v4-flash',
+    }, createMockClient(create))
 
-    await expect(adapter.complete({
+    // 等级集合由 DeepSeek 维护并会新增；库必须原样透传，让供应商成为权威。
+    await adapter.complete({
       messages: [{ role: 'user', content: '测试未知等级' }],
-      reasoning: { enabled: true, effort: 'future-level' },
-    })).rejects.toMatchObject({
-      code: 'MODEL_INVALID_REQUEST',
-      provider: 'deepseek',
+      reasoningEffort: 'future-level',
     })
+
+    expect(create.mock.calls[0][0]).toMatchObject({
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'future-level',
+    })
+  })
+
+  it('maps the reserved off level to a disabled DeepSeek thinking switch', async () => {
+    const response = {
+      id: 'completion-4',
+      choices: [{
+        finish_reason: 'stop',
+        index: 0,
+        logprobs: null,
+        message: { role: 'assistant', content: '回答', refusal: null },
+      }],
+      created: 1_788_748_800,
+      model: 'deepseek-v4-flash',
+      object: 'chat.completion',
+    } as unknown as ChatCompletion
+    const create = vi.fn().mockResolvedValue(response)
+    const adapter = new DeepSeekModelAdapter({
+      apiKey: 'test-key',
+      model: 'deepseek-v4-flash',
+    }, createMockClient(create))
+
+    await adapter.complete({
+      messages: [{ role: 'user', content: '不要思考' }],
+      reasoningEffort: 'off',
+    })
+
+    // 关闭语义只通过 thinking 表达，并且不能同时下发等级。
+    const sent = create.mock.calls[0][0]
+    expect(sent).toMatchObject({ thinking: { type: 'disabled' } })
+    expect(sent).not.toHaveProperty('reasoning_effort')
+  })
+
+  it('omits every reasoning field when no effort is requested', async () => {
+    const response = {
+      id: 'completion-5',
+      choices: [{
+        finish_reason: 'stop',
+        index: 0,
+        logprobs: null,
+        message: { role: 'assistant', content: '回答', refusal: null },
+      }],
+      created: 1_788_748_800,
+      model: 'deepseek-v4-flash',
+      object: 'chat.completion',
+    } as unknown as ChatCompletion
+    const create = vi.fn().mockResolvedValue(response)
+    const adapter = new DeepSeekModelAdapter({
+      apiKey: 'test-key',
+      model: 'deepseek-v4-flash',
+    }, createMockClient(create))
+
+    // 省略表示不覆盖：由供应商或模型自身默认值决定，库不替它表态。
+    await adapter.complete({
+      messages: [{ role: 'user', content: '使用默认设置' }],
+    })
+
+    const sent = create.mock.calls[0][0]
+    expect(sent).not.toHaveProperty('thinking')
+    expect(sent).not.toHaveProperty('reasoning_effort')
+  })
+
+  it('requires an explicit model name instead of a built-in default', () => {
+    expect(() => new DeepSeekModelAdapter({
+      apiKey: 'test-key',
+    } as unknown as DeepSeekModelAdapterConfig)).toThrow('DeepSeek model 不能为空')
+
+    expect(() => new DeepSeekModelAdapter({
+      apiKey: 'test-key',
+      model: '   ',
+    })).toThrow('DeepSeek model 不能为空')
   })
 
   it('classifies unknown failures without retrying inside the adapter', () => {

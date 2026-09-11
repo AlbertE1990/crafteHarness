@@ -1,9 +1,5 @@
 <script setup lang="ts">
-import type {
-  AgentModelExecutionOptions,
-  AgentOutputEvent,
-  AgentRunResult,
-} from '../craft-agent'
+import type { AgentOutputEvent, AgentRunResult } from '../craft-agent'
 import MarkdownIt from 'markdown-it'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
@@ -68,6 +64,19 @@ interface ConversationDetailResponse {
   data: ConversationDetail
 }
 
+/**
+ * 页面真正消费的模型词汇表，来自 GET /api/model。
+ *
+ * 等级名由部署决定，不同模型适配器的取值并不一致，因此页面只消费服务端给出的列表，
+ * 不再硬编码任何一家的等级集合。
+ */
+interface ModelVocabulary {
+  /** 部署默认推理等级；服务端未设置时为空串，表示不表达偏好。 */
+  defaultEffort: string
+  /** 部署允许的推理等级；为空表示词汇表不可用，控件退化为自由文本。 */
+  efforts: string[]
+}
+
 /** 非流式 /api/chat 的普通 JSON 响应。 */
 interface ChatJsonResponse {
   data: AgentRunResult
@@ -86,8 +95,11 @@ const conversationError = ref('')
 const failedPrompt = ref('')
 // 模型选项由用户显式控制，并随每次 Agent 请求发送，不会通过自然语言推断。
 const useStreaming = ref(true)
-const reasoningEnabled = ref(true)
-const reasoningEffort = ref('high')
+// 推理等级是单个字符串：'off' 表示显式关闭，其余值是部署自定义等级；空串表示省略该字段，
+// 交由部署默认决定。请求体不再有 model 对象，也不再有独立的“启用思考”开关。
+const reasoningEffort = ref('')
+// 部署允许的推理等级，挂载时从 GET /api/model 读取；空列表表示词汇表不可用，控件退化为自由文本。
+const reasoningEfforts = ref<string[]>([])
 // undefined 表示普通 Composer；有值时由状态决定展示审批卡片或自动拒绝卡片。
 const toolInteraction = ref<ToolInteraction>()
 // 审批 POST 失败只影响卡片提交，可恢复 pending 后重试，不应中断原聊天 SSE。
@@ -194,6 +206,38 @@ function formatConversationDate(value: string): string {
   }).format(date)
 }
 
+/**
+ * 从 GET /api/model 的未知 JSON 中提取词汇表。
+ *
+ * 任一字段缺失或类型不符都退化为空值，而不是抛错：词汇表只是便利信息，
+ * 服务端多返回或少返回字段都不应该让页面进入不可用状态。
+ */
+function readModelVocabulary(value: unknown): ModelVocabulary {
+  if (typeof value !== 'object' || value === null)
+    return { defaultEffort: '', efforts: [] }
+
+  const data = value as { reasoningEffort?: unknown, reasoningEfforts?: unknown }
+  const defaultEffort = typeof data.reasoningEffort === 'string'
+    ? data.reasoningEffort.trim()
+    : ''
+  const efforts = Array.isArray(data.reasoningEfforts)
+    ? (data.reasoningEfforts as unknown[])
+        .filter((level): level is string => typeof level === 'string' && level.trim() !== '')
+        .map(level => level.trim())
+    : []
+
+  // 部署默认必须始终可选：服务端是最终权威，UI 不能因为词汇表缺项就悄悄改写它的默认值。
+  if (defaultEffort && !efforts.includes(defaultEffort))
+    efforts.unshift(defaultEffort)
+
+  return { defaultEffort, efforts }
+}
+
+/** 'off' 是协议保留值，裸英文对用户不友好；其余等级名由部署定义，原样展示。 */
+function formatReasoningEffort(level: string): string {
+  return level === 'off' ? '不推理（off）' : level
+}
+
 /** 等待 DOM 更新后滚动到底部，确保新消息已参与高度计算。 */
 async function scrollToLatest(behavior: ScrollBehavior = 'smooth') {
   await nextTick()
@@ -267,6 +311,33 @@ async function loadConversations(selectInitial = false) {
   }
   finally {
     isLoadingConversations.value = false
+  }
+}
+
+/**
+ * 读取部署的模型词汇表，用它渲染推理等级控件。
+ *
+ * 等级名因部署而异，所以控件选项只能来自服务端；加载失败时保持空列表并由自由文本输入兜底，
+ * 不展示阻塞性错误，因为词汇表只是便利信息，不是发消息的前提。
+ */
+async function loadModelVocabulary() {
+  try {
+    const response = await fetch('/api/model')
+    if (!response.ok)
+      return
+
+    const payload: unknown = await response.json()
+    const data = typeof payload === 'object' && payload !== null && 'data' in payload
+      ? (payload as { data?: unknown }).data
+      : undefined
+    const vocabulary = readModelVocabulary(data)
+
+    reasoningEfforts.value = vocabulary.efforts
+    reasoningEffort.value = vocabulary.defaultEffort
+  }
+  catch {
+    // 词汇表请求失败：保持空列表，用户仍可用自由文本输入任意等级，页面继续正常工作。
+    reasoningEfforts.value = []
   }
 }
 
@@ -519,6 +590,7 @@ async function send(prompt = input.value, appendUserMessage = true) {
   isAwaitingFirstToken.value = true
   // 锁定本次请求设置；即使以后允许发送期间操作 UI，也不能改变正在执行的 Run。
   const requestUsesStreaming = useStreaming.value
+  const requestReasoningEffort = reasoningEffort.value.trim()
   let assistantMessageId: number | undefined
   let receivedDone = false
 
@@ -542,25 +614,21 @@ async function send(prompt = input.value, appendUserMessage = true) {
   }
 
   try {
+    // 推理等级是单个顶层字符串：'off' 表示显式关闭，其余值原样透传给服务端。
+    // 空串表示页面没有具体选择，此时必须整个省略字段，让服务端使用部署默认。
     const requestBody: {
       message: string
       conversationId?: string
       stream: boolean
-      model: AgentModelExecutionOptions
+      reasoningEffort?: string
     } = {
       message,
       stream: requestUsesStreaming,
-      model: reasoningEnabled.value
-        ? {
-            reasoningEnabled: true,
-            ...(reasoningEffort.value.trim()
-              ? { reasoningEffort: reasoningEffort.value.trim() }
-              : {}),
-          }
-        : { reasoningEnabled: false },
     }
     if (conversationId.value)
       requestBody.conversationId = conversationId.value
+    if (requestReasoningEffort)
+      requestBody.reasoningEffort = requestReasoningEffort
 
     const response = await fetch('/api/chat', {
       method: 'POST',
@@ -725,6 +793,7 @@ function retry() {
 
 onMounted(() => {
   void loadConversations(true)
+  void loadModelVocabulary()
 })
 
 onBeforeUnmount(() => {
@@ -963,28 +1032,29 @@ onBeforeUnmount(() => {
                 <input v-model="useStreaming" type="checkbox" :disabled="isSending">
                 <span>流式输出</span>
               </label>
-              <label class="model-toggle">
-                <input v-model="reasoningEnabled" type="checkbox" :disabled="isSending">
-                <span>启用思考</span>
-              </label>
               <label class="reasoning-effort-control">
                 <span>推理等级</span>
-                <!-- 开放文本允许未来模型使用新等级；最终合法值由当前 ModelAdapter 校验。 -->
-                <input
+                <!--
+                  等级名来自 GET /api/model：不同部署的词汇表不同，
+                  因此页面不再硬编码任何一家的等级集合。
+                -->
+                <select
+                  v-if="reasoningEfforts.length"
                   v-model="reasoningEffort"
-                  list="reasoning-effort-options"
-                  :disabled="isSending || !reasoningEnabled"
+                  :disabled="isSending"
                   aria-label="推理等级"
                 >
-                <datalist id="reasoning-effort-options">
-                  <option value="none" />
-                  <option value="minimal" />
-                  <option value="low" />
-                  <option value="medium" />
-                  <option value="high" />
-                  <option value="xhigh" />
-                  <option value="max" />
-                </datalist>
+                  <option v-for="level in reasoningEfforts" :key="level" :value="level">
+                    {{ formatReasoningEffort(level) }}
+                  </option>
+                </select>
+                <!-- 词汇表不可用时退化为自由文本，保证任何等级都不会因此无法选择。 -->
+                <input
+                  v-else
+                  v-model="reasoningEffort"
+                  :disabled="isSending"
+                  aria-label="推理等级"
+                >
               </label>
               <span v-if="!useStreaming" class="transport-hint">
                 普通 JSON · 不支持交互式审批
@@ -1750,7 +1820,8 @@ onBeforeUnmount(() => {
   accent-color: #2563eb;
 }
 
-.reasoning-effort-control input {
+.reasoning-effort-control input,
+.reasoning-effort-control select {
   width: 82px;
   border: 1px solid #cbd5e1;
   border-radius: 7px;
@@ -1760,7 +1831,14 @@ onBeforeUnmount(() => {
   font: inherit;
 }
 
-.reasoning-effort-control input:disabled {
+/* 等级名长度由部署决定，下拉框按内容自适应，避免“不推理（off）”被截断。 */
+.reasoning-effort-control select {
+  width: auto;
+  min-width: 96px;
+}
+
+.reasoning-effort-control input:disabled,
+.reasoning-effort-control select:disabled {
   opacity: 0.5;
 }
 
@@ -2135,7 +2213,8 @@ onBeforeUnmount(() => {
   background: rgb(15 23 42 / 92%);
 }
 
-:global(html.dark) .reasoning-effort-control input {
+:global(html.dark) .reasoning-effort-control input,
+:global(html.dark) .reasoning-effort-control select {
   border-color: #475569;
   color: #cbd5e1;
   background: #1e293b;

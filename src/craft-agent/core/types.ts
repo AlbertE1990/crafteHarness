@@ -1,7 +1,6 @@
 import type {
   ModelAdapter,
   ModelCompletion,
-  ModelReasoningOptions,
   ModelStreamChunk,
   ModelTokenUsage,
   SessionStore,
@@ -66,14 +65,18 @@ export interface AgentRunRequest<TContext = undefined> {
 export interface AgentLoopModelExecutionOptions {
   /** true 使用增量流，false 使用 ModelAdapter.complete()；默认 true。 */
   readonly stream?: boolean
-  /** 通用推理意图；具体供应商字段和合法 effort 由 ModelAdapter 决定。 */
-  readonly reasoning?: ModelReasoningOptions
+  /**
+   * 通用推理强度；`'off'` 表示显式关闭推理，其他非空字符串是供应商定义的等级。
+   *
+   * 具体供应商字段和合法等级由 ModelAdapter 决定。
+   */
+  readonly reasoningEffort?: string
 }
 
 /** 经过边界校验和默认值合并后的模型调用方式。 */
 export interface DefinedAgentLoopModelExecutionOptions {
   readonly stream: boolean
-  readonly reasoning?: Readonly<ModelReasoningOptions>
+  readonly reasoningEffort?: string
 }
 
 /** 单次 Run 的取消、关联和实时观察选项。 */

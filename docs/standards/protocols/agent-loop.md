@@ -57,7 +57,7 @@ const result = await loop.run({
   turnId,
   model: {
     stream: false,
-    reasoning: { enabled: true, effort: 'high' },
+    reasoningEffort: 'high',
   },
   onEvent,
 })
@@ -121,15 +121,16 @@ turn.completed
 
 ## 6. 模型结果组装规范
 
-一次 Run 的 `model.stream/reasoning` 在进入循环前解析并固定。`stream=true` 调用 Adapter 的
-`stream()` 并输出 `agent.model.chunk`；`stream=false` 调用 `complete()` 并输出
+一次 Run 的 `model.stream/reasoningEffort` 在进入循环前解析并固定；`reasoningEffort` 是单轴字符串
+（`'off'` 为 Core 保留值），原样进入每次 `ModelRequest`，由 Adapter 翻译成供应商字段。`stream=true` 调用
+Adapter 的 `stream()` 并输出 `agent.model.chunk`；`stream=false` 调用 `complete()` 并输出
 `agent.model.completed`。两条路径都投影为相同的 StepResult，再进入以下状态机规则。
 
 - 只消费候选 `index=0`；未找到时使用数组第一项。
 - `content`、`reasoning_content` 和函数名/参数分片按到达顺序拼接。
 - 同一 Turn 包含多个模型 Step 时，每个 assistant 事实分别保存自己的 `reasoning_content`；Run 级
-  `reasoning` 按 Step 顺序以空行连接。历史展示若提供“本轮思考”，必须按 `turnId` 做同样聚合，不能只保留
-  最终 assistant Step。
+  `AgentRunResult.reasoning` 按 Step 顺序以空行连接。历史展示若提供“本轮思考”，必须按 `turnId` 做同样聚合，
+  不能只保留最终 assistant Step。
 - Tool Call 按 `index` 排序；同一 Step 的 `id` 必须完整且唯一。
 - `custom` Tool Call 和旧版 `function_call` 当前不受支持，返回 `model_protocol_error`。
 - `finish_reason=tool_calls` 却没有 Tool Call 属于协议错误。

@@ -3,6 +3,15 @@ import type { JsonObject } from '../types/json'
 import type { ModelAssistantMessage, ModelMessage } from './message'
 import type { ModelStreamChunk } from './model-events'
 
+/**
+ * Core 保留的推理强度字面量：显式关闭推理。
+ *
+ * 它是供应商无关的意图，因此由 Core 定义并作为契约词汇的一部分；ModelAdapter 必须按这个
+ * 小写字面量识别它，再翻译成自己协议上的关闭语义（DeepSeek 是 `thinking.type: disabled`，
+ * OpenAI 兼容是 `reasoning_effort: none`）。上游会先归一化大小写，Adapter 无需自行处理。
+ */
+export const REASONING_OFF = 'off'
+
 /** OpenAI Chat Completions 已定义的停止原因，并允许 adapter 保留新增字符串。 */
 export type ModelFinishReason
   = | 'stop'
@@ -23,21 +32,20 @@ export interface ModelTokenUsage {
 }
 
 /**
- * 一次模型调用的通用推理设置。
- *
- * `effort` 刻意使用开放字符串：不同供应商、不同模型支持的等级并不相同，合法值应由
- * 具体 ModelAdapter 校验。`enabled` 也由 Adapter 转换为供应商自己的开关语义。
+ * 一次模型请求。模型标识和供应商连接配置归具体 Adapter，而不是每次请求。
  */
-export interface ModelReasoningOptions {
-  readonly enabled?: boolean
-  readonly effort?: string
-}
-
-/** 一次模型请求。模型标识和供应商连接配置归具体 Adapter，而不是每次请求。 */
 export interface ModelRequest {
   readonly messages: readonly ModelMessage[]
   readonly tools?: readonly ToolModelDefinition[]
-  readonly reasoning?: ModelReasoningOptions
+  /**
+   * 本次调用的推理强度；`REASONING_OFF` 是 Core 保留值，表示显式关闭推理。
+   *
+   * 这是全链路唯一的推理设置形态：其他任何非空字符串都是供应商定义的等级，Adapter
+   * 原样透传、不做等级校验，合法值最终由供应商裁定。保留值由上游统一归一化为小写
+   * `REASONING_OFF`，因此 Adapter 只需按该字面量识别，不必各自处理大小写。省略该字段
+   * 表示不下发任何推理参数，由供应商或模型自身默认值决定。
+   */
+  readonly reasoningEffort?: string
   readonly max_completion_tokens?: number
   readonly parallel_tool_calls?: boolean
   readonly tool_choice?: 'none' | 'auto' | 'required'

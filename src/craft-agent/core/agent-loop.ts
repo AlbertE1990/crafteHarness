@@ -437,7 +437,9 @@ export class AgentLoop<TContext = undefined> {
       ...(toolModels.length > 0
         ? { tools: toolModels, parallel_tool_calls: false as const }
         : {}),
-      ...(modelExecution.reasoning ? { reasoning: modelExecution.reasoning } : {}),
+      ...(modelExecution.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: modelExecution.reasoningEffort }),
       ...(stepTokenLimit === undefined ? {} : { max_completion_tokens: stepTokenLimit }),
     }
     const callOptions = {

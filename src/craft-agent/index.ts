@@ -4,7 +4,6 @@ export { Agent, Agent as default, DEFAULT_TOOL_APPROVAL_TIMEOUT_MS, defineAgentC
 export type {
   AgentConfigInput,
   AgentExecutionConfig,
-  AgentModelExecutionOptions,
   AgentModelInput,
   AgentObservabilityConfig,
   AgentOutputEvent,
@@ -17,7 +16,6 @@ export type {
   DeepSeekAgentModelConfig,
   DefinedAgentConfig,
   DefinedAgentExecutionConfig,
-  DefinedAgentModelExecutionOptions,
   DefinedAgentObservabilityConfig,
   DefinedAgentToolsConfig,
   ExtendAgentToolsConfig,
@@ -68,7 +66,6 @@ export type {
   ModelInstructionMessage,
   ModelMessage,
   ModelMessageRole,
-  ModelReasoningOptions,
   ModelRequest,
   ModelStreamChoice,
   ModelStreamChunk,

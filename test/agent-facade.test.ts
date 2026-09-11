@@ -66,10 +66,7 @@ describe('agent facade', () => {
     const agent = new Agent({
       model: adapter,
       execution: {
-        model: {
-          reasoningEnabled: true,
-          reasoningEffort: 'high',
-        },
+        reasoningEffort: 'high',
       },
     })
 
@@ -78,16 +75,36 @@ describe('agent facade', () => {
       scopeId: SCOPE_ID,
       sessionId: 'facade-run-model',
       input: '覆盖设置',
-      model: { reasoningEffort: 'max' },
+      reasoningEffort: 'max',
     }))
 
     expect(adapter.calls.map(call => ({
       method: call.method,
-      reasoning: call.request.reasoning,
+      reasoningEffort: call.request.reasoningEffort,
     }))).toEqual([
-      { method: 'complete', reasoning: { enabled: true, effort: 'high' } },
-      { method: 'stream', reasoning: { enabled: true, effort: 'max' } },
+      { method: 'complete', reasoningEffort: 'high' },
+      { method: 'stream', reasoningEffort: 'max' },
     ])
+  })
+
+  it('canonicalizes the reserved off level before it reaches the adapter', async () => {
+    const adapter = new ScriptedModelAdapter({
+      script: [{ method: 'complete', result: completion('关闭思考') }],
+    })
+    const agent = new Agent({
+      model: adapter,
+      execution: { reasoningEffort: 'max' },
+    })
+
+    // 'off' 覆盖部署默认等级；大小写归一化只做在保留值上，其他等级原样透传给 Adapter。
+    await agent.invoke({
+      scopeId: SCOPE_ID,
+      sessionId: 'facade-reasoning-off',
+      input: '关闭思考',
+      reasoningEffort: 'OFF',
+    })
+
+    expect(adapter.calls[0]!.request.reasoningEffort).toBe('off')
   })
 
   it('creates session IDs, emits simplified output and preserves complete traces', async () => {

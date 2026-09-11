@@ -2,7 +2,6 @@ import type { FastifyInstance, FastifyServerOptions } from 'fastify'
 import type { ServerResponse } from 'node:http'
 import type {
   Agent,
-  AgentModelExecutionOptions,
   AgentOutputEvent,
   AgentRunResult,
   AgentSessionDetail,
@@ -50,9 +49,26 @@ export interface ServerChatJsonResponse {
   readonly data: AgentRunResult
 }
 
+/**
+ * 当前部署的模型能力；由 Runtime 从环境配置组装。
+ *
+ * 供应商会不断新增模型和推理等级，因此这份词表属于部署而不是库或前端：前端只渲染
+ * 这里给出的候选，换模型或增删等级不需要改动前端代码。
+ */
+export interface ServerModelInfo {
+  readonly provider: string
+  readonly model: string
+  /** 部署默认推理等级；null 表示不覆盖，由供应商或模型自身默认值决定。 */
+  readonly reasoningEffort: string | null
+  /** 允许前端选择的候选等级；非空时始终包含保留值 `off`。只影响候选，不限制请求。 */
+  readonly reasoningEfforts: readonly string[]
+}
+
 /** 创建 Fastify 应用时注入的 Runtime 和日志配置。 */
 export interface CreateServerAppOptions {
   readonly agent: Agent
+  /** 前端用来渲染模型与推理等级候选的部署信息。 */
+  readonly model: ServerModelInfo
   readonly logger?: FastifyServerOptions['logger']
 }
 
@@ -93,6 +109,32 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     return result
   })
 
+  // 前端从这里获得模型与推理等级候选，避免把供应商词表写死在页面里。
+  fastify.get('/api/model', {
+    schema: {
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            data: {
+              type: 'object',
+              properties: {
+                provider: { type: 'string' },
+                model: { type: 'string' },
+                reasoningEffort: { type: ['string', 'null'] },
+                reasoningEfforts: { type: 'array', items: { type: 'string' } },
+              },
+              required: ['provider', 'model', 'reasoningEffort', 'reasoningEfforts'],
+              additionalProperties: false,
+            },
+          },
+          required: ['data'],
+          additionalProperties: false,
+        },
+      },
+    },
+  }, async () => ({ data: options.model }))
+
   fastify.get('/api/conversation/list', {
     schema: {
       response: {
@@ -132,7 +174,8 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
       conversationId?: string
       message: string
       stream?: boolean
-      model?: AgentModelExecutionOptions
+      /** 单次请求的推理等级；`'off'` 表示关闭推理，省略时使用部署默认值。 */
+      reasoningEffort?: string
     }
   }>('/api/chat', {
     schema: {
@@ -140,16 +183,11 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
         type: 'object',
         properties: {
           conversationId: { type: 'string' },
-          message: { type: 'string', minLength: 1 },
+          // 纯空白与 Agent 的 trim 校验等价：在 HTTP 边界就判为客户端错误，而不是让它
+          // 落到 Agent 里抛 TypeError 再被当成服务端 500。
+          message: { type: 'string', minLength: 1, pattern: '\\S' },
           stream: { type: 'boolean' },
-          model: {
-            type: 'object',
-            properties: {
-              reasoningEnabled: { type: 'boolean' },
-              reasoningEffort: { type: 'string', minLength: 1 },
-            },
-            additionalProperties: false,
-          },
+          reasoningEffort: { type: 'string', minLength: 1, pattern: '\\S' },
         },
         required: ['message'],
         additionalProperties: false,
@@ -172,7 +210,9 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
             sessionName: createConversationTitle(request.body.message),
           }
         : {}),
-      ...(request.body.model ? { model: request.body.model } : {}),
+      ...(request.body.reasoningEffort
+        ? { reasoningEffort: request.body.reasoningEffort }
+        : {}),
     }
 
     // 浏览器断开连接时取消同一个 Agent Run，模型和工具会收到组合后的 AbortSignal。

@@ -43,17 +43,30 @@ AgentLoop 根据一次 Run 的 `stream` 设置选择调用方法：`true` 调用
 `complete()`。Adapter 必须同时实现两种方法，不能由 Core 把完整响应拆成伪增量，也不能由 HTTP Runtime
 把非流式结果包装成 SSE。
 
-`ModelRequest.reasoning` 表达供应商无关的调用意图：
+模型请求携带供应商无关的推理强度：
 
 ```ts
-interface ModelReasoningOptions {
-  enabled?: boolean
-  effort?: string
+interface ModelRequest {
+  // ...
+  /** `'off'` 是 Core 保留值，表示显式关闭推理；其他非空字符串是供应商定义的等级。 */
+  reasoningEffort?: string
 }
 ```
 
-`effort` 使用开放字符串，因为等级集合属于“供应商 + 模型版本”的能力，不是 Agent 状态机的不变量。
-Adapter 负责把它转换为目标字段并验证；不支持某个值时应抛出 `MODEL_INVALID_REQUEST`，不得静默降级。
+字段名与 `AgentRequest.reasoningEffort` 完全一致：全链路只有这一种形态，门面、AgentLoop 与 Adapter 之间没有
+维度转换，也不再存在 `ModelReasoningOptions`。等级集合属于“供应商 + 模型版本”的能力，不是 Agent 状态机的
+不变量，因此 Adapter 只把值映射到目标协议字段并原样透传，不维护等级白名单：部署配置只自查自己的默认等级，
+供应商才是最终权威。库内过期枚举会在合法输入上失败（fail closed），而供应商返回的无效请求本来就已归类为
+`MODEL_INVALID_REQUEST`，错误信息也比库内旧枚举更准确。Adapter 不得静默降级为其他等级。
+
+`'off'` 由 `contracts/model.ts` 的 `REASONING_OFF` 常量定义。Adapter 必须按这个小写字面量识别它，并翻译成
+自己协议的关闭语义：DeepSeek 是 `thinking: { type: 'disabled' }` 且不下发 `reasoning_effort`，OpenAI 兼容是
+`reasoning_effort: 'none'`。Core 已在上游 `normalizeReasoningEffort()` 中把保留值统一规范成小写，Adapter
+无需处理大小写。省略该字段表示不下发任何推理参数，由供应商或模型自身默认值决定。
+
+`REASONING_OFF` 是契约词汇而不是公共 API：`contracts` barrel 导出它供 Adapter 实现使用，根入口的显式导出
+白名单不包含它。DeepSeek 的 `thinking` 开关完全由等级派生（`'off'` 关闭思考，其余等级一律开启），因此
+“关闭却指定等级”的请求无法被构造，契约里也不存在需要防御性互斥检查的第二维状态。
 
 ## 3. 消息与工具调用
 
@@ -161,15 +174,16 @@ src/craft-agent/index.ts  -X->  src/craft-agent/adapters
 - 未知兼容字段保留与稳定 `provider` 来源。
 - OpenAI SDK 的取消、超时、鉴权、权限、限流、无效请求和服务错误分类。
 - 用于消息、请求、响应、chunk 和错误差异的 protected 模板方法。
-- 将通用 effort 映射为 Chat Completions 的 `reasoning_effort`；显式关闭映射为 `none`。
+- 将通用推理强度映射为 Chat Completions 的 `reasoning_effort`；Core 保留值 `'off'` 映射为 `none`。
 
 通用层不得根据供应商名称执行条件分支。DeepSeek 通过差异层完成：
 
 - `developer` 消息转换为 `system`。
 - `max_completion_tokens` 转换为 `max_tokens`。
 - `reasoning_content` 在流、非流响应和后续 assistant 消息中完整转换。
-- 将每次请求的 `reasoning.enabled/effort` 转换为 `thinking` 与 `reasoning_effort`，并在差异层维护
-  DeepSeek 当前支持的等级。
+- 把同一根轴 `reasoningEffort` 转换为 DeepSeek 的 `thinking` 与 `reasoning_effort`：`'off'` 只发
+  `thinking: { type: 'disabled' }`，其他非空等级发 `thinking: { type: 'enabled' }` 加原样透传的
+  `reasoning_effort`；差异层不再维护 DeepSeek 支持的等级列表。
 
 协议差异无法由这些明确扩展点表达时，应直接实现新的 `ModelAdapter`，不能扭曲兼容层。
 
@@ -181,8 +195,8 @@ src/craft-agent/index.ts  -X->  src/craft-agent/adapters
 - 脚本耗尽、调用方法错位作为 `MODEL_PROTOCOL_ERROR`，原始脚本异常作为 `MODEL_CALL_FAILED`。
 - `assertModelAdapterContract()` 分别探测一次 complete 和 stream，检查最小标准骨架与 provider 一致性。
 
-契约探针不得直接连接生产模型。供应商 Adapter 测试必须注入 SDK 客户端替身；契约探针也不能替代
-reasoning、供应商请求扩展和错误映射等专项测试。
+契约探针不得直接连接生产模型。供应商 Adapter 测试必须注入 SDK 客户端替身；契约探针也不能替代推理强度、
+供应商请求扩展和错误映射等专项测试。
 
 测试支持代码不从 `src/craft-agent` 或 npm 公共入口导出。外部开发者通过本文的输入、输出、取消和错误规范
 实现自己的契约测试；若未来形成稳定的第三方扩展需求，再单独设计 `craft-agent/testing`。
@@ -192,8 +206,9 @@ reasoning、供应商请求扩展和错误映射等专项测试。
 当前 `Agent` 使用 `defineAgentConfig()` 归一化唯一配置根，集中保存：
 
 - system prompt、最大模型 Step。
-- provider、模型名、API Key、base URL。
-- `execution.model` 中的默认思考开关与开放推理强度；流式方式由 `Agent.invoke()/stream()` 决定。
+- provider、模型名（必填）、API Key、base URL。库不内置默认模型名，只保留方言自身稳定的默认 endpoint。
+- `execution.reasoningEffort` 中的默认推理强度；该字符串由门面解析后原样传给 AgentLoop 与 Adapter，不再有
+  维度分解，流式方式由 `Agent.invoke()/stream()` 决定。
 - 工具事件监听器。
 
 声明式模型配置遵循“兼容协议默认、供应商差异显式”的规则：
@@ -213,9 +228,11 @@ Session Store、审批、预算和观察器位于同一配置根，而不是增�
 ## 10. 契约测试要求
 
 - OpenAI 标准字段和未知新增字段不会被丢弃。
-- content、reasoning、usage、finish reason 映射正确。
+- content、`reasoning_content`、usage、finish reason 映射正确。
 - 工具调用可以跨多个 chunk 拼装。
 - assistant 的空 `reasoning_content` 也会被回放。
+- 任意非空 `reasoningEffort` 原样透传为供应商等级字段，包括库不认识的等级；Core 保留值 `'off'` 得到各
+  Adapter 自己的关闭语义。Adapter 内不存在等级白名单，也不得静默降级为其他等级。
 - 中断和供应商错误得到稳定分类。
 - `src/craft-agent` 的 contracts、core、sessions、tools 与 builtins 不得导入 OpenAI SDK。
 - `src/craft-agent/agent` 可以创建官方 Adapter，但不能直接消费 SDK 对象。

@@ -18,15 +18,13 @@ const agent = new Agent({
   model: {
     adapter: 'deepseek',
     apiKey: process.env.DEEPSEEK_API_KEY!,
+    model: process.env.DEEPSEEK_MODEL!,
   },
   tools: {
     additional: [myTool],
   },
   execution: {
-    model: {
-      reasoningEnabled: true,
-      reasoningEffort: 'high',
-    },
+    reasoningEffort: 'high',
   },
   systemPrompt: '你是一个可靠的助手。',
 })
@@ -38,9 +36,15 @@ const agent = new Agent({
 
 - `{ apiKey, model, baseURL?, provider? }`：默认创建 OpenAI Chat Completions 兼容 Adapter；`provider`
   只表示进入轨迹和错误的真实供应商名称。
-- `{ adapter: 'deepseek', ... }`：创建处理 thinking、reasoning 和消息差异的 DeepSeek Adapter。
+- `{ adapter: 'deepseek', ... }`：创建处理 `thinking`、`reasoning_effort` 和 `reasoning_content` 等供应商
+  字段差异的 DeepSeek Adapter。
 - `{ adapter: 'openai-compatible', ... }`：需要显式表达协议时，也可选择默认兼容 Adapter。
 - 直接传入开发者实现的 `ModelAdapter`。
+
+内置 Adapter 的 `model` 均为必填。模型名属于部署配置且变化频繁，库不为任何供应商内置默认模型名；
+`baseURL` 是该方言自身的稳定 endpoint，因此仍保留默认值（DeepSeek 为 `https://api.deepseek.com`）。
+供应商推理等级词表同样不属于库：`execution.reasoningEffort` 只校验非空字符串，任何其他取值都原样透传到
+供应商请求；部署配置只声明自己的默认等级和候选列表，取值是否有效最终由供应商裁定。
 
 Kimi、Moonshot 或其他只改变 API Key、base URL 和模型名的兼容服务不需要新增 Adapter：
 
@@ -66,12 +70,12 @@ const kimiAgent = new Agent({
 归一化规则：
 
 - 模型声明转换为 `ModelAdapter`。
-- `execution.model` 校验为所有请求默认采用的扁平推理设置。
+- `execution.reasoningEffort` 校验为所有请求默认采用的推理强度；`'off'` 表示显式关闭推理。
 - `execution.limits` 由 AgentLoop 的同一规则补齐并校验。
 - 工具配置解析为包含内置、覆盖和应用追加工具的最终只读数组。
 - 未传 Store 时创建 `MemorySessionStore`。
 - Session、Run、Turn、Event 和 Approval ID 由内部使用语义前缀加 Node.js `randomUUID()` 生成。
-- 不读取 `process.env`，不替调用方决定密钥来源。
+- 不读取 `process.env`，不替调用方决定密钥来源，也不替部署选择模型名或推理等级词表。
 
 配置对象只冻结组装结构，不冻结开发者注入的 Adapter、Store、ToolGuard 或回调实例。
 
@@ -81,7 +85,7 @@ const kimiAgent = new Agent({
 | --------------- | ------------------------------------------ | ---------------------------- |
 | 根配置          | `model`、`systemPrompt`、`sessionStore`    | 核心依赖与 Agent 行为        |
 | `tools`         | 工具集合操作、`guard`、`approvalTimeoutMs` | 工具注册、风险决策与审批默认 |
-| `execution`     | `model`、`limits`、`now`                   | 模型默认值、预算和时钟       |
+| `execution`     | `reasoningEffort`、`limits`、`now`         | 推理默认值、预算和时钟       |
 | `observability` | `onTrace`、`onToolEvent`                   | 不参与控制流的全局观察器     |
 
 `systemPrompt` 描述 Agent 行为，因此不放入模型供应商连接配置。全局 Guard 与工具集合和局部 Guard 紧密协作，
@@ -146,16 +150,13 @@ const result = await agent.invoke({
   sessionId: 'optional-session-id',
   sessionName: '杭州天气',
   context: appRunContext,
-  model: {
-    reasoningEnabled: true,
-    reasoningEffort: 'high',
-  },
+  reasoningEffort: 'high',
 }, signal)
 
 for await (const event of agent.stream({
   scopeId: 'tenant-42',
   input: '杭州天气怎么样？',
-  model: { reasoningEffort: 'max' },
+  reasoningEffort: 'max',
 }, signal)) {
   // 可被 Runtime 直接输出的标准应用事件
 }
@@ -166,10 +167,23 @@ for await (const event of agent.stream({
 公开模型配置不存在 `stream` 字段，因此方法名与执行方式不会互相矛盾。唯一的运行控制量是取消信号，直接
 作为第二参数；Run/Turn ID 由 Agent 内部生成，完整轨迹统一通过 `observability.onTrace` 配置。
 
-`AgentRequest.model` 优先于 `execution.model`，未提供字段继续继承构造默认值。同一 Run 在进入 AgentLoop 前
-只解析一次。`reasoningEffort` 是开放的非空字符串；单独提供时会隐式启用推理。显式
-`reasoningEnabled: false` 会清除继承的 effort，且不能同时提供 `reasoningEffort`。公开扁平字段只服务常用
-入口，进入 AgentLoop 前转换为 `{ reasoning: { enabled, effort }, stream }`，Adapter 无需支持两套协议。
+推理强度是单层字符串：`AgentRequest.reasoningEffort` 优先于 `execution.reasoningEffort`，两者都未提供时
+不下发任何推理参数，完全采用供应商或模型默认值。同一 Run 在进入 AgentLoop 前只解析一次。
+`'off'` 是唯一保留值，按大小写不敏感识别（`'OFF'` 等价，在进入 AgentLoop 前统一归一化为小写 `'off'`），
+表示显式关闭推理；其他任何非空字符串都是供应商定义的推理等级（如 `'low'`/`'high'`/`'max'`），原样透传、
+不做大小写转换。空白字符串（如 `' '`）在配置边界报错，错误信息带字段路径，例如
+`Agent request.reasoningEffort 必须是非空字符串` 和 `Agent config.execution.reasoningEffort 必须是非空字符串`。
+
+旧形态的两条规则已删除：不再存在“只提供 `reasoningEffort` 会自动启用推理”，也不再存在
+“`reasoningEnabled: false` 会清除继承的 effort，且不能同时提供 effort”。单轴形态下没有第二个字段，
+因此无法表达出需要这两条规则约束的矛盾状态。
+
+门面把这一根轴原样交给 AgentLoop：Run 设置是 `{ stream, reasoningEffort }`，AgentLoop 组装的
+`ModelRequest` 直接带 `reasoningEffort`，公开形态与内部契约同形，层间没有任何维度转换。`'off'` 到供应商
+具体字段的翻译只发生在 Adapter 内部：DeepSeek 发送 `thinking: { type: 'disabled' }`，OpenAI 兼容发送
+`reasoning_effort: 'none'`。保留值 `'off'` 由 `contracts/model.ts` 的 `REASONING_OFF` 常量唯一定义，Core 与
+官方 Adapter 从同一处导入，不再各自书写字面量；它属于契约词汇而不是公共 API，根入口的显式导出白名单不
+包含它，业务代码也无需认识这个字面量。
 
 当 Agent 声明为 `new Agent<AppRunContext>()` 时，请求的 `context` 为必填。它只传给当前 Run 的工具级
 Guard、全局 Guard 和 `execute()`，不进入模型、Session Log、标准前端事件或 Agent 单例。

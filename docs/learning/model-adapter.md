@@ -8,7 +8,7 @@
 
 1. 为什么结构兼容 OpenAI 不等于让 Core 依赖 OpenAI SDK。
 2. 通用 OpenAI Compatible Adapter 如何转换请求和 `ModelStreamChunk`。
-3. reasoning、工具调用碎片、usage 和错误分别在哪里处理。
+3. `reasoning_content`、工具调用碎片、usage 和错误分别在哪里处理。
 4. 为什么 Adapter 只分类错误而不自动重试。
 5. 新增另一个模型供应商时应该修改哪些文件。
 
@@ -27,7 +27,7 @@ flowchart LR
   Raw --> Compatible
   Compatible --> Standard[ModelStreamChunk / ModelCompletion]
   Standard --> Agent
-  Agent --> SSE[内容 / reasoning]
+  Agent --> SSE[内容 / reasoning_content]
   Agent --> Harness[工具调用]
 ```
 
@@ -52,7 +52,7 @@ flowchart LR
 
 `ModelStreamChunk` 保留 OpenAI 的 `id`、`choices`、`delta`、`finish_reason`、`usage` 等字段。
 DeepSeek 的 `reasoning_content` 和 CraftAgent 的 `provider` 是新增字段。通用兼容层负责保留标准字段、
-未知字段和 provider；DeepSeek 差异层只负责读取 reasoning。
+未知字段和 provider；DeepSeek 差异层只负责读取 `reasoning_content`。
 
 Adapter 转换 chunk 时先展开原对象，再覆盖需要标准化的字段。因此未知的新字段在运行时仍然存在；
 Core 只有在字段进入控制逻辑时才为它增加显式类型和测试。
@@ -72,18 +72,29 @@ OpenAI 兼容流可能把一个工具调用拆成多个 delta：名称、ID 和 
   -> 已校验业务输入
 ```
 
-## 6. DeepSeek 的 reasoning 回放
+## 6. DeepSeek 的 reasoning_content 回放与推理强度设置
 
 携带工具的思考模式要求历史 assistant 消息保留 `reasoning_content`，空字符串也不能被遗漏。因此 Agent
-把每个模型 Step 的 reasoning 与 assistant 消息一起保存，DeepSeek Adapter 再映射回供应商请求。
+把每个模型 Step 的 `reasoning_content` 与 assistant 消息一起保存，DeepSeek Adapter 再映射回供应商请求。
 
 这项规则属于供应商适配行为；Agent 只认识内部可选字段，不读取 DeepSeek SDK 类型。
 
-推理设置也按同一边界流转：应用在 `execution.model` 提供默认值，或在 Agent 请求的
-`reasoningEnabled/reasoningEffort` 中按次覆盖；Agent 在进入 Loop 前转换为 `{ enabled, effort }` 并放进
-`ModelRequest`。公共 effort 是开放字符串，DeepSeek Adapter 再将
-它校验并转换为 `thinking.type` 和 `reasoning_effort`。因此未来模型增加新等级时，核心类型不需要发布
-破坏性修改，只需相应 Adapter 接受该值。
+推理设置也按同一边界流转：应用在 `execution.reasoningEffort` 提供部署默认值，或在 Agent 请求顶层的
+`reasoningEffort` 中按次覆盖；门面只解析优先级，同一个字符串原样进入 `ModelRequest.reasoningEffort`。
+公共等级是开放字符串，Adapter 不做等级校验：非空字符串原样透传到供应商请求，部署配置只自查自己的默认
+等级，供应商才是最终权威。
+
+全链路只有这一根轴，所以 `'off'` 到供应商字段的翻译由每个 Adapter 各做一次，并且只做一次：DeepSeek 把它
+翻译成 `thinking: { type: 'disabled' }`（不下发 `reasoning_effort`），OpenAI 兼容翻译成
+`reasoning_effort: 'none'`。保留值来自 `contracts/model.ts` 的 `REASONING_OFF` 常量，Core 已在上游把
+`'OFF'` 这类写法统一归一化为小写，Adapter 只需按小写字面量识别。内部契约里没有第二个维度，因此不存在
+“关闭却同时指定等级”的状态，也不需要任何防御性互斥检查。
+
+DeepSeek Adapter 因此只承载真实协议差异，不再持有 `'low' | 'high' | 'max'` 白名单。原因很直接：过期白名单
+会在**合法输入上失败**（fail closed）——DeepSeek 新增一档等级时，旧版库会把合法请求判成
+`MODEL_INVALID_REQUEST`，用户只能等库发版；而透传让供应商成为权威，真写错时供应商返回的 400 已由
+`normalizeDeepSeekError()` 归类为同一个 `MODEL_INVALID_REQUEST`，错误信息比库里的旧枚举更准确。核心类型
+不固定任何供应商取值，未来新增等级无需破坏性发布。
 
 ## 7. 流式与非流式不是同一种传输
 
@@ -110,6 +121,10 @@ AgentLoop 会把两种结果归一化为同一个内部 Step，但轨迹保持�
 `defineAgentConfig()` 归一化唯一配置根。它保存 Agent 基础参数和模型连接参数，再创建具体 Adapter。
 Adapter 将 SDK 异常转成 `ModelError`，但不会重试；否则重试次数、时间和 token 消耗无法被未来的
 Agent Loop 统一预算。
+
+内置 Adapter 的 `model` 是必填部署配置：库不内置默认模型名（DeepSeek Adapter 曾回退到
+`'deepseek-v4-flash'`），因为模型名属于部署配置且变化频繁，库不该替部署挑模型。`baseURL` 不同——它是该
+方言自身的稳定 endpoint，因此 DeepSeek Adapter 仍默认 `https://api.deepseek.com`。
 
 ## 10. 从测试反推设计
 

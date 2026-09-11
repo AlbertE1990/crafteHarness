@@ -1,79 +1,33 @@
 import type { DefinedAgentLoopModelExecutionOptions } from '../core'
-import type {
-  AgentModelExecutionOptions,
-  DefinedAgentModelExecutionOptions,
-} from './types'
+import { normalizeReasoningEffort } from '../core'
 
-/** 校验并合并 Agent 门面的扁平模型选项。 */
-export function defineAgentModelExecutionOptions(
-  input: AgentModelExecutionOptions | undefined,
-  base?: DefinedAgentModelExecutionOptions,
-): DefinedAgentModelExecutionOptions {
-  assertOptionsObject(input)
-  assertKnownFields(input)
-
-  if (input?.reasoningEnabled !== undefined
-    && typeof input.reasoningEnabled !== 'boolean') {
-    throw new TypeError('Agent model options.reasoningEnabled 必须是 boolean')
-  }
-  if (input?.reasoningEffort !== undefined
-    && (typeof input.reasoningEffort !== 'string' || !input.reasoningEffort.trim())) {
-    throw new TypeError('Agent model options.reasoningEffort 必须是非空字符串')
-  }
-  if (input?.reasoningEnabled === false && input.reasoningEffort !== undefined) {
-    throw new TypeError(
-      'Agent model options.reasoningEnabled=false 时不能同时提供 reasoningEffort',
-    )
-  }
-
-  const explicitlyEnablesReasoning = input?.reasoningEffort !== undefined
-  const reasoningEnabled = input?.reasoningEnabled
-    ?? (explicitlyEnablesReasoning ? true : base?.reasoningEnabled)
-  const reasoningEffort = input?.reasoningEffort?.trim()
-    ?? (reasoningEnabled === false ? undefined : base?.reasoningEffort)
-
-  return Object.freeze({
-    ...(reasoningEnabled === undefined ? {} : { reasoningEnabled }),
-    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-  })
+/**
+ * 解析单次 Run 的推理强度：本次请求优先，其次部署默认值。
+ *
+ * 两者都未提供时返回 undefined，表示不下发任何推理参数，由供应商或模型自身默认值决定。
+ * 校验与保留值归一化由 Core 的 normalizeReasoningEffort() 统一负责，门面只决定优先级。
+ */
+export function resolveAgentReasoningEffort(
+  input: string | undefined,
+  base?: string,
+): string | undefined {
+  return input === undefined
+    ? base
+    : normalizeReasoningEffort(input, 'Agent request.reasoningEffort')
 }
 
-/** 把易用的公开选项转换为 AgentLoop/ModelAdapter 使用的稳定内部结构。 */
+/**
+ * 把公开的单轴推理强度转换为 AgentLoop 的执行设置。
+ *
+ * 门面与 AgentLoop 现在使用同一种形态，因此这里不再做维度分解，只负责构造进入循环前
+ * 冻结的最终设置；`'off'` 到供应商具体字段的翻译由各 ModelAdapter 完成。
+ */
 export function createAgentLoopModelExecution(
-  options: DefinedAgentModelExecutionOptions,
+  reasoningEffort: string | undefined,
   stream: boolean,
 ): DefinedAgentLoopModelExecutionOptions {
-  const hasReasoning = options.reasoningEnabled !== undefined
-    || options.reasoningEffort !== undefined
   return Object.freeze({
     stream,
-    ...(hasReasoning
-      ? {
-          reasoning: Object.freeze({
-            ...(options.reasoningEnabled === undefined
-              ? {}
-              : { enabled: options.reasoningEnabled }),
-            ...(options.reasoningEffort === undefined
-              ? {}
-              : { effort: options.reasoningEffort }),
-          }),
-        }
-      : {}),
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
   })
-}
-
-function assertOptionsObject(value: unknown): void {
-  if (value !== undefined
-    && (typeof value !== 'object' || value === null || Array.isArray(value))) {
-    throw new TypeError('Agent model options 必须是对象')
-  }
-}
-
-function assertKnownFields(value: object | undefined): void {
-  if (value === undefined)
-    return
-  const allowed = new Set(['reasoningEnabled', 'reasoningEffort'])
-  const unknown = Object.keys(value).find(field => !allowed.has(field))
-  if (unknown)
-    throw new TypeError(`Agent model options 包含未知字段：${unknown}`)
 }

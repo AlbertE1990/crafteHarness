@@ -111,7 +111,7 @@ describe('agent loop', () => {
     }, {
       model: {
         stream: false,
-        reasoning: { enabled: true, effort: 'future-level' },
+        reasoningEffort: 'future-level',
       },
       onEvent: event => events.push(event),
     })
@@ -126,7 +126,7 @@ describe('agent loop', () => {
       expect.objectContaining({
         method: 'complete',
         request: expect.objectContaining({
-          reasoning: { enabled: true, effort: 'future-level' },
+          reasoningEffort: 'future-level',
         }),
       }),
     ])
@@ -135,7 +135,7 @@ describe('agent loop', () => {
         type: 'agent.run.started',
         modelExecution: {
           stream: false,
-          reasoning: { enabled: true, effort: 'future-level' },
+          reasoningEffort: 'future-level',
         },
       }),
       expect.objectContaining({ type: 'agent.model.completed' }),

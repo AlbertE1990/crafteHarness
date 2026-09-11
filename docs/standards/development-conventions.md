@@ -51,8 +51,11 @@
 - 多个供应商共享同一网络协议时，默认提供协议级 Adapter；只改变 endpoint、凭据和模型名不能要求使用者
   编写新 Adapter。供应商专属 Adapter 只承载真实协议差异。
 - `adapter` 表示实现选择，`provider` 表示轨迹和错误中的真实诊断身份，两个概念不得复用同一字段。
-- 供应商或模型会扩展的能力值不能在 Core 固定枚举；Core 使用稳定意图和开放值，具体 Adapter 负责
-  映射并校验，例如公开的 `reasoningEffort` 和内部的 `reasoning.effort`。
+- 供应商或模型会扩展的能力值不能在 Core 固定枚举；Core 使用稳定意图和开放值，例如全链路同名同形的
+  `reasoningEffort`，其中唯一的保留值 `'off'` 由 Core 的契约常量定义。固定枚举不能从 Core 下移到 Adapter
+  就了事：任何位置维护的取值白名单都会在供应商新增取值时拒绝合法请求，因此 Adapter 只负责把开放值翻译成
+  自己的协议字段（例如把 `'off'` 翻译成 `thinking.type` 或 `reasoning_effort: 'none'`），取值是否有效最终由
+  部署配置或供应商自身决定。
 
 ### 1.3 公共导出与测试代码边界
 

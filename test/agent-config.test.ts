@@ -26,7 +26,7 @@ describe('agent config', () => {
     const config = defineAgentConfig({
       systemPrompt: '  你是测试助手  ',
       execution: {
-        model: { reasoningEnabled: true, reasoningEffort: 'max' },
+        reasoningEffort: 'max',
         limits: { maxModelSteps: 8 },
       },
       model: {
@@ -40,7 +40,7 @@ describe('agent config', () => {
     expect(config).toMatchObject({
       systemPrompt: '你是测试助手',
       execution: {
-        model: { reasoningEnabled: true, reasoningEffort: 'max' },
+        reasoningEffort: 'max',
         limits: { maxModelSteps: 8, maxToolCalls: 32 },
       },
       model: {
@@ -69,41 +69,44 @@ describe('agent config', () => {
     })).toThrow('maxModelSteps')
   })
 
-  it('validates model execution defaults without fixing provider effort enums in Core', () => {
+  it('accepts an open reasoning level and rejects the removed model group', () => {
     const model = new ScriptedModelAdapter({ script: [] })
     const config = defineAgentConfig({
       model,
-      execution: {
-        model: { reasoningEnabled: true, reasoningEffort: 'provider-future-level' },
-      },
+      execution: { reasoningEffort: 'provider-future-level' },
     })
 
-    expect(config.execution.model).toEqual({
-      reasoningEnabled: true,
-      reasoningEffort: 'provider-future-level',
-    })
+    // 等级集合由供应商定义并会变化，因此 Core 只校验“提供了非空值”，不固定枚举。
+    expect(config.execution.reasoningEffort).toBe('provider-future-level')
     expect(() => defineAgentConfig({
       model,
-      execution: { model: { reasoningEffort: ' ' } },
-    })).toThrow('reasoningEffort 必须是非空字符串')
+      execution: { reasoningEffort: ' ' },
+    })).toThrow('Agent config.execution.reasoningEffort 必须是非空字符串')
 
+    // 只有保留值做大小写归一化；供应商等级原样保留，避免改写它的真实取值。
     expect(defineAgentConfig({
       model,
-      execution: { model: { reasoningEffort: 'future-level' } },
-    }).execution.model).toEqual({
-      reasoningEnabled: true,
-      reasoningEffort: 'future-level',
-    })
+      execution: { reasoningEffort: ' OFF ' },
+    }).execution.reasoningEffort).toBe('off')
+    expect(defineAgentConfig({
+      model,
+      execution: { reasoningEffort: 'High' },
+    }).execution.reasoningEffort).toBe('High')
 
     expect(() => defineAgentConfig({
       model,
-      execution: {
-        model: {
-          reasoningEnabled: false,
-          reasoningEffort: 'high',
-        } as unknown as NonNullable<Parameters<typeof defineAgentConfig>[0]['execution']>['model'],
-      },
-    })).toThrow('reasoningEnabled=false 时不能同时提供 reasoningEffort')
+      execution: { reasoningEffort: { enabled: true } },
+    } as unknown as Parameters<typeof defineAgentConfig>[0])).toThrow(
+      'reasoningEffort 必须是非空字符串',
+    )
+
+    // 旧的单字段包装组已被移除，误写时必须在配置边界报错而不是静默退回默认值。
+    expect(() => defineAgentConfig({
+      model,
+      execution: { model: { reasoningEffort: 'high' } },
+    } as unknown as Parameters<typeof defineAgentConfig>[0])).toThrow(
+      'Agent config.execution 包含未知字段：model',
+    )
   })
 
   it('rejects removed flat fields and unknown grouped fields', () => {

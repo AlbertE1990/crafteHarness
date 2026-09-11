@@ -7,24 +7,6 @@ import type { AgentRunResult } from '../core'
 import type { JsonObject } from '../types/json'
 import type { ToolGuardOutputEvent } from './tool-guard'
 
-/** 单次 Agent 请求的模型选项；传给 Adapter 前会被转换为供应商无关的嵌套协议。 */
-export type AgentModelExecutionOptions
-  = | {
-    readonly reasoningEnabled?: true
-    /** 供应商定义的推理强度；填写它即表示启用推理。 */
-    readonly reasoningEffort?: string
-  }
-  | {
-    readonly reasoningEnabled: false
-    readonly reasoningEffort?: never
-  }
-
-/** 校验并继承构造默认值后的扁平模型选项。 */
-export interface DefinedAgentModelExecutionOptions {
-  readonly reasoningEnabled?: boolean
-  readonly reasoningEffort?: string
-}
-
 /** 所有 Agent 请求共有的业务字段。 */
 interface AgentRequestBase {
   /** Session 数据分区；单用户 Runtime 也应显式组装固定值。 */
@@ -34,8 +16,15 @@ interface AgentRequestBase {
   /** 仅在创建新 Session 时写入标准可搜索名称。 */
   readonly sessionName?: string
   readonly sessionMetadata?: JsonObject
-  /** 覆盖本次请求的模型默认值；流式方式由 invoke()/stream() 决定。 */
-  readonly model?: AgentModelExecutionOptions
+  /**
+   * 覆盖本次请求的推理等级；流式方式由 invoke()/stream() 决定，不在这里选择。
+   *
+   * 这是单轴设置：`'off'` 是唯一保留值，表示显式关闭推理；其他非空字符串是
+   * 供应商定义的等级，Core 不固定枚举，由具体 ModelAdapter 映射成自己的协议字段
+   * 并原样透传，合法值最终由供应商裁定。省略时不产生任何推理参数，沿用部署默认值
+   * 或供应商自身默认值。
+   */
+  readonly reasoningEffort?: string
 }
 
 /**

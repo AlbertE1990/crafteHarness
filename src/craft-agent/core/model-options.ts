@@ -2,6 +2,26 @@ import type {
   AgentLoopModelExecutionOptions,
   DefinedAgentLoopModelExecutionOptions,
 } from './types'
+import { REASONING_OFF } from '../contracts'
+
+/**
+ * 校验并归一化单个推理强度。
+ *
+ * 这是门面与 AgentLoop 唯一的校验/归一化实现：Core 只保证“提供了一个非空值”，并把
+ * 保留值统一成小写 `'off'`，让下游直接按字面量识别而不必各自处理大小写；其他取值是
+ * 供应商定义的等级，原样透传、不做大小写转换，也不做等级白名单校验——任何位置维护的
+ * 白名单都会在供应商新增等级时把合法请求判为非法。
+ *
+ * Adapter 不重复这套校验，它们只消费归一化后的结果，并按 REASONING_OFF 把保留值翻译成
+ * 自己协议上的关闭语义。`path` 只用于诊断，让错误信息指向调用方实际书写的位置。
+ */
+export function normalizeReasoningEffort(value: unknown, path: string): string {
+  if (typeof value !== 'string' || !value.trim())
+    throw new TypeError(`${path} 必须是非空字符串`)
+
+  const effort = value.trim()
+  return effort.toLowerCase() === REASONING_OFF ? REASONING_OFF : effort
+}
 
 /**
  * 校验并合并模型执行设置。
@@ -14,50 +34,26 @@ export function defineAgentLoopModelExecutionOptions(
   base?: DefinedAgentLoopModelExecutionOptions,
 ): DefinedAgentLoopModelExecutionOptions {
   assertOptionsObject(input, 'Agent model execution options')
-  assertKnownFields(input, ['stream', 'reasoning'], 'Agent model execution options')
+  assertKnownFields(
+    input,
+    ['stream', 'reasoningEffort'],
+    'Agent model execution options',
+  )
 
   if (input?.stream !== undefined && typeof input.stream !== 'boolean')
     throw new TypeError('Agent model execution options.stream 必须是 boolean')
 
-  const reasoningInput = input?.reasoning
-  assertOptionsObject(reasoningInput, 'Agent model execution options.reasoning')
-  assertKnownFields(
-    reasoningInput,
-    ['enabled', 'effort'],
-    'Agent model execution options.reasoning',
-  )
-  if (reasoningInput?.enabled !== undefined && typeof reasoningInput.enabled !== 'boolean')
-    throw new TypeError('Agent model execution options.reasoning.enabled 必须是 boolean')
-  if (reasoningInput?.effort !== undefined
-    && (typeof reasoningInput.effort !== 'string' || !reasoningInput.effort.trim())) {
-    throw new TypeError('Agent model execution options.reasoning.effort 必须是非空字符串')
-  }
-
   const stream = input?.stream ?? base?.stream ?? true
-  const reasoning = mergeReasoning(reasoningInput, base?.reasoning)
+  const reasoningEffort = input?.reasoningEffort === undefined
+    ? base?.reasoningEffort
+    : normalizeReasoningEffort(
+        input.reasoningEffort,
+        'Agent model execution options.reasoningEffort',
+      )
+
   return Object.freeze({
     stream,
-    ...(reasoning ? { reasoning } : {}),
-  })
-}
-
-/** 合并嵌套推理配置；显式关闭时不会继承基础 effort，避免产生自相矛盾的请求。 */
-function mergeReasoning(
-  input: AgentLoopModelExecutionOptions['reasoning'],
-  base: DefinedAgentLoopModelExecutionOptions['reasoning'],
-): DefinedAgentLoopModelExecutionOptions['reasoning'] {
-  if (input === undefined)
-    return base
-
-  const enabled = input.enabled ?? base?.enabled
-  const effort = input.effort?.trim()
-    ?? (enabled === false ? undefined : base?.effort)
-  if (enabled === undefined && effort === undefined)
-    return undefined
-
-  return Object.freeze({
-    ...(enabled === undefined ? {} : { enabled }),
-    ...(effort === undefined ? {} : { effort }),
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
   })
 }
 

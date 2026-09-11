@@ -7,13 +7,14 @@ import {
   inspectPostgresConnection,
   readPostgresRuntimeConfig,
 } from './database/postgres'
+import { readDeepSeekRuntimeConfig } from './model-config'
 import { PostgresSessionStore } from './stores/postgres-session-store'
 
 loadEnvFile('.env.local')
 const PORT = Number(process.env.PORT ?? 3000)
-const apiKey = process.env.DEEPSEEK_API_KEY?.trim()
-if (!apiKey)
-  throw new Error('缺少环境变量 DEEPSEEK_API_KEY')
+
+// 模型名、endpoint 和推理等级都是会变化的部署事实，统一在启动期校验一次。
+const { apiKey, baseURL, ...modelInfo } = readDeepSeekRuntimeConfig(process.env)
 
 // Runtime 持有连接池生命周期；CraftAgent 只接收 SessionStore 协议。
 const databasePool = createPostgresPool(readPostgresRuntimeConfig())
@@ -22,19 +23,15 @@ const agent = new Agent({
   model: {
     adapter: 'deepseek',
     apiKey,
-    baseURL: process.env.DEEPSEEK_BASE_URL?.trim() || 'https://api.deepseek.com',
-    model: process.env.DEEPSEEK_MODEL?.trim() || 'deepseek-v4-flash',
+    baseURL,
+    model: modelInfo.model,
   },
   systemPrompt: '你是一个AI助手',
   execution: {
-    model: process.env.DEEPSEEK_THINKING === 'disabled'
-      ? { reasoningEnabled: false }
-      : {
-          reasoningEnabled: true,
-          ...(process.env.DEEPSEEK_REASONING_EFFORT?.trim()
-            ? { reasoningEffort: process.env.DEEPSEEK_REASONING_EFFORT.trim() }
-            : {}),
-        },
+    // null 表示不覆盖：此时不下发任何推理参数，由供应商或模型自身默认值决定。
+    ...(modelInfo.reasoningEffort === null
+      ? {}
+      : { reasoningEffort: modelInfo.reasoningEffort }),
     limits: {
       maxModelSteps: 5,
       maxToolCalls: 16,
@@ -49,7 +46,7 @@ const agent = new Agent({
   // 应用只注入持久化 Port；Session ID 由 Agent 使用固定前缀和 UUID 生成。
   sessionStore: postgresSessionStore,
 })
-const fastify = createServerApp({ agent })
+const fastify = createServerApp({ agent, model: modelInfo })
 fastify.addHook('onClose', async () => {
   await databasePool.end()
 })

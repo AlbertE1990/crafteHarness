@@ -33,7 +33,8 @@ flowchart LR
   P410 --> P411[阶段 4.11<br/>意图优先调用 API<br/>已完成]
   P411 --> P412[阶段 4.12<br/>配置减负与统一 Guard<br/>已完成]
   P412 --> P413[阶段 4.13<br/>多用户 Session Catalog<br/>已完成]
-  P413 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
+  P413 --> P414[阶段 4.14<br/>推理强度单轴化与配置外置<br/>已完成]
+  P414 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -86,7 +87,8 @@ flowchart LR
 - 标准 chunk 最大程度复用 OpenAI Chat Completions，新增字段采用只增不减原则。
 - 增加统一模型配置，并在阶段 4.1 收敛为 `defineAgentConfig()`。
 
-真实环境验收仍需配置 `DEEPSEEK_API_KEY`，覆盖普通对话、工具调用、多轮 reasoning 回放和取消。
+真实环境验收仍需配置 `DEEPSEEK_API_KEY`（阶段 4.14 起模型名由必填的 `DEEPSEEK_MODEL` 提供，不再回退到内置
+默认模型名），覆盖普通对话、工具调用、多轮 `reasoning_content` 回放和取消。
 详细交付见[阶段 2 记录](./deliveries/delivery-003-model-adapter.md)。
 
 ## 6. 阶段 2.1：官方 Adapter 工具包（已完成）
@@ -96,7 +98,7 @@ flowchart LR
 已完成范围：
 
 - 提取 `OpenAICompatibleModelAdapter`，复用消息、工具、响应、流、usage 和错误映射。
-- 将 DeepSeek 收缩为消息、token 参数、thinking 和 reasoning 差异层。
+- 将 DeepSeek 收缩为消息、token 参数、thinking 与 reasoning 字段的差异层。
 - 仓库测试目录提供 Scripted Adapter 与不绑定测试框架的契约探针，不把测试夹具作为生产 API。
 - Agent 配置同时支持内置兼容服务和自定义 Adapter。
 - 生产 Adapter 使用独立入口，测试工具留在 `test/support`，Core 继续禁止导入 SDK。
@@ -128,7 +130,7 @@ flowchart LR
 - 支持最大 Step、最大工具调用、每 Step completion token、总 token、时间预算和取消。
 - 定义 completed/stopped/failed 终态与稳定停止原因，防止无限循环。
 - 从 Session 固定快照生成每次模型请求，并通过 expectedVersion 阻止旧上下文结果写入。
-- 组装流式 reasoning、content、usage 和分片 Tool Call。
+- 组装流式 `reasoning_content`、content、usage 和分片 Tool Call。
 - 工具按 index 串行执行；未知工具和 Harness 失败写回模型继续处理。
 - 提供独立于持久化 Session 的实时 Agent Event，观察器异常不影响主链。
 - 明确当前不自动重试模型、并行工具或恢复崩溃后未完成 Tool Call。
@@ -247,8 +249,9 @@ flowchart LR
 
 已完成范围：
 
-- 本阶段曾由 `execution.model` 同时定义流式与推理默认值；阶段 4.11 已用意图优先 API 替代该调用形态。
-- 通用推理等级使用开放字符串，由具体 Adapter 维护合法集合和字段映射。
+- 本阶段曾由 `execution.model` 同时定义流式与推理默认值；阶段 4.11 已用意图优先 API 替代该调用形态，
+  阶段 4.14 进一步删除 `execution.model` 分组，只保留单个 `execution.reasoningEffort`。
+- 通用推理等级使用开放字符串，由具体 Adapter 映射到供应商字段；阶段 4.14 起不再在 Adapter 维护合法集合。
 - AgentLoop 同时执行 `stream()` 与 `complete()`，并为完整响应提供独立轨迹事件。
 - 当前联调 Runtime 在流式时使用 SSE，非流式时返回普通 JSON。
 - 明确同步 JSON 无法承载中途人工审批；当前 fail-closed，未来如有需求再设计异步任务协议。
@@ -273,7 +276,8 @@ flowchart LR
 已完成范围：
 
 - `invoke()` 与 `stream()` 分别表达完整结果和实时事件，不保留可矛盾的公共 `model.stream`。
-- 请求级模型设置进入 `AgentRequest.model`，公开为 `reasoningEnabled/reasoningEffort` 扁平字段。
+- 请求级模型设置进入 `AgentRequest.model`，公开为 `reasoningEnabled/reasoningEffort` 扁平字段；阶段 4.14
+  已删除该对象，收敛为请求顶层的单个 `reasoningEffort` 字符串。
 - 唯一控制参数直接使用 AbortSignal；关联 ID 与轨迹接线由 Agent 配置统一管理。
 - `stream()` 提供带背压和消费者取消的 `AsyncIterable<AgentOutputEvent>`。
 - AgentLoop 与 Adapter 继续使用内部嵌套协议，由门面承担转换复杂度。
@@ -311,7 +315,37 @@ flowchart LR
 详细交付见[阶段 4.13 记录](./deliveries/delivery-019-searchable-multi-user-session-catalog.md)，设计依据见
 [ADR-0010](./decisions/adr-0010-searchable-multi-user-session-catalog.md)。
 
-## 22. 阶段 5：轨迹持久化与查询（下一阶段）
+## 22. 阶段 4.14：推理强度单轴化与运行时配置外置（已完成）
+
+已完成范围：
+
+- 删除 `AgentModelExecutionOptions`、`DefinedAgentModelExecutionOptions` 和 `execution.model` 分组，公开形态
+  收敛为单个顶层字符串：`AgentRequest.reasoningEffort` 与 `AgentExecutionConfig.reasoningEffort`。
+- `'off'` 是唯一保留值，按大小写不敏感识别并统一归一化为小写；其他非空字符串是供应商等级，原样透传；
+  省略时不产生任何推理参数，空白字符串在配置边界报错。
+- 删除“只提供 effort 会自动启用推理”和“关闭推理时会清除继承 effort，且不能同时提供 effort”两条规则；
+  单轴形态下不存在可表达的矛盾状态。
+- 内部契约同步收敛为单轴：删除 `ModelReasoningOptions`，`ModelRequest.reasoning` 改为 `reasoningEffort`，
+  AgentLoop 的执行设置与门面字段同名同形，层间不再做维度分解；`normalizeReasoningEffort()` 成为门面、
+  AgentLoop 与 Adapter 共用的唯一归一化规则。
+- 保留值 `'off'` 由 `contracts/model.ts` 的 `REASONING_OFF` 常量唯一提供，不进入根入口的公共导出；两个
+  官方 Adapter 各自把它翻译成自己的关闭字段（DeepSeek 用 `thinking.type`，OpenAI 兼容用
+  `reasoning_effort: 'none'`）。
+- 删除 DeepSeek Adapter 的推理等级白名单，`reasoning_effort` 改为开放字符串直接透传：过期的白名单会在合法
+  输入上 fail closed，而供应商返回的 400 已被归类为 `MODEL_INVALID_REQUEST`。
+- 门面与两个 Adapter 里原先针对 `enabled: false` 加 effort 的防御性互斥检查全部删除，而不是搬到别处。
+- DeepSeek Adapter 的 `model` 改为必填，库不再内置默认模型名；`baseURL` 仍保留方言自身的稳定默认值。
+- Runtime 配置外置：新增必填 `DEEPSEEK_MODEL`，删除判断有缺陷的 `DEEPSEEK_THINKING`，
+  `DEEPSEEK_REASONING_EFFORT` 成为唯一开关，`DEEPSEEK_REASONING_EFFORTS` 提供下拉候选并只用于启动期
+  自查，不校验单次请求。
+- 新增 `GET /api/model`，聊天请求体收敛为 `{ message, conversationId?, stream, reasoningEffort? }`；前端
+  下拉改由部署词表驱动，不再硬编码多家供应商等级词表。
+- 换模型或增删推理等级只需改 `.env.local` 并重启，不需要改库，也不需要改前端代码。
+
+设计依据见 [ADR-0011](./decisions/adr-0011-single-axis-reasoning-effort.md)，协议细节见
+[Agent 门面规范](../standards/protocols/agent.md)与 [Server Runtime 接入规范](../standards/integrations/server-runtime.md)。
+
+## 23. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -321,7 +355,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 CraftAgent 核心协议。
 
-## 23. 阶段 6：异常诊断
+## 24. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -334,7 +368,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 24. 阶段 7：长期安全与扩展（最低优先级）
+## 25. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

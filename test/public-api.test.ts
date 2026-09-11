@@ -3,13 +3,10 @@
 import type {
   AgentConfigInput,
   AgentExecutionConfig,
-  AgentModelExecutionOptions,
   AgentObservabilityConfig,
   AgentToolInput,
   AgentToolsCommonConfig,
-  DefinedAgentModelExecutionOptions,
   ModelAdapter,
-  ModelReasoningOptions,
   SessionStore,
   ToolExecutionConfig,
   ToolGuardDecision,
@@ -36,9 +33,6 @@ import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 function acceptsPublicTypes(_value: {
   config: AgentConfigInput
   execution?: AgentExecutionConfig
-  modelExecution?: AgentModelExecutionOptions
-  definedModelExecution?: DefinedAgentModelExecutionOptions
-  reasoning?: ModelReasoningOptions
   observability?: AgentObservabilityConfig
   tools?: AgentToolsCommonConfig
   tool?: AgentToolInput
@@ -89,7 +83,7 @@ describe('craft-agent public API', () => {
         apiKey: 'test-key',
         model: 'deepseek-flash',
       },
-      execution: { model: { reasoningEnabled: true, reasoningEffort: 'high' } },
+      execution: { reasoningEffort: 'high' },
     }
 
     expect(defineAgentConfig(kimiConfig).model.provider).toBe('moonshot')

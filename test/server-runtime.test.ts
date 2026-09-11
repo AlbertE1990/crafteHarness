@@ -4,7 +4,7 @@ import type {
   ModelCompletion,
   ModelStreamChunk,
 } from '../src/craft-agent'
-import type { ServerStreamEvent } from '../src/server/app'
+import type { ServerModelInfo, ServerStreamEvent } from '../src/server/app'
 import { describe, expect, it } from 'vitest'
 import Agent, { MemorySessionStore } from '../src/craft-agent'
 import {
@@ -13,6 +13,19 @@ import {
 } from '../src/server/agent-tools'
 import { createServerApp } from '../src/server/app'
 import { ScriptedModelAdapter } from './support/scripted-model-adapter'
+
+/**
+ * 契约测试注入的部署模型信息。
+ *
+ * 真实 Runtime 由环境变量组装这份词表；测试只需要覆盖"前端候选来自 Server 而不是
+ * 硬编码"这一契约，因此使用固定值。
+ */
+const MODEL_INFO: ServerModelInfo = {
+  provider: 'scripted',
+  model: 'scripted-model',
+  reasoningEffort: null,
+  reasoningEfforts: ['off', 'low', 'high', 'max'],
+}
 
 /** 构造 Server Runtime 契约测试使用的标准模型 chunk。 */
 function chunk(
@@ -129,6 +142,56 @@ async function readApprovalRequest(
 }
 
 describe('server runtime HTTP boundary', () => {
+  it('serves the deployment model vocabulary so the UI never hardcodes it', async () => {
+    const agent = new Agent({ model: new ScriptedModelAdapter({ script: [] }) })
+    const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
+
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/model' })
+
+      // 前端下拉的候选来自部署配置：换模型或增删等级不需要改动前端代码。
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({
+        data: {
+          provider: 'scripted',
+          model: 'scripted-model',
+          reasoningEffort: null,
+          reasoningEfforts: ['off', 'low', 'high', 'max'],
+        },
+      })
+    }
+    finally {
+      await app.close()
+    }
+  })
+
+  it('rejects blank input at the HTTP boundary instead of failing inside the Agent', async () => {
+    const adapter = new ScriptedModelAdapter({ script: [] })
+    const agent = new Agent({ model: adapter })
+    const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
+
+    try {
+      const blankMessage = await app.inject({
+        method: 'POST',
+        url: '/api/chat',
+        payload: { message: '   ', stream: false },
+      })
+      const blankEffort = await app.inject({
+        method: 'POST',
+        url: '/api/chat',
+        payload: { message: '正常输入', stream: false, reasoningEffort: '   ' },
+      })
+
+      // 纯空白与 Agent 的 trim 校验等价：应当判为客户端 400，而不是落到 Agent 抛错变 500。
+      expect(blankMessage.statusCode).toBe(400)
+      expect(blankEffort.statusCode).toBe(400)
+      expect(adapter.calls).toHaveLength(0)
+    }
+    finally {
+      await app.close()
+    }
+  })
+
   it('returns ordinary JSON and never opens SSE when stream is false', async () => {
     const adapter = new ScriptedModelAdapter({
       script: [{ method: 'complete', result: completion('JSON 回答', 'JSON 思考') }],
@@ -136,7 +199,7 @@ describe('server runtime HTTP boundary', () => {
     const agent = new Agent({
       model: adapter,
     })
-    const app = createServerApp({ agent, logger: false })
+    const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
 
     try {
       const response = await app.inject({
@@ -145,10 +208,7 @@ describe('server runtime HTTP boundary', () => {
         payload: {
           message: '使用非流式请求',
           stream: false,
-          model: {
-            reasoningEnabled: true,
-            reasoningEffort: 'future-level',
-          },
+          reasoningEffort: 'future-level',
         },
       })
 
@@ -165,7 +225,7 @@ describe('server runtime HTTP boundary', () => {
       })
       expect(adapter.calls[0]).toMatchObject({
         method: 'complete',
-        request: { reasoning: { enabled: true, effort: 'future-level' } },
+        request: { reasoningEffort: 'future-level' },
       })
     }
     finally {
@@ -190,7 +250,7 @@ describe('server runtime HTTP boundary', () => {
         now: () => new Date('2026-09-08T09:00:00.000Z'),
       },
     })
-    const app = createServerApp({ agent, logger: false })
+    const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
 
     try {
       const chat = await app.inject({
@@ -333,7 +393,7 @@ describe('server runtime HTTP boundary', () => {
       model: new ScriptedModelAdapter({ script: [] }),
       sessionStore: store,
     })
-    const app = createServerApp({ agent, logger: false })
+    const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
 
     try {
       const detail = await app.inject({
@@ -394,7 +454,7 @@ describe('server runtime HTTP boundary', () => {
         approvalTimeoutMs: 120_000,
       },
     })
-    const app = createServerApp({ agent, logger: false })
+    const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
 
     try {
       const baseUrl = await app.listen({ port: 0, host: '127.0.0.1' })
@@ -476,7 +536,7 @@ describe('server runtime HTTP boundary', () => {
         guard: serverToolGuard,
       },
     })
-    const app = createServerApp({ agent, logger: false })
+    const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
 
     try {
       const baseUrl = await app.listen({ port: 0, host: '127.0.0.1' })
@@ -540,7 +600,7 @@ describe('server runtime HTTP boundary', () => {
         guard: serverToolGuard,
       },
     })
-    const app = createServerApp({ agent, logger: false })
+    const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
 
     try {
       const chat = await app.inject({
