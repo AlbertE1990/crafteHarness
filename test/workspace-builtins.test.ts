@@ -81,6 +81,24 @@ describe('workspace built-in tools', () => {
     expect(ambiguous).toMatchObject({ ok: false, error: { code: 'FS_EDIT_AMBIGUOUS' } })
   })
 
+  it('creates new files and performs exact replace-all edits', async () => {
+    const [read, write, edit] = createWorkspaceTools({ workspaceRoot })
+    const created = await executeTool(write, {
+      file_path: 'src/new.txt',
+      content: 'one two two',
+    }, approved('write-new'))
+    expect(created).toMatchObject({ ok: true, value: { created: true } })
+
+    await executeTool(read, { file_path: 'src/new.txt' }, { callId: 'read-new' })
+    const edited = await executeTool(edit, {
+      file_path: 'src/new.txt',
+      old_string: 'two',
+      new_string: 'three',
+      replace_all: true,
+    }, approved('edit-all'))
+    expect(edited).toMatchObject({ ok: true, value: { replacements: 2 } })
+  })
+
   it('searches files and content with bundled ripgrep', async () => {
     const [, , , glob, grep] = createWorkspaceTools({ workspaceRoot })
     const files = await executeTool(glob, { pattern: '**/*.ts' }, { callId: 'glob' })

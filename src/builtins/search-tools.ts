@@ -6,7 +6,7 @@ import { rgPath } from '@vscode/ripgrep'
 import { z } from 'zod'
 import { defineTool, ToolError } from '../tools'
 
-const pathSchema = z.string().min(1).max(4_096)
+const workspacePathSchema = z.string().min(1).max(4_096)
 const MAX_CAPTURE_BYTES = 4 * 1024 * 1024
 
 /** 创建不经过 shell 拼接的 glob 与 grep 工具。 */
@@ -17,10 +17,10 @@ export function createSearchTools(runtime: WorkspaceRuntime) {
 function createGlobTool(runtime: WorkspaceRuntime) {
   return defineTool({
     name: 'glob',
-    description: '按 glob 模式列出 workspace 文件；包含隐藏和 ignored 文件、排除 .git，结果有数量上限。',
+    description: '按 glob 模式列出 workspace 内的文件。包含隐藏和 ignore 文件，但排除版本控制元数据，结果有数量上限。',
     inputSchema: z.strictObject({
-      pattern: z.string().min(1).max(4_096),
-      path: pathSchema.optional(),
+      pattern: z.string().min(1).max(4_096).describe('ripgrep glob 模式，例如 **/*.ts。'),
+      path: workspacePathSchema.optional().describe('相对于 workspace 的搜索目录，默认 workspace 根目录。'),
     }),
     outputSchema: z.strictObject({ paths: z.array(z.string()), truncated: z.boolean() }),
     metadata: { category: 'search', mutates: false },
@@ -61,11 +61,11 @@ function createGlobTool(runtime: WorkspaceRuntime) {
 function createGrepTool(runtime: WorkspaceRuntime) {
   return defineTool({
     name: 'grep',
-    description: '用 ripgrep 正则搜索 workspace 文件内容，返回文件、行号和匹配行，结果有数量上限。',
+    description: '使用 ripgrep 正则表达式搜索 workspace 内文件内容，返回文件、行号和匹配行；结果有数量上限。',
     inputSchema: z.strictObject({
-      pattern: z.string().min(1).max(4_096),
-      path: pathSchema.optional(),
-      include: z.string().min(1).max(4_096).optional(),
+      pattern: z.string().min(1).max(4_096).describe('ripgrep 正则表达式。'),
+      path: workspacePathSchema.optional().describe('相对于 workspace 的文件或目录，默认 workspace 根目录。'),
+      include: z.string().min(1).max(4_096).optional().describe('可选文件 glob，例如 *.ts 或 **/*.md。'),
     }),
     outputSchema: z.strictObject({
       matches: z.array(z.strictObject({
@@ -123,6 +123,7 @@ async function runRipgrep(args: readonly string[], cwd: string, signal: AbortSig
         return
       settled = true
       signal.removeEventListener('abort', onAbort)
+      child.kill()
       reject(new ToolError({ code: 'SEARCH_FAILED', message: '无法启动内置 ripgrep', cause: error }))
     })
     child.once('close', (code) => {

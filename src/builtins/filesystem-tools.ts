@@ -5,7 +5,18 @@ import { z } from 'zod'
 import { defineTool, ToolError } from '../tools'
 import { fileSystemError, pathExists, readWorkspaceText, writeWorkspaceTextAtomically } from './workspace'
 
-const filePathSchema = z.string().min(1).max(4_096)
+const workspacePathSchema = z.string().min(1).max(4_096)
+
+const readOutputSchema = z.strictObject({
+  file_path: z.string(),
+  offset: z.number().int().positive(),
+  total_lines: z.number().int().nonnegative(),
+  lines: z.array(z.strictObject({
+    number: z.number().int().positive(),
+    text: z.string(),
+  })),
+  truncated: z.boolean(),
+})
 
 /** 创建共享观察版本的 read、write、edit 工具。 */
 export function createFilesystemTools(runtime: WorkspaceRuntime) {
@@ -15,36 +26,27 @@ export function createFilesystemTools(runtime: WorkspaceRuntime) {
 function createReadTool(runtime: WorkspaceRuntime) {
   return defineTool({
     name: 'read',
-    description: '读取 workspace 内的 UTF-8 文本文件，返回带行号分页；修改已有文件前应先调用本工具。',
+    description: '读取 workspace 内的 UTF-8 文本文件。返回带行号的分页内容；修改已有文件前应先调用本工具。',
     inputSchema: z.strictObject({
-      file_path: filePathSchema.describe('相对于 workspace 的文件路径。'),
-      offset: z.number().int().min(1).optional().describe('起始行，默认 1。'),
-      limit: z.number().int().min(1).max(runtime.options.readLimit).optional().describe('最多返回行数。'),
+      file_path: workspacePathSchema.describe('相对于 workspace 的文件路径。'),
+      offset: z.number().int().min(1).optional().describe('从第几行开始，默认 1。'),
+      limit: z.number().int().min(1).max(runtime.options.readLimit).optional().describe(
+        `最多返回多少行，默认且最多 ${runtime.options.readLimit}。`,
+      ),
     }),
-    outputSchema: z.strictObject({
-      file_path: z.string(),
-      offset: z.number().int().positive(),
-      total_lines: z.number().int().nonnegative(),
-      lines: z.array(z.strictObject({ number: z.number().int().positive(), text: z.string() })),
-      truncated: z.boolean(),
-    }),
+    outputSchema: readOutputSchema,
     metadata: { category: 'filesystem', mutates: false },
     async execute(input) {
       const target = await runtime.resolve(input.file_path)
       const result = await readWorkspaceText(runtime, target)
-      const allLines = result.content.split(/\r?\n/)
-      if (allLines.length > 1 && allLines.at(-1) === '')
-        allLines.pop()
+      const allLines = splitLines(result.content)
       const offset = input.offset ?? 1
       const limit = input.limit ?? runtime.options.readLimit
       const lines: Array<{ number: number, text: string }> = []
       let usedBytes = 0
       let truncated = offset > allLines.length + 1
       for (let index = offset - 1; index < allLines.length && lines.length < limit; index++) {
-        const raw = allLines[index]
-        const text = raw.length > runtime.options.readMaxLineLength
-          ? `${raw.slice(0, runtime.options.readMaxLineLength)}…`
-          : raw
+        const text = truncateLine(allLines[index], runtime.options.readMaxLineLength)
         const bytes = Buffer.byteLength(text, 'utf8')
         if (lines.length > 0 && usedBytes + bytes > runtime.options.readMaxBytes) {
           truncated = true
@@ -69,8 +71,11 @@ function createReadTool(runtime: WorkspaceRuntime) {
 function createWriteTool(runtime: WorkspaceRuntime) {
   return defineTool({
     name: 'write',
-    description: '在 workspace 内创建或完整写入 UTF-8 文本文件；覆盖已有文件前必须先 read。',
-    inputSchema: z.strictObject({ file_path: filePathSchema, content: z.string() }),
+    description: '在 workspace 内创建或完整写入 UTF-8 文本文件。覆盖已有文件前必须先 read；不会自动创建父目录。',
+    inputSchema: z.strictObject({
+      file_path: workspacePathSchema.describe('相对于 workspace 的文件路径。'),
+      content: z.string().describe('要写入的完整 UTF-8 文本。'),
+    }),
     outputSchema: z.strictObject({
       file_path: z.string(),
       created: z.boolean(),
@@ -80,7 +85,7 @@ function createWriteTool(runtime: WorkspaceRuntime) {
     guard: ({ input }) => ({
       decision: 'ask',
       title: '写入文件',
-      reason: `准备写入 workspace 文件“${input.file_path}”`,
+      reason: `工具准备写入 workspace 文件“${input.file_path}”`,
       details: { file_path: input.file_path },
     }),
     async execute(input) {
@@ -115,12 +120,12 @@ function createWriteTool(runtime: WorkspaceRuntime) {
 function createEditTool(runtime: WorkspaceRuntime) {
   return defineTool({
     name: 'edit',
-    description: '精确替换 workspace 内 UTF-8 文件的一段内容；必须先 read，默认要求原文只出现一次。',
+    description: '精确替换 workspace 内 UTF-8 文本文件的一段内容。必须先 read；默认要求 old_string 只出现一次。',
     inputSchema: z.strictObject({
-      file_path: filePathSchema,
-      old_string: z.string().min(1),
-      new_string: z.string(),
-      replace_all: z.boolean().optional(),
+      file_path: workspacePathSchema.describe('相对于 workspace 的文件路径。'),
+      old_string: z.string().min(1).describe('需要匹配的原始文本，必须完全一致。'),
+      new_string: z.string().describe('替换后的文本。'),
+      replace_all: z.boolean().optional().describe('是否替换所有匹配，默认 false。'),
     }),
     outputSchema: z.strictObject({
       file_path: z.string(),
@@ -131,10 +136,12 @@ function createEditTool(runtime: WorkspaceRuntime) {
     guard: ({ input }) => ({
       decision: 'ask',
       title: '编辑文件',
-      reason: `准备编辑 workspace 文件“${input.file_path}”`,
+      reason: `工具准备编辑 workspace 文件“${input.file_path}”`,
       details: { file_path: input.file_path, replace_all: input.replace_all ?? false },
     }),
     async execute(input) {
+      assertWriteSize(input.old_string, runtime.options.writeMaxBytes)
+      assertWriteSize(input.new_string, runtime.options.writeMaxBytes)
       const target = await runtime.resolve(input.file_path)
       return await runtime.withPathLock(target, async () => {
         const result = await readWorkspaceText(runtime, target)
@@ -162,6 +169,19 @@ function createEditTool(runtime: WorkspaceRuntime) {
       })
     },
   })
+}
+
+function splitLines(content: string): string[] {
+  const lines = content.split(/\r?\n/)
+  if (lines.length > 1 && lines.at(-1) === '')
+    lines.pop()
+  return lines
+}
+
+function truncateLine(value: string, maxLength: number): string {
+  if (value.length <= maxLength)
+    return value
+  return `${value.slice(0, maxLength)}…`
 }
 
 function countOccurrences(content: string, needle: string): number {

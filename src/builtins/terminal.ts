@@ -11,12 +11,14 @@ import { fileSystemError } from './workspace'
 export function createTerminalTool(runtime: WorkspaceRuntime) {
   return defineTool({
     name: 'terminal',
-    description: '在 workspace 内指定目录运行一次性系统 shell；调用间不保留 cwd、环境变量或后台任务。',
+    description: '在 workspace 内指定目录启动一次性系统 shell 命令。每次调用都是新进程，不保留 cwd、环境变量或后台任务。',
     inputSchema: z.strictObject({
-      command: z.string().min(1).max(32_768),
-      description: z.string().min(1).max(500),
-      workdir: z.string().min(1).max(4_096).optional(),
-      timeout_ms: z.number().int().min(1).max(runtime.options.terminalTimeoutMs).optional(),
+      command: z.string().min(1).max(32_768).describe('交给系统 shell 执行的完整命令。'),
+      description: z.string().min(1).max(500).describe('简短说明该命令为何需要执行。'),
+      workdir: z.string().min(1).max(4_096).optional().describe('相对于 workspace 的工作目录，默认 workspace 根目录。'),
+      timeout_ms: z.number().int().min(1).max(runtime.options.terminalTimeoutMs).optional().describe(
+        `命令超时时间，默认且最多 ${runtime.options.terminalTimeoutMs}ms。`,
+      ),
     }),
     outputSchema: z.strictObject({
       exit_code: z.number().int().nullable(),
