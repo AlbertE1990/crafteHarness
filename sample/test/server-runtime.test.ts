@@ -428,10 +428,16 @@ describe('server runtime HTTP boundary', () => {
         url: '/api/chat',
         payload: { message: '正常输入', stream: false, reasoningEffort: '   ' },
       })
+      const legacySessionField = await app.inject({
+        method: 'POST',
+        url: '/api/chat',
+        payload: { message: '正常输入', stream: false, conversationId: 'legacy-id' },
+      })
 
       // 纯空白与 Agent 的 trim 校验等价：应当判为客户端 400，而不是落到 Agent 抛错变 500。
       expect(blankMessage.statusCode).toBe(400)
       expect(blankEffort.statusCode).toBe(400)
+      expect(legacySessionField.statusCode).toBe(400)
       expect(adapter.calls).toHaveLength(0)
     }
     finally {

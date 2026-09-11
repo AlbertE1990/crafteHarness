@@ -14,6 +14,7 @@ ADR 记录重要技术选择及其背景、备选方案和后果。
 - [ADR-0010：建立可搜索、可隔离的多用户 Session Catalog](./adr-0010-searchable-multi-user-session-catalog.md)
 - [ADR-0011：推理强度收敛为单轴字符串，供应商词表与模型名归部署所有](./adr-0011-single-axis-reasoning-effort.md)
 - [ADR-0012：仓库根成为发布的库，应用下移为 sample，包名改为 craft-harness](./adr-0012-package-extraction-and-naming.md)
+- [ADR-0013：默认提供受工作区约束的文件、搜索与终端工具](./adr-0013-default-workspace-tools.md)
 
 状态使用：
 

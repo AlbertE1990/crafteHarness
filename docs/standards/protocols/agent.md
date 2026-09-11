@@ -21,6 +21,7 @@ const agent = new Agent({
     model: process.env.DEEPSEEK_MODEL!,
   },
   tools: {
+    workspaceRoot: process.cwd(),
     additional: [myTool],
   },
   execution: {
@@ -30,7 +31,8 @@ const agent = new Agent({
 })
 ```
 
-未提供 `tools` 时，Agent 自动注册 `get_current_time` 和 `calculator` 两个安全内置工具。
+未提供 `tools` 时，Agent 自动注册 `get_current_time`、`calculator`、`read`、`write`、`edit`、`glob`、
+`grep` 和 `terminal`。工作区边界见[内置工作区工具规范](./builtin-workspace-tools.md)。
 
 `model` 接受三种形式：
 
@@ -81,12 +83,12 @@ const kimiAgent = new Agent({
 
 配置按业务意图组织：
 
-| 位置            | 字段                                       | 职责                         |
-| --------------- | ------------------------------------------ | ---------------------------- |
-| 根配置          | `model`、`systemPrompt`、`sessionStore`    | 核心依赖与 Agent 行为        |
-| `tools`         | 工具集合操作、`guard`、`approvalTimeoutMs` | 工具注册、风险决策与审批默认 |
-| `execution`     | `reasoningEffort`、`limits`、`now`         | 推理默认值、预算和时钟       |
-| `observability` | `onTrace`、`onToolEvent`                   | 不参与控制流的全局观察器     |
+| 位置            | 字段                                    | 职责                       |
+| --------------- | --------------------------------------- | -------------------------- |
+| 根配置          | `model`、`systemPrompt`、`sessionStore` | 核心依赖与 Agent 行为      |
+| `tools`         | 集合操作、`workspaceRoot`、Guard 与审批 | 工具注册、工作区、风险决策 |
+| `execution`     | `reasoningEffort`、`limits`、`now`      | 推理默认值、预算和时钟     |
+| `observability` | `onTrace`、`onToolEvent`                | 不参与控制流的全局观察器   |
 
 `systemPrompt` 描述 Agent 行为，因此不放入模型供应商连接配置。全局 Guard 与工具集合和局部 Guard 紧密协作，
 因此配置为 `tools.guard`，不放入容易暗示沙箱或身份认证能力的 `security`。`sessionStore` 已经完整表达依赖，
@@ -116,6 +118,7 @@ const agent = new Agent({
 const agent = new Agent({
   model,
   tools: {
+    workspaceRoot: '/srv/project',
     disabledBuiltins: ['get_current_time'],
     overrides: {
       calculator: customCalculator,
@@ -139,7 +142,8 @@ const isolatedAgent = new Agent({
 解析顺序固定为“默认内置 → 禁用 → 覆盖 → 追加”。同一内置工具不能同时禁用和覆盖；覆盖实现必须使用
 被覆盖工具的同一名称；追加工具不能与最终集合重名。需要同名替换时必须使用 `overrides`，禁止静默覆盖。
 `guardOverrides` 的函数替换内置工具自身 Guard，`null` 明确移除；全局 Guard 不受影响。
-`replace` 模式不能混入禁用、覆盖、Guard 覆盖或追加字段。
+`replace` 模式不能混入 workspaceRoot、禁用、覆盖、Guard 覆盖或追加字段。默认扩展模式省略 workspaceRoot 时，
+文件、搜索和终端在创建 Agent 时读取 `process.cwd()`。
 
 ## 5. 运行与事件
 

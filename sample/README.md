@@ -85,15 +85,15 @@ pnpm dev               # 在仓库根执行
 
 ## HTTP 接口
 
-| 方法     | 路径                              | 说明                                                                                                                          |
-| -------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `POST`   | `/api/chat`                       | 发起一次 Agent Run。请求体 `{ message, conversationId?, stream?, reasoningEffort?, model? }`；`stream` 默认 `true` 时返回 SSE |
-| `GET`    | `/api/model`                      | 返回模型目录（每个模型各自的推理能力），前端由此渲染，不在页面里硬编码                                                        |
-| `GET`    | `/api/conversation/list`          | 会话目录（仅列表展示所需的最小摘要）                                                                                          |
-| `GET`    | `/api/conversation/:sessionId`    | 按需读取单个会话的完整投影                                                                                                    |
-| `PATCH`  | `/api/conversation/:sessionId`    | 重命名会话，请求体 `{ name }`（非空、≤80 字符）                                                                               |
-| `DELETE` | `/api/conversation/:sessionId`    | 删除会话及其全部事件                                                                                                          |
-| `POST`   | `/api/tool-approvals/:approvalId` | 提交工具审批决定 `{ decision: 'allow' \| 'deny' }`                                                                            |
+| 方法     | 路径                              | 说明                                                                                                                     |
+| -------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `POST`   | `/api/chat`                       | 发起一次 Agent Run。请求体 `{ message, sessionId?, stream?, reasoningEffort?, model? }`；`stream` 默认 `true` 时返回 SSE |
+| `GET`    | `/api/model`                      | 返回模型目录（每个模型各自的推理能力），前端由此渲染，不在页面里硬编码                                                   |
+| `GET`    | `/api/conversation/list`          | 会话目录（仅列表展示所需的最小摘要）                                                                                     |
+| `GET`    | `/api/conversation/:sessionId`    | 按需读取单个会话的完整投影                                                                                               |
+| `PATCH`  | `/api/conversation/:sessionId`    | 重命名会话，请求体 `{ name }`（非空、≤80 字符）                                                                          |
+| `DELETE` | `/api/conversation/:sessionId`    | 删除会话及其全部事件                                                                                                     |
+| `POST`   | `/api/tool-approvals/:approvalId` | 提交工具审批决定 `{ decision: 'allow' \| 'deny' }`                                                                       |
 
 重命名与删除**不在库的 `SessionStore` 契约里**：名称是可变的展示投影（`session.created` 事件仍保留创建时的原始名称），删除则会移除已记录的事实。两者都由 Runtime 通过 `ConversationCatalogMutations` 端口注入，未注入时接口明确返回 `501`，库的 append-only 协议保持不变。
 

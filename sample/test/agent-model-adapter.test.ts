@@ -71,6 +71,12 @@ describe('agent runtime model adapter boundary', () => {
     expect(adapter.calls[0]?.request.tools?.map(tool => tool.name)).toEqual([
       'get_current_time',
       'calculator',
+      'read',
+      'write',
+      'edit',
+      'glob',
+      'grep',
+      'terminal',
       'get_user_location',
       'get_weather',
       'manage_runtime_resource',

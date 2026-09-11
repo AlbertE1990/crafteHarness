@@ -85,7 +85,7 @@ Core 的既有原则是“模型和供应商会扩展的能力值不能在 Core 
 - 新增 `GET /api/model`，返回 `{ data: { provider, model, reasoningEffort, reasoningEfforts } }`。
   `reasoningEffort` 是部署默认等级（可能为 `null`），`reasoningEfforts` 是下拉候选列表。前端下拉由此渲染，
   不再硬编码任何供应商词表。`POST /api/chat` 请求体随之变为
-  `{ message, conversationId?, stream, reasoningEffort? }`，原 `model: { reasoningEnabled, reasoningEffort }`
+  `{ message, sessionId?, stream, reasoningEffort? }`，原 `model: { reasoningEnabled, reasoningEffort }`
   对象删除。
 - 核心原则：换模型或增删推理等级 = 改 `.env.local` 加重启，不需要改库，也不需要改前端代码。
 

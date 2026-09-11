@@ -125,6 +125,8 @@ const MIN_COMPOSER_HEIGHT = 56
 const MAX_COMPOSER_HEIGHT = 320
 /** 键盘调整把手时的单步高度（ArrowUp / ArrowDown 各 ±24px）。 */
 const COMPOSER_HEIGHT_STEP = 24
+/** public 目录中的产品标识；绑定变量可避免测试编译器解析根路径为本地文件。 */
+const brandLogoPath = '/logo.png'
 
 /**
  * 会话 kebab 菜单的估算尺寸。
@@ -141,7 +143,7 @@ const CONVERSATION_MENU_VIEWPORT_MARGIN = 8
 const messages = ref<Message[]>([])
 const conversations = ref<ConversationSummary[]>([])
 const input = ref('')
-const conversationId = ref('')
+const sessionId = ref('')
 const isSending = ref(false)
 const isAwaitingFirstToken = ref(false)
 const isLoadingConversations = ref(false)
@@ -217,7 +219,7 @@ let composerResizeState: { pointerId: number, startY: number, startHeight: numbe
 
 const displayedConversations = computed(() => [...conversations.value].reverse())
 const activeConversation = computed(() => (
-  conversations.value.find(conversation => conversation.id === conversationId.value)
+  conversations.value.find(conversation => conversation.id === sessionId.value)
 ))
 const pageTitle = computed(() => activeConversation.value?.name?.trim() || '新对话')
 /** 当前选中的模型；没有可用模型时为 undefined，此时页面不表达模型偏好。 */
@@ -616,7 +618,7 @@ function applyConversationDetail(conversation: ConversationSummary, detail: Conv
   if (!cachedMessages)
     messageCache.set(conversation.id, nextMessages)
 
-  conversationId.value = conversation.id
+  sessionId.value = conversation.id
   messages.value = nextMessages
   input.value = ''
   errorMessage.value = ''
@@ -631,7 +633,7 @@ function applyConversationDetail(conversation: ConversationSummary, detail: Conv
 
 /** 发送完成后把内存消息回填进缓存，避免切回该会话时看到发送前的旧内容。 */
 function syncConversationCache(): void {
-  const id = conversationId.value
+  const id = sessionId.value
   if (!id)
     return
 
@@ -690,7 +692,7 @@ function startNewConversation() {
   if (isSending.value)
     return
 
-  conversationId.value = ''
+  sessionId.value = ''
   // 换一个全新的数组：草稿会话的消息随后会作为新会话的缓存内容被接管，
   // 直接复用同一个数组会让两个会话共享状态。
   messages.value = []
@@ -780,7 +782,7 @@ function askDeleteConversation(conversation: ConversationSummary): void {
  * 删除会话。
  *
  * 成功后就地更新列表与缓存，不再多拉一次列表；删除的是当前会话时回到“新对话”空态，
- * 避免留下一个已经在服务端消失的 conversationId 继续发送。
+ * 避免留下一个已经在服务端消失的 sessionId 继续发送。
  */
 async function deleteConversation(conversation: ConversationSummary): Promise<void> {
   if (isSending.value)
@@ -802,7 +804,7 @@ async function deleteConversation(conversation: ConversationSummary): Promise<vo
     messageCache.delete(conversation.id)
     pendingDeleteId.value = ''
 
-    if (conversationId.value === conversation.id)
+    if (sessionId.value === conversation.id)
       startNewConversation()
   }
   catch (error) {
@@ -834,7 +836,7 @@ async function loadConversations(selectInitial = false) {
 
     conversations.value = result.data.filter(isConversationSummary)
 
-    if (selectInitial && !conversationId.value && displayedConversations.value[0])
+    if (selectInitial && !sessionId.value && displayedConversations.value[0])
       await selectConversation(displayedConversations.value[0])
   }
   catch (error) {
@@ -1108,7 +1110,7 @@ async function readEventStream(
 
 /**
  * 发送消息并把不同频道的增量追加到同一条助手消息；重试时可选择不重复插入用户消息。
- * 新会话请求刻意省略 conversationId，收到 session.started 后再保存 Agent 生成的 ID。
+ * 新会话请求刻意省略 sessionId，收到 session.started 后再保存 Agent 生成的 ID。
  */
 async function send(prompt = input.value, appendUserMessage = true) {
   const message = prompt.trim()
@@ -1161,7 +1163,7 @@ async function send(prompt = input.value, appendUserMessage = true) {
     // 必须整个省略字段（服务端 schema 是 minLength: 1 + additionalProperties: false）。
     const requestBody: {
       message: string
-      conversationId?: string
+      sessionId?: string
       stream: boolean
       reasoningEffort?: string
       model?: string
@@ -1169,8 +1171,8 @@ async function send(prompt = input.value, appendUserMessage = true) {
       message,
       stream: true,
     }
-    if (conversationId.value)
-      requestBody.conversationId = conversationId.value
+    if (sessionId.value)
+      requestBody.sessionId = sessionId.value
     if (requestReasoningEffort)
       requestBody.reasoningEffort = requestReasoningEffort
     if (requestModel)
@@ -1187,7 +1189,7 @@ async function send(prompt = input.value, appendUserMessage = true) {
 
     await readEventStream(response, (event) => {
       if (event.type === 'session.started') {
-        conversationId.value = event.sessionId
+        sessionId.value = event.sessionId
         return
       }
 
@@ -1257,7 +1259,7 @@ async function send(prompt = input.value, appendUserMessage = true) {
         return
       }
 
-      conversationId.value = event.sessionId
+      sessionId.value = event.sessionId
       receivedDone = true
       if (assistantMessageId === undefined && (event.content || event.reasoning)) {
         const assistantMessage = ensureAssistantMessage()
@@ -1340,9 +1342,7 @@ onBeforeUnmount(() => {
       >
         <div class="sidebar-header">
           <div class="flex gap-3 min-w-0 items-center">
-            <div class="brand-mark" aria-hidden="true">
-              <div i-carbon-bot />
-            </div>
+            <img class="brand-mark" :src="brandLogoPath" alt="Hand-crafted Agent">
             <div class="min-w-0">
               <div class="text-3.75 text-slate-900 font-700 truncate dark:text-white">
                 Hand-crafted
@@ -1427,12 +1427,12 @@ onBeforeUnmount(() => {
             :key="conversation.id"
             class="conversation-item"
             :class="{
-              'active': conversation.id === conversationId,
+              'active': conversation.id === sessionId,
               'editing': renamingId === conversation.id,
               'confirming': pendingDeleteId === conversation.id,
               'menu-open': openMenuId === conversation.id,
             }"
-            :aria-current="conversation.id === conversationId ? 'page' : undefined"
+            :aria-current="conversation.id === sessionId ? 'page' : undefined"
             @keydown.esc.stop.prevent="closeConversationMenu"
           >
             <!-- 就地重命名：不再嵌套按钮，避免出现非法的按钮嵌套结构。 -->
@@ -1593,7 +1593,7 @@ onBeforeUnmount(() => {
             </h1>
             <!-- <div class="text-3 text-slate-500 mt-1 flex gap-1.5 items-center dark:text-slate-400">
               <span class="status-dot" />
-              <span>{{ conversationId ? '对话上下文已连接' : '发送第一条消息以创建对话' }}</span>
+              <span>{{ sessionId ? '对话上下文已连接' : '发送第一条消息以创建对话' }}</span>
             </div> -->
           </div>
           <div v-if="messages.length" class="message-count">
@@ -1609,15 +1609,15 @@ onBeforeUnmount(() => {
           -->
           <KeepAlive :max="8">
             <ConversationView
-              v-if="conversationId || messages.length > 0"
-              :key="conversationId || 'draft'"
+              v-if="sessionId || messages.length > 0"
+              :key="sessionId || 'draft'"
               :messages="messages"
               :is-sending="isSending"
               :is-awaiting-first-token="isAwaitingFirstToken"
             />
           </KeepAlive>
 
-          <div v-if="!conversationId && messages.length === 0" class="message-empty">
+          <div v-if="!sessionId && messages.length === 0" class="message-empty">
             <div class="empty-state">
               <div class="empty-icon" aria-hidden="true">
                 <div i-carbon-chat-bot text-8 />
@@ -1626,7 +1626,7 @@ onBeforeUnmount(() => {
                 开始一段新对话
               </h2>
               <p class="text-3.5 text-slate-500 leading-6 mb-0 mt-2 max-w-110 dark:text-slate-400">
-                第一条消息不会携带 conversationId，服务端返回后会自动关联后续上下文。
+                第一条消息不会携带 sessionId，服务端返回后会自动关联后续上下文。
               </p>
             </div>
           </div>
@@ -1854,7 +1854,6 @@ onBeforeUnmount(() => {
   padding: 0 4px 18px;
 }
 
-.brand-mark,
 .empty-icon {
   display: grid;
   place-items: center;
@@ -1867,8 +1866,8 @@ onBeforeUnmount(() => {
   width: 40px;
   height: 40px;
   flex: 0 0 auto;
-  border-radius: 13px;
-  font-size: 20px;
+  border-radius: 8px;
+  object-fit: contain;
 }
 
 .new-chat-button {

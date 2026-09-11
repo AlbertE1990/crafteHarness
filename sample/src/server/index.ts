@@ -55,6 +55,7 @@ function createAgentForModel(model: string): Agent {
       },
     },
     tools: {
+      workspaceRoot: process.cwd(),
       additional: serverTools,
       guard: serverToolGuard,
       approvalTimeoutMs: 120_000,

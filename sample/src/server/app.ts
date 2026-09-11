@@ -10,12 +10,50 @@ import type {
   SessionSummary,
 } from '../../../src'
 import Fastify from 'fastify'
+import { z } from 'zod'
 
 /** 当前参考 Runtime 是单用户部署，仍显式组装固定 Session 作用域。 */
 const SINGLE_USER_SCOPE_ID = 'default'
 
 /** 会话名称长度上限；只在 HTTP 边界约束，存储层只要求非空。 */
 const MAX_CONVERSATION_NAME_LENGTH = 80
+
+const approvalBodySchema = z.strictObject({
+  decision: z.enum(['allow', 'deny']),
+})
+
+const modelResponseSchema = z.strictObject({
+  data: z.strictObject({
+    provider: z.string(),
+    defaultModel: z.string(),
+    models: z.array(z.strictObject({
+      id: z.string(),
+      label: z.string(),
+      reasoningEfforts: z.array(z.string()),
+      defaultReasoningEffort: z.string().nullable(),
+    })),
+  }),
+})
+
+const conversationListResponseSchema = z.strictObject({
+  data: z.array(z.strictObject({
+    id: z.string(),
+    name: z.string(),
+    createAt: z.string(),
+  })),
+})
+
+const conversationNameBodySchema = z.strictObject({
+  name: z.string().min(1).max(MAX_CONVERSATION_NAME_LENGTH).regex(/\S/),
+})
+
+const chatBodySchema = z.strictObject({
+  sessionId: z.string().optional(),
+  message: z.string().min(1).regex(/\S/),
+  stream: z.boolean().optional(),
+  reasoningEffort: z.string().min(1).regex(/\S/).optional(),
+  model: z.string().min(1).regex(/\S/).optional(),
+})
 
 /** 前端会话列表需要的展示消息；工具和系统消息不会进入该投影。 */
 export interface DisplayMessage {
@@ -123,19 +161,18 @@ export interface CreateServerAppOptions {
  * 进程启动与路由构建分离后，生产入口可以监听真实端口，测试则可使用 Fastify.inject 验证完整 HTTP/SSE 协议。
  */
 export function createServerApp(options: CreateServerAppOptions): FastifyInstance {
-  const fastify = Fastify({ logger: options.logger ?? true })
+  const fastify = Fastify({
+    logger: options.logger ?? true,
+    // Zod strictObject 投影出的 additionalProperties:false 必须拒绝未知字段，不能被 Ajv 静默移除。
+    ajv: { customOptions: { removeAdditional: false } },
+  })
 
   fastify.post<{
     Params: { approvalId: string }
-    Body: { decision: 'allow' | 'deny' }
+    Body: z.output<typeof approvalBodySchema>
   }>('/api/tool-approvals/:approvalId', {
     schema: {
-      body: {
-        type: 'object',
-        properties: { decision: { type: 'string', enum: ['allow', 'deny'] } },
-        required: ['decision'],
-        additionalProperties: false,
-      },
+      body: toFastifySchema(approvalBodySchema, 'input'),
     },
   }, async (request, reply) => {
     // Server 只转换 HTTP 数据；一次性校验和 pending Promise 都由 Agent 内部管理。
@@ -158,36 +195,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
   fastify.get('/api/model', {
     schema: {
       response: {
-        200: {
-          type: 'object',
-          properties: {
-            data: {
-              type: 'object',
-              properties: {
-                provider: { type: 'string' },
-                defaultModel: { type: 'string' },
-                models: {
-                  type: 'array',
-                  items: {
-                    type: 'object',
-                    properties: {
-                      id: { type: 'string' },
-                      label: { type: 'string' },
-                      reasoningEfforts: { type: 'array', items: { type: 'string' } },
-                      defaultReasoningEffort: { type: ['string', 'null'] },
-                    },
-                    required: ['id', 'label', 'reasoningEfforts', 'defaultReasoningEffort'],
-                    additionalProperties: false,
-                  },
-                },
-              },
-              required: ['provider', 'defaultModel', 'models'],
-              additionalProperties: false,
-            },
-          },
-          required: ['data'],
-          additionalProperties: false,
-        },
+        200: toFastifySchema(modelResponseSchema, 'output'),
       },
     },
   }, async () => ({ data: options.model }))
@@ -195,12 +203,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
   fastify.get('/api/conversation/list', {
     schema: {
       response: {
-        200: {
-          type: 'object',
-          properties: { data: { type: 'array' } },
-          required: ['data'],
-          additionalProperties: false,
-        },
+        200: toFastifySchema(conversationListResponseSchema, 'output'),
       },
     },
   }, async () => {
@@ -228,17 +231,10 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
 
   fastify.patch<{
     Params: { sessionId: string }
-    Body: { name: string }
+    Body: z.output<typeof conversationNameBodySchema>
   }>('/api/conversation/:sessionId', {
     schema: {
-      body: {
-        type: 'object',
-        properties: {
-          name: { type: 'string', minLength: 1, maxLength: MAX_CONVERSATION_NAME_LENGTH, pattern: '\\S' },
-        },
-        required: ['name'],
-        additionalProperties: false,
-      },
+      body: toFastifySchema(conversationNameBodySchema, 'input'),
     },
   }, async (request, reply) => {
     if (!options.conversations) {
@@ -287,31 +283,10 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
   })
 
   fastify.post<{
-    Body: {
-      conversationId?: string
-      message: string
-      stream?: boolean
-      /** 单次请求的推理等级；`'off'` 表示关闭推理，省略时使用部署默认值。 */
-      reasoningEffort?: string
-      /** 本次请求使用的模型；省略时用部署默认模型。 */
-      model?: string
-    }
+    Body: z.output<typeof chatBodySchema>
   }>('/api/chat', {
     schema: {
-      body: {
-        type: 'object',
-        properties: {
-          conversationId: { type: 'string' },
-          // 纯空白与 Agent 的 trim 校验等价：在 HTTP 边界就判为客户端错误，而不是让它
-          // 落到 Agent 里抛 TypeError 再被当成服务端 500。
-          message: { type: 'string', minLength: 1, pattern: '\\S' },
-          stream: { type: 'boolean' },
-          reasoningEffort: { type: 'string', minLength: 1, pattern: '\\S' },
-          model: { type: 'string', minLength: 1, pattern: '\\S' },
-        },
-        required: ['message'],
-        additionalProperties: false,
-      },
+      body: toFastifySchema(chatBodySchema, 'input'),
     },
   }, async (request, reply) => {
     const abortController = new AbortController()
@@ -363,10 +338,10 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     const agentRequest = {
       scopeId: SINGLE_USER_SCOPE_ID,
       input: request.body.message,
-      ...(request.body.conversationId
-        ? { sessionId: request.body.conversationId }
+      ...(request.body.sessionId
+        ? { sessionId: request.body.sessionId }
         : {}),
-      ...(!request.body.conversationId
+      ...(!request.body.sessionId
         ? {
             sessionMetadata: {
               source: 'server-runtime',
@@ -421,6 +396,14 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
   })
 
   return fastify
+}
+
+/** 让 Zod 同时成为 HTTP 类型与 Fastify Draft 7 Schema 的唯一来源。 */
+function toFastifySchema(schema: z.ZodType, io: 'input' | 'output'): Record<string, unknown> {
+  return z.toJSONSchema(schema, {
+    target: 'draft-7',
+    io,
+  }) as Record<string, unknown>
 }
 
 /** 把最小 Session 摘要投影为会话目录项。 */

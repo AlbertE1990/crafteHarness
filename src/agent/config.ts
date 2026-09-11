@@ -67,6 +67,8 @@ export interface AgentToolsCommonConfig<TContext = undefined> {
 export interface ExtendAgentToolsConfig<TContext = undefined>
   extends AgentToolsCommonConfig<TContext> {
   readonly mode?: 'extend'
+  /** 文件、搜索和终端内置工具的工作区边界，默认创建 Agent 时的 process.cwd()。 */
+  readonly workspaceRoot?: string
   readonly disabledBuiltins?: readonly BuiltinToolName[]
   readonly overrides?: Readonly<Partial<Record<BuiltinToolName, AgentToolInput<TContext>>>>
   readonly additional?: readonly AgentToolInput<TContext>[]
@@ -276,12 +278,12 @@ function createTools<TContext = undefined>(
     throw new TypeError('Agent config.tools 必须是工具配置对象')
 
   if (input.mode === 'replace') {
+    rejectReplaceOnlyFields(input)
     assertKnownConfigFields(
       input,
       ['mode', 'tools', 'guard', 'approvalTimeoutMs'],
       'Agent config.tools',
     )
-    rejectReplaceOnlyFields(input)
     if (!Array.isArray(input.tools))
       throw new TypeError('Agent config.tools.tools 必须是数组')
     return freezeUniqueTools(normalizeAgentToolDefinitions<TContext>(input.tools))
@@ -294,6 +296,7 @@ function createTools<TContext = undefined>(
     extend,
     [
       'mode',
+      'workspaceRoot',
       'disabledBuiltins',
       'overrides',
       'additional',
@@ -309,6 +312,10 @@ function createTools<TContext = undefined>(
   }
   if (extend.additional !== undefined && !Array.isArray(extend.additional))
     throw new TypeError('Agent config.tools.additional 必须是数组')
+  if (extend.workspaceRoot !== undefined
+    && (typeof extend.workspaceRoot !== 'string' || !extend.workspaceRoot.trim())) {
+    throw new TypeError('Agent config.tools.workspaceRoot 必须是非空字符串')
+  }
   if (extend.overrides !== undefined
     && (typeof extend.overrides !== 'object'
       || extend.overrides === null
@@ -356,7 +363,9 @@ function createTools<TContext = undefined>(
       throw new TypeError(`内置工具 ${name} 的 Guard 覆盖必须是函数或 null`)
   }
 
-  const builtins = createBuiltinTools<TContext>()
+  const builtins = createBuiltinTools<TContext>({
+    ...(extend.workspaceRoot ? { workspaceRoot: extend.workspaceRoot } : {}),
+  })
   const resolved = builtins.flatMap((tool) => {
     if (disabled.has(tool.name))
       return []
@@ -392,12 +401,14 @@ function rejectReplaceOnlyFields<TContext>(input: ReplaceAgentToolsConfig<TConte
     readonly overrides?: unknown
     readonly additional?: unknown
     readonly guardOverrides?: unknown
+    readonly workspaceRoot?: unknown
   }
   if (value.disabledBuiltins !== undefined
     || value.overrides !== undefined
     || value.additional !== undefined
-    || value.guardOverrides !== undefined) {
-    throw new TypeError('Agent config.tools 的 replace 模式不能配置禁用、覆盖或追加字段')
+    || value.guardOverrides !== undefined
+    || value.workspaceRoot !== undefined) {
+    throw new TypeError('Agent config.tools 的 replace 模式不能配置 workspaceRoot、禁用、覆盖或追加字段')
   }
 }
 

@@ -271,8 +271,29 @@ describe('agent config', () => {
     expect(config.tools.registered.map(tool => tool.name)).toEqual([
       'get_current_time',
       'calculator',
+      'read',
+      'write',
+      'edit',
+      'glob',
+      'grep',
+      'terminal',
     ])
     expect(Object.isFrozen(config.tools.registered)).toBe(true)
+  })
+
+  it('configures the workspace boundary only in extend mode', () => {
+    const model = new ScriptedModelAdapter({ script: [] })
+    const config = defineAgentConfig({ model, tools: { workspaceRoot: process.cwd() } })
+    expect(config.tools.registered.some(tool => tool.name === 'read')).toBe(true)
+
+    expect(() => defineAgentConfig({
+      model,
+      tools: {
+        mode: 'replace',
+        tools: [],
+        workspaceRoot: process.cwd(),
+      } as unknown as Parameters<typeof defineAgentConfig>[0]['tools'],
+    })).toThrow('replace 模式')
   })
 
   it('can disable a built-in tool and append application tools', () => {
@@ -287,6 +308,12 @@ describe('agent config', () => {
 
     expect(config.tools.registered.map(tool => tool.name)).toEqual([
       'get_current_time',
+      'read',
+      'write',
+      'edit',
+      'glob',
+      'grep',
+      'terminal',
       'get_weather',
     ])
     expect(config.tools.registered.at(-1)).not.toBe(weather)
@@ -304,6 +331,12 @@ describe('agent config', () => {
     expect(config.tools.registered.map(tool => tool.name)).toEqual([
       'get_current_time',
       'calculator',
+      'read',
+      'write',
+      'edit',
+      'glob',
+      'grep',
+      'terminal',
     ])
     expect(config.tools.registered[1]).not.toBe(calculator)
     expect(config.tools.registered[1]?.model).toBe(calculator.model)

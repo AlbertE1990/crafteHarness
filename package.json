@@ -67,6 +67,9 @@
     "openai": "^7.0.0",
     "zod": "^4.0.0"
   },
+  "dependencies": {
+    "@vscode/ripgrep": "catalog:"
+  },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:dev",
     "@iconify-json/carbon": "catalog:build",

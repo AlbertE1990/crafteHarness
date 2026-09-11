@@ -136,7 +136,7 @@ function createFetchMock(routes: FetchRoutes = {}): FetchMock {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     const method = init?.method ?? 'GET'
-    const conversationId = url.startsWith('/api/conversation/')
+    const sessionId = url.startsWith('/api/conversation/')
       ? decodeURIComponent(url.slice('/api/conversation/'.length))
       : ''
 
@@ -150,28 +150,28 @@ function createFetchMock(routes: FetchRoutes = {}): FetchMock {
       return jsonResponse({ data: routes.conversations ?? [] })
 
     if (method === 'GET' && url.startsWith('/api/conversation/')) {
-      const detail = routes.conversationDetails?.[conversationId]
+      const detail = routes.conversationDetails?.[sessionId]
       if (!detail)
-        throw new Error(`测试未提供会话详情：${conversationId}`)
+        throw new Error(`测试未提供会话详情：${sessionId}`)
       return jsonResponse({ data: detail })
     }
 
     // 重命名：默认回显请求体里的 name，模拟服务端 PATCH 后的摘要。
     if (method === 'PATCH' && url.startsWith('/api/conversation/')) {
-      const override = routes.conversationPatches?.[conversationId]
+      const override = routes.conversationPatches?.[sessionId]
       if (override)
         return override
       const body = JSON.parse(String(init?.body ?? '{}')) as { name?: string }
       return jsonResponse({
-        data: { id: conversationId, name: body.name, createAt: String(Date.now()) },
+        data: { id: sessionId, name: body.name, createAt: String(Date.now()) },
       })
     }
 
     if (method === 'DELETE' && url.startsWith('/api/conversation/')) {
-      const override = routes.conversationDeletions?.[conversationId]
+      const override = routes.conversationDeletions?.[sessionId]
       if (override)
         return override
-      return jsonResponse({ data: { id: conversationId, deleted: true } })
+      return jsonResponse({ data: { id: sessionId, deleted: true } })
     }
 
     if (method === 'POST' && url === '/api/chat') {
@@ -217,8 +217,8 @@ function chatRequestBody(fetchMock: FetchMock, index: number): Record<string, un
 }
 
 /** 统计某个会话详情的 GET 次数，用来验证缓存命中时不再请求网络。 */
-function conversationDetailCalls(fetchMock: FetchMock, conversationId: string): number {
-  return callsFor(fetchMock, `/api/conversation/${conversationId}`).length
+function conversationDetailCalls(fetchMock: FetchMock, sessionId: string): number {
+  return callsFor(fetchMock, `/api/conversation/${sessionId}`).length
 }
 
 /** 按会话名称定位列表项，不依赖列表渲染顺序。 */
@@ -349,7 +349,7 @@ describe('chat page conversations', () => {
     vi.unstubAllGlobals()
   })
 
-  it('restores history and only sends conversationId for an existing conversation', async () => {
+  it('restores history and only sends sessionId for an existing conversation', async () => {
     const existingConversation = {
       id: 'chat-existing',
       name: '已有会话',
@@ -412,7 +412,7 @@ describe('chat page conversations', () => {
 
     expect(chatRequestBody(fetchMock, 0)).toEqual({
       message: '继续提问',
-      conversationId: 'chat-existing',
+      sessionId: 'chat-existing',
       stream: true,
       reasoningEffort: 'high',
       // 模型控件渲染自 GET /api/model 的 models，默认选中部署默认模型并随请求发送。
@@ -429,7 +429,7 @@ describe('chat page conversations', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    // 新会话刻意省略 conversationId，但不能省略用户选定的推理等级与模型。
+    // 新会话刻意省略 sessionId，但不能省略用户选定的推理等级与模型。
     expect(chatRequestBody(fetchMock, 1)).toEqual({
       message: '创建新对话',
       stream: true,

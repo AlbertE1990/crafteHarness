@@ -22,5 +22,6 @@
 - [Delivery 017：阶段 4.11 意图优先的 Agent 调用 API](./delivery-017-intent-first-agent-api.md)
 - [Delivery 018：阶段 4.12 配置减负与统一 Guard 协议](./delivery-018-agent-config-and-guard-context.md)
 - [Delivery 019：阶段 4.13 可搜索、多用户 Session Catalog](./delivery-019-searchable-multi-user-session-catalog.md)
+- [Delivery 020：阶段 4.16 工作区工具与示例契约收口](./delivery-020-workspace-tools-and-sample-contract.md)
 
 交付记录不是当前协议的权威来源。后续阶段改变行为时更新规范并新增交付记录，不覆盖旧记录中的历史状态。

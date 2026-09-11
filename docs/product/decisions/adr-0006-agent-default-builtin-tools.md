@@ -1,7 +1,7 @@
 # ADR-0006：Agent 默认装载安全内置工具
 
 - 文档类型：架构决策
-- 状态：Accepted
+- 状态：Superseded（由 [ADR-0013](./adr-0013-default-workspace-tools.md) 扩展并取代）
 - 日期：2026-09-08
 
 ## 背景

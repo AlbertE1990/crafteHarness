@@ -61,7 +61,8 @@ const app = createServerApp({ agent })
 - 环境变量只在 Runtime 启动边界读取，craft-harness 不读取 `process.env`。
 - 一个进程复用一个 Agent；当前 Server 显式注入 PostgreSQL Store，进程重启后由数据库恢复 Session。
 - 连接池由 Runtime 创建和关闭，不能进入 craft-harness Core，也不能由 Store 模块在 import 时隐式创建。
-- `get_current_time` 和 `calculator` 由 Agent 自动装载，不进入 Server 工具注册表。
+- 时间、计算、文件、搜索和终端通用工具由 Agent 自动装载，不进入 Server 工具注册表；Server 显式设置
+  `tools.workspaceRoot`，不需要终端的部署通过 `disabledBuiltins` 关闭。
 - 应用工具使用 `defineTool()`，可直接组成普通只读数组并通过 `tools.additional` 追加；Agent 负责归一化。
 - Runtime 只实现 `tools.guard(request)` 的业务风险规则；pending 审批、超时和重复提交由 Agent 管理。
 - 当前风险规则只适用于代码仓库内受信第一方工具，不代表第三方插件安全边界。
@@ -94,7 +95,7 @@ Runtime 环境变量集中在 `sample/.env.local`（模板见 `sample/.env.examp
 
 ## 4. 请求与取消
 
-Fastify 将 `message` 映射为 Agent 请求的 `input`，将 `conversationId` 映射为 `sessionId`。浏览器断开时，
+Fastify 将 `message` 映射为 Agent 请求的 `input`，并把前端 `sessionId` 原样传给 Agent。浏览器断开时，
 使用同一个 AbortSignal 取消 Agent Run；模型 Adapter 和 Tool Harness 会继续传播该信号。
 
 当前参考服务是单用户 Runtime，因此所有聊天、详情和目录请求都显式注入 `scopeId: 'default'`。新会话把第一条
@@ -103,7 +104,7 @@ Fastify 将 `message` 映射为 Agent 请求的 `input`，将 `conversationId` �
 
 请求顶层的 `stream` 决定传输：`true`（默认）返回 `text/event-stream` 并调用 `agent.stream()`；`false`
 返回普通 `application/json` 并调用 `agent.invoke()`，其 `data` 是封闭的 `AgentRunResult`。请求体是
-`{ message, conversationId?, stream, reasoningEffort? }`：`reasoningEffort` 是顶层单个字符串，`'off'`
+`{ message, sessionId?, stream, reasoningEffort? }`：`reasoningEffort` 是顶层单个字符串，`'off'`
 表示显式关闭推理，其他非空字符串作为供应商等级原样交给模型 Adapter，省略时不覆盖部署默认值。原来的
 `model: { reasoningEnabled, reasoningEffort }` 对象已删除。传输方式由方法直接表达，不再维护第二个模型开关。
 
@@ -123,7 +124,7 @@ Server 写入函数在 Node 响应返回 `false` 时等待 `drain`，因此网�
 fail-closed 为本次工具失败并交回 AgentLoop；需要审批卡片时必须使用流式模式。若未来需要非流式审批，
 应新增异步任务和 pending 查询/恢复协议。
 
-不得默认把 `sessionId` 改名为 `conversationId`，也不得删除审批事件中的 `runId/sessionId`。如果 Runtime
+不得默认把 `sessionId` 改名为 `sessionId`，也不得删除审批事件中的 `runId/sessionId`。如果 Runtime
 必须兼容已有外部 API，可以在 Server 自己增加显式 Adapter。Server 自身在 Agent 外发生的传输错误使用
 `server.error`，不能伪装成缺少标准字段的 Agent `error`。
 
@@ -142,6 +143,7 @@ fail-closed 为本次工具失败并交回 AgentLoop；需要审批卡片时必�
 ## 6. 模型目录端点
 
 `GET /api/model` 返回当前部署的**模型目录**：有哪些模型、每个模型各自能用哪些推理等级。
+请求体和该响应均以 Zod 为类型单一来源，再通过 `z.toJSONSchema()` 投影成 Fastify 使用的 Draft 7 Schema。
 
 ```json
 {

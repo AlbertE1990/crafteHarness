@@ -11,6 +11,7 @@
 
 - [总体架构](./standards/architecture.md)
 - [工具协议](./standards/protocols/tool.md)
+- [内置工作区工具规范](./standards/protocols/builtin-workspace-tools.md)
 - [模型 Adapter 协议](./standards/protocols/model-adapter.md)
 - [Session Log 协议](./standards/protocols/session-log.md)
 - [Agent Loop 协议](./standards/protocols/agent-loop.md)
@@ -31,6 +32,7 @@
 - [Agent Loop：从用户输入到确定终态](./learning/agent-loop.md)
 - [harness 统一入口：从配置到会话查询](./learning/harness-facade.md)
 - [工具审批全链路：从风险评估到继续 AgentLoop](./learning/tool-approval-flow.md)
+- [内置工作区工具：开箱使用与安全定制](./learning/workspace-builtins.md)
 
 ### 查看方向、决策和进度
 
@@ -44,13 +46,15 @@
 
 当前已完成 Tool Harness、ModelAdapter、官方 Adapter、Session Log、Agent Loop 和统一 Agent 门面：
 
-- 仓库根就是发布的 npm 包 `craft-harness`：ESM-only，`exports` 暴露 `.` 与 `./adapters`，零运行期依赖。
+- 仓库根就是发布的 npm 包 `craft-harness`：ESM-only，`exports` 暴露 `.` 与 `./adapters`；运行期依赖只包含
+  为跨平台搜索提供二进制的 `@vscode/ripgrep`。
 - 官方案例应用位于 `sample/`，通过相对路径导入库源码，不参与打包与发布。
 - 工具具有 Zod 输入输出边界、两层 Guard、审批、超时、显式重试和执行事件。
 - 模型具有供应商无关消息、OpenAI 兼容标准 chunk、非流式结果、用量和错误协议。
 - OpenAI SDK 仅存在于官方 Adapter；Core 不依赖 SDK，DeepSeek 只维护供应商差异。
 - `new Agent(config)` 可直接组装内置模型、自定义 Adapter、Store、预算和事件观察器，并自动装载内置工具。
 - 工具配置支持禁用或覆盖指定内置工具、整体替换内置集合，以及只追加应用工具。
+- 默认工作区工具提供文件读取/写入/编辑、glob/grep 和一次性终端；写与执行默认要求审批。
 - `defineAgentConfig()` 可显式提前校验配置；`defineTool()` 结果可直接传入 Agent，由内部统一归一化。
 - Scripted Adapter 与契约探针位于仓库 `test/support`，为本项目提供无网络验证，不扩大生产 API。
 - Session 使用 append-only 事件、乐观并发和一致性分页，并可确定性推导模型历史。

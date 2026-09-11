@@ -34,13 +34,19 @@ export type {
   ToolGuardRequest,
   ToolGuardToolInfo,
 } from './agent'
-export { builtinToolNames, createCalculatorTool, createCurrentTimeTool } from './builtins'
+export {
+  builtinToolNames,
+  createCalculatorTool,
+  createCurrentTimeTool,
+  createWorkspaceTools,
+} from './builtins'
 /** 内置工具的配置和稳定名称类型。 */
 export type {
   BuiltinToolName,
   CalculatorOperation,
   Clock,
   CurrentTimeToolOptions,
+  WorkspaceToolsOptions,
 } from './builtins'
 export { ModelError } from './contracts'
 /** 供应商无关的模型、消息和 Session 持久化协议。 */

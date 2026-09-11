@@ -14,6 +14,7 @@
 7. [Agent Loop：从用户输入到确定终态](./agent-loop.md)
 8. [harness 统一入口：从配置到会话查询](./harness-facade.md)
 9. [工具审批全链路：局部 Guard、全局 Guard 与用户确认](./tool-approval-flow.md)
+10. [内置工作区工具：开箱使用与安全定制](./workspace-builtins.md)
 
 每篇学习文档都应给出前置知识、学习目标、源码入口、调试方法和练习，并通过链接引用规范，避免复制
 一份可能漂移的协议定义。

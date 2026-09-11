@@ -299,7 +299,7 @@ onBeforeUnmount(() => {
           开始一段新对话
         </h2>
         <p class="text-3.5 text-slate-500 leading-6 mb-0 mt-2 max-w-110 dark:text-slate-400">
-          第一条消息不会携带 conversationId，服务端返回后会自动关联后续上下文。
+          第一条消息不会携带 sessionId，服务端返回后会自动关联后续上下文。
         </p>
       </div>
 
@@ -377,7 +377,7 @@ onBeforeUnmount(() => {
 
     <!--
       对话导航：在滚动容器之外，否则它会跟着内容滚走。
-      小条只占左侧一条窄带，标题在悬浮/聚焦时才渲染成右侧的小卡片。
+      横条只占左侧一条窄带，标题在悬浮/聚焦时才渲染成右侧的小卡片。
     -->
     <nav v-if="turns.length > 1" class="turn-nav" aria-label="对话导航">
       <button
@@ -426,7 +426,7 @@ onBeforeUnmount(() => {
   scrollbar-width: thin;
 }
 
-/* 对话导航：垂直中点的一列小条，只占左侧一条窄带。 */
+/* 对话导航：垂直中点的一列横条，只占左侧一条窄带。 */
 .turn-nav {
   z-index: 5;
   position: absolute;
@@ -444,8 +444,8 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 32px;
+  height: 14px;
   border: 0;
   padding: 0;
   background: transparent;
@@ -453,8 +453,8 @@ onBeforeUnmount(() => {
 }
 
 .turn-nav-bar {
-  width: 4px;
-  height: 14px;
+  width: 20px;
+  height: 3px;
   border-radius: 999px;
   background: #cbd5e1;
   transition:
@@ -463,17 +463,17 @@ onBeforeUnmount(() => {
     background 140ms ease;
 }
 
-/* 悬浮 / 键盘聚焦 / 当前轮次：小条变长变深。 */
+/* 悬浮 / 键盘聚焦 / 当前轮次：横条变长变深。 */
 .turn-nav-item:hover .turn-nav-bar,
 .turn-nav-item:focus-visible .turn-nav-bar {
-  width: 6px;
-  height: 22px;
+  width: 28px;
+  height: 4px;
   background: #94a3b8;
 }
 
 .turn-nav-item.active .turn-nav-bar {
-  width: 6px;
-  height: 22px;
+  width: 28px;
+  height: 4px;
   background: #2563eb;
 }
 

@@ -36,7 +36,8 @@ flowchart LR
   P412 --> P413[阶段 4.13<br/>多用户 Session Catalog<br/>已完成]
   P413 --> P414[阶段 4.14<br/>推理强度单轴化与配置外置<br/>已完成]
   P414 --> P415[阶段 4.15<br/>拆分为可发布 npm 包<br/>已完成]
-  P415 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
+  P415 --> P416[阶段 4.16<br/>工作区工具与案例契约<br/>已完成]
+  P416 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -340,7 +341,7 @@ flowchart LR
 - Runtime 配置外置：新增必填 `DEEPSEEK_MODEL`，删除判断有缺陷的 `DEEPSEEK_THINKING`，
   `DEEPSEEK_REASONING_EFFORT` 成为唯一开关，`DEEPSEEK_REASONING_EFFORTS` 提供下拉候选并只用于启动期
   自查，不校验单次请求。
-- 新增 `GET /api/model`，聊天请求体收敛为 `{ message, conversationId?, stream, reasoningEffort? }`；前端
+- 新增 `GET /api/model`，聊天请求体收敛为 `{ message, sessionId?, stream, reasoningEffort? }`；前端
   下拉改由部署词表驱动，不再硬编码多家供应商等级词表。
 - 换模型或增删推理等级只需改 `sample/.env.local` 并重启，不需要改库，也不需要改前端代码。
 
@@ -386,7 +387,20 @@ flowchart LR
 [总体架构](../standards/architecture.md)，案例 Runtime 的组装边界见
 [Server Runtime 接入规范](../standards/integrations/server-runtime.md)。
 
-## 24. 阶段 5：轨迹持久化与查询（下一阶段）
+## 24. 阶段 4.16：工作区工具与案例契约收口（已完成）
+
+已完成范围：
+
+- 默认新增 `read/write/edit/glob/grep/terminal`，并复用禁用、同名覆盖、Guard 覆盖、追加与 replace。
+- 文件路径受 workspace 和符号链接边界约束；已有文件采用读后改版本检查与临时文件原子发布。
+- 搜索通过运行期依赖 `@vscode/ripgrep` 执行，不拼接 shell，并限制数量、时间与捕获字节。
+- 写、编辑和终端默认 ask；终端是跨平台一次性 shell，并明确不是 OS 沙箱。
+- 案例 HTTP Schema 由 Zod 投影，聊天请求字段统一为 sessionId；同步 Logo 和横向轮次导航。
+
+详细交付见[Delivery 020](./deliveries/delivery-020-workspace-tools-and-sample-contract.md)，设计依据见
+[ADR-0013](./decisions/adr-0013-default-workspace-tools.md)。
+
+## 25. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -396,7 +410,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 craft-harness 核心协议。
 
-## 25. 阶段 6：异常诊断
+## 26. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -409,7 +423,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 26. 阶段 7：长期安全与扩展（最低优先级）
+## 27. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

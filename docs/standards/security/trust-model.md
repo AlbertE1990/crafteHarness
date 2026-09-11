@@ -18,6 +18,11 @@
 
 以上任何一项都不能证明一段恶意工具代码安全。
 
+默认文件工具会检查 workspace 与可解析的符号链接，但这只是防误用边界。默认 terminal 只限制初始 workdir，
+命令仍继承宿主进程的文件、环境变量、网络和子进程权限；默认 ask 也不等于隔离。不需要时应禁用 terminal，
+需要强隔离时使用容器、低权限账户或专用执行服务。详见
+[内置工作区工具规范](../protocols/builtin-workspace-tools.md)。
+
 ## 2. 为什么 security 改为 metadata
 
 旧字段 `security.risk/capabilities/idempotent` 容易让人误认为 craft-harness 会验证或执行这些安全语义。实际上

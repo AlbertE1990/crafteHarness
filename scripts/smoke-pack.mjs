@@ -13,7 +13,7 @@
 import { execFileSync, execSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 
 const repoRoot = resolve(import.meta.dirname, '..')
@@ -30,6 +30,7 @@ const adapters = await import(${JSON.stringify(`${packageName}/adapters`)})
 assert.equal(typeof runtime.Agent, 'function', '根入口缺少 Agent')
 assert.equal(typeof runtime.defineAgentConfig, 'function', '根入口缺少 defineAgentConfig')
 assert.equal(typeof runtime.MemorySessionStore, 'function', '根入口缺少 MemorySessionStore')
+assert.equal(typeof runtime.createWorkspaceTools, 'function', '根入口缺少 createWorkspaceTools')
 assert.equal(typeof adapters.DeepSeekModelAdapter, 'function', 'adapters 子入口缺少 DeepSeekModelAdapter')
 assert.equal(typeof adapters.OpenAICompatibleModelAdapter, 'function', 'adapters 子入口缺少 OpenAICompatibleModelAdapter')
 
@@ -85,6 +86,7 @@ function linkPeerDependency(appDir, peer) {
   if (!existsSync(source))
     throw new Error(`peer 依赖 ${peer} 未安装，无法进行冒烟测试`)
   const destination = join(appDir, 'node_modules', peer)
+  mkdirSync(dirname(destination), { recursive: true })
   try {
     symlinkSync(source, destination, process.platform === 'win32' ? 'junction' : 'dir')
   }
@@ -116,6 +118,15 @@ function main() {
 
     for (const peer of Object.keys(manifest.peerDependencies ?? {}))
       linkPeerDependency(appDir, peer)
+    // 冒烟测试离线手工展开 tarball，因此也要模拟包管理器安装普通依赖。
+    for (const dependency of Object.keys(manifest.dependencies ?? {}))
+      linkPeerDependency(appDir, dependency)
+    if (manifest.dependencies?.['@vscode/ripgrep']) {
+      linkPeerDependency(
+        appDir,
+        `@vscode/ripgrep-${process.platform}-${process.arch}`,
+      )
+    }
 
     const probe = join(appDir, 'probe.mjs')
     writeFileSync(probe, PROBE_SOURCE, 'utf8')

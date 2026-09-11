@@ -66,7 +66,7 @@ const agent = new Agent({
 })
 ```
 
-不需要把 `get_current_time`、`calculator` 加入 `serverTools`，它们由 Agent 自动装载；也不需要修改独立
+不需要把时间、计算、文件、搜索和终端通用工具加入 `serverTools`，它们由 Agent 自动装载；也不需要修改独立
 JSON Schema、工具名映射或 `agent.ts` 的 switch/case。Agent 会把最终集合的 `tool.model` 交给
 ModelAdapter，并在收到同名 Tool Call 时通过 Tool Harness 执行。
 
