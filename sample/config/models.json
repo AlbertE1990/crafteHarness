@@ -6,6 +6,12 @@
       "label": "DeepSeek V4 Flash",
       "reasoningEfforts": ["off", "low", "high", "max"],
       "defaultReasoningEffort": "high"
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "label": "DeepSeek V4 Pro",
+      "reasoningEfforts": ["off", "low", "high", "max"],
+      "defaultReasoningEffort": "high"
     }
   ]
 }
