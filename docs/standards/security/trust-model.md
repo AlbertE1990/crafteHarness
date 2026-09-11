@@ -1,4 +1,4 @@
-# CraftAgent 安全与信任模型
+# craft-harness 安全与信任模型
 
 > 文档类型：边界规范；状态：Accepted；安全增强保持低优先级。
 
@@ -20,7 +20,7 @@
 
 ## 2. 为什么 security 改为 metadata
 
-旧字段 `security.risk/capabilities/idempotent` 容易让人误认为 CraftAgent 会验证或执行这些安全语义。实际上
+旧字段 `security.risk/capabilities/idempotent` 容易让人误认为 craft-harness 会验证或执行这些安全语义。实际上
 风险分类、能力名称和授权规则都由同一个应用开发者定义，框架无法知道它们是否真实。
 
 当前统一使用：
@@ -33,7 +33,7 @@ const metadata = {
 }
 ```
 
-CraftAgent 只验证它是 JSON 对象并把它交给 Guard。应用可以采用完全不同的字段。没有任何字段会自动授予
+craft-harness 只验证它是 JSON 对象并把它交给 Guard。应用可以采用完全不同的字段。没有任何字段会自动授予
 或拒绝权限。
 
 ## 3. 为什么删除 idempotent
@@ -41,7 +41,7 @@ CraftAgent 只验证它是 JSON 对象并把它交给 Guard。应用可以采用
 框架无法通过函数源码或一次运行证明真实幂等性。额外的 `idempotent: true` 只会和 `retry` 形成重复
 声明，并可能制造虚假的安全感。
 
-现在 `execution.retry` 本身表示：“工具作者明确允许 CraftAgent 对同一个 callId 重复调用 execute()。”
+现在 `execution.retry` 本身表示：“工具作者明确允许 craft-harness 对同一个 callId 重复调用 execute()。”
 工具作者仍必须在业务层建立真实保障：
 
 - 使用 `callId` 或业务键作为幂等键；
@@ -49,7 +49,7 @@ CraftAgent 只验证它是 JSON 对象并把它交给 Guard。应用可以采用
 - 使用上游服务提供的 idempotency key；
 - 对超时后结果未知的场景编写集成测试。
 
-CraftAgent 只检查重试参数，不判断开发者的业务承诺是否正确。
+craft-harness 只检查重试参数，不判断开发者的业务承诺是否正确。
 
 ## 4. 两层 Guard 的信任分工
 
@@ -71,7 +71,7 @@ CraftAgent 只检查重试参数，不判断开发者的业务承诺是否正确
 
 ## 5. 运行上下文的信任来源
 
-Agent 请求的 `context` 可以携带租户、用户、权限和环境，但 CraftAgent 不负责认证。Runtime 必须从已经
+Agent 请求的 `context` 可以携带租户、用户、权限和环境，但 craft-harness 不负责认证。Runtime 必须从已经
 验证的服务端状态构造 context，不能把浏览器提交的角色或权限原样转入。
 
 ```text

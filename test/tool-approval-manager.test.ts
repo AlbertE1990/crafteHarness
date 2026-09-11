@@ -1,6 +1,6 @@
-import type { ToolApprovalRequest } from '../src/craft-agent'
+import type { ToolApprovalRequest } from '../src'
 import { describe, expect, it, vi } from 'vitest'
-import { ToolApprovalManager } from '../src/craft-agent/agent/tool-approval-manager'
+import { ToolApprovalManager } from '../src/agent/tool-approval-manager'
 
 /** 构造一次由 Harness 发起、并可被测试主动取消的审批请求。 */
 function createApprovalRequest(signal: AbortSignal): ToolApprovalRequest {

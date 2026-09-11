@@ -1,12 +1,13 @@
-# CraftAgent 分阶段开发路线图
+# craft-harness 分阶段开发路线图
 
 > 文档类型：产品路线图；状态：Active。
 
 ## 1. 当前优先级原则
 
 - **先完成可运行的 Agent 主链，再扩展低收益的防御性体系。**
-- 每个阶段先在当前单一项目中测试验证，不提前拆分 npm packages。
-- CraftAgent 核心继续保持与模型 SDK、HTTP 框架、数据库驱动和前端解耦。
+- 每个阶段先在同一个仓库内测试验证；库与官方案例共享仓库，但发布单元只有一个：库发布 `src/**` 的产物，
+  案例位于 `sample/` 且不参与打包。
+- craft-harness 核心继续保持与模型 SDK、HTTP 框架、数据库驱动和前端解耦。
 - 当前使用者是能够修改并运行服务端代码的第一方开发者，暂不支持不可信第三方工具注入。
 - 工具默认不重试；配置重试即表示开发者允许重复调用，真实幂等性由业务实现保证。
 - 安全信任、插件沙箱和第三方代码治理放在核心功能完成后的长期强化阶段。
@@ -20,7 +21,7 @@ flowchart LR
   P2 --> P21[阶段 2.1<br/>官方 Adapter 工具包<br/>已完成]
   P21 --> P3[阶段 3<br/>Session Log<br/>已完成]
   P3 --> P4[阶段 4<br/>Agent Loop<br/>已完成]
-  P4 --> P41[阶段 4.1<br/>CraftAgent 门面<br/>已完成]
+  P4 --> P41[阶段 4.1<br/>craft-harness 门面<br/>已完成]
   P41 --> P42[阶段 4.2<br/>内置工具自动装载<br/>已完成]
   P42 --> P43[阶段 4.3<br/>SessionStore 持久化契约<br/>已完成]
   P43 --> P44[阶段 4.4<br/>Agent API 归一化与收口<br/>已完成]
@@ -34,7 +35,8 @@ flowchart LR
   P411 --> P412[阶段 4.12<br/>配置减负与统一 Guard<br/>已完成]
   P412 --> P413[阶段 4.13<br/>多用户 Session Catalog<br/>已完成]
   P413 --> P414[阶段 4.14<br/>推理强度单轴化与配置外置<br/>已完成]
-  P414 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
+  P414 --> P415[阶段 4.15<br/>拆分为可发布 npm 包<br/>已完成]
+  P415 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -54,12 +56,12 @@ flowchart LR
 
 ## 4. 阶段 1.1：接入现有 Server（已完成）
 
-目标是先在真实 DeepSeek 对话中使用和验证 CraftAgent 工具协议。
+目标是先在真实 DeepSeek 对话中使用和验证 craft-harness 工具协议。
 
 当前完成：
 
 - Server 的工具通过 `defineTool()` 定义并直接传给 Agent，模型参数仍只来自 `DefinedTool.model`。
-- 模型 Tool Call 由 CraftAgent AgentLoop 通过 `executeTool()` 执行。
+- 模型 Tool Call 由 craft-harness AgentLoop 通过 `executeTool()` 执行。
 - 时间、IP 定位和天气工具使用 `defineTool()` 统一 Schema 与实现。
 - 移除旧的手写 `tools.json` 和旧 Tool Harness，避免双协议漂移。
 - 支持通过静态注册表开发第一方自定义工具。
@@ -83,7 +85,7 @@ flowchart LR
 - 定义 `ModelAdapter` 接口、取消语义和错误分类。
 - 第一份实现采用 DeepSeek；OpenAI 兼容 SDK 只能存在于 adapter 内部。
 - adapter 将 `DefinedTool.model` 转换成供应商格式。
-- 使用契约测试保证供应商类型不泄漏到 CraftAgent 核心。
+- 使用契约测试保证供应商类型不泄漏到 craft-harness 核心。
 - 标准 chunk 最大程度复用 OpenAI Chat Completions，新增字段采用只增不减原则。
 - 增加统一模型配置，并在阶段 4.1 收敛为 `defineAgentConfig()`。
 
@@ -138,11 +140,11 @@ flowchart LR
 详细交付见[阶段 4 记录](./deliveries/delivery-006-agent-loop.md)，设计依据见
 [ADR-0005](./decisions/adr-0005-deterministic-agent-loop.md)。
 
-## 9. 阶段 4.1：CraftAgent 门面与 Server 迁移（已完成）
+## 9. 阶段 4.1：craft-harness 门面与 Server 迁移（已完成）
 
 已完成范围：
 
-- 产品名、源码目录、导入和文档统一迁移为 CraftAgent。
+- 产品名、源码目录、导入和文档统一迁移为 craft-harness。
 - 默认导出 `Agent`，并提供 `defineAgentConfig()`；原始 DefinedTool 由配置边界自动归一化。
 - 声明式创建内置 DeepSeek/OpenAI Compatible Adapter，或直接注入自定义 Adapter。
 - 自动 Session ID、精简输出事件、完整 `onTrace` 和 Session 查询。
@@ -239,7 +241,7 @@ flowchart LR
 - 默认提供 OpenAI Compatible 声明式模型配置，只有供应商协议差异才要求显式选择或实现 Adapter。
 - 输入配置和 `agent.config` 使用相同分组，不保留旧扁平配置兼容层。
 - 新增可公开命名的 `AgentToolInput`，内部工具归一化实现继续隐藏。
-- CraftAgent 根入口改为显式导出白名单，生产 Adapter 保留独立高级入口。
+- craft-harness 根入口改为显式导出白名单，生产 Adapter 保留独立高级入口。
 - Adapter、Session 契约探针和学习型可执行测试迁入 `test/`，删除生产源码中的 testing 子入口。
 - 开发规范新增配置分组、公共导出和测试代码放置原则。
 
@@ -309,7 +311,7 @@ flowchart LR
 - Memory/PostgreSQL Store 使用相同的大小写不敏感字面子串名称搜索语义。
 - 当前身份和权限仍由可信 Runtime 放入 context；scope 只负责持久化分区，不作为授权证明。
 - 新增 002 数据库迁移、迁移版本记录和旧 metadata 名称回填；真实开发库及 PostgreSQL 契约均已验证。
-- 应用自定义查询字段放在应用自己的投影表或 Repository，不继续扩大 CraftAgent 目录表。
+- 应用自定义查询字段放在应用自己的投影表或 Repository，不继续扩大 craft-harness 目录表。
 - 名称重命名留作后续独立协议，不在本阶段引入不完整的覆盖式更新。
 
 详细交付见[阶段 4.13 记录](./deliveries/delivery-019-searchable-multi-user-session-catalog.md)，设计依据见
@@ -340,12 +342,51 @@ flowchart LR
   自查，不校验单次请求。
 - 新增 `GET /api/model`，聊天请求体收敛为 `{ message, conversationId?, stream, reasoningEffort? }`；前端
   下拉改由部署词表驱动，不再硬编码多家供应商等级词表。
-- 换模型或增删推理等级只需改 `.env.local` 并重启，不需要改库，也不需要改前端代码。
+- 换模型或增删推理等级只需改 `sample/.env.local` 并重启，不需要改库，也不需要改前端代码。
 
 设计依据见 [ADR-0011](./decisions/adr-0011-single-axis-reasoning-effort.md)，协议细节见
 [Agent 门面规范](../standards/protocols/agent.md)与 [Server Runtime 接入规范](../standards/integrations/server-runtime.md)。
 
-## 23. 阶段 5：轨迹持久化与查询（下一阶段）
+## 23. 阶段 4.15：拆分为可发布 npm 包（已完成）
+
+目标：让仓库根成为真正可发布的库，同时保留一个可运行的官方应用案例。此前库与应用混在同一个 `src/` 下，
+既无法发布，也无法验证“使用者按包名导入”这条真实路径。
+
+已完成范围：
+
+- 仓库根即发布包：包名 `craft-harness`、版本 `0.1.0`、ESM-only，`exports` 暴露 `.` 与 `./adapters`，
+  `files: ["dist"]`，零运行期 `dependencies`，`openai` 与 `zod` 均为 peerDependency。
+- 库源码上提一层：原 `src/craft-agent/**` 整体变为 `src/**`（`contracts`、`core`、`agent`、`tools`、
+  `sessions`、`adapters`、`builtins`、`types` 都少了一层目录）。
+- 应用整体下移为官方案例：`src/server/**` → `sample/src/server/**`，`src/pages/index.vue` →
+  `sample/src/pages/index.vue`，`database/` → `sample/database/`，`vite.config.ts`、`uno.config.ts`、
+  `index.html`、`auto-imports.d.ts`、`components.d.ts`、`shims.d.ts` 与 `sample/.env.example` 同样位于 `sample/`。
+- 测试分成两份：库测试留在 `test/`（`test/support/*` 是共享替身），案例测试进入 `sample/test/`；
+  根 `vitest.config.ts` 改为两个 vitest project——`harness`（node 环境）与 `sample`（jsdom，引用
+  `sample/vite.config.ts`）。
+- 改名 `craft-agent` → `craft-harness`：改的是包名与文档称谓，导出的符号（`Agent`、`AgentLoop`、
+  `defineAgentConfig`、`defineTool`、`MemorySessionStore` 等）一个都没变。
+- 新增 `scripts/smoke-pack.mjs` 打包冒烟测试与 `sample/tsconfig.json`；根 `tsconfig.json` 只覆盖库
+  （`src/**`，node only，无 DOM）。
+- 删除模板残留：`src/components/TheCounter.vue|TheFooter.vue|TheInput.vue`、`test/basic.test.ts`、
+  `test/component.test.ts`；`test/craft-agent-tools.test.ts` 重命名为 `test/tool-harness.test.ts`。
+- 脚本语义随之调整：`pnpm build` 从“构建前端”变为“构建库”，前端构建改为 `pnpm build:sample`；
+  `postinstall` 改为 `prepare`，避免使用者在安装依赖时被改动 git hooks。
+
+阶段验证：
+
+1. `pnpm build`、`pnpm typecheck`、`pnpm lint` 与 `pnpm smoke:pack` 全部通过。
+2. `pnpm test` 同时运行库与案例两个 vitest project，全部用例通过。
+3. `pnpm pack` 产物安装到临时项目后，可按包名导入根入口与 `craft-harness/adapters`，且根入口没有泄漏
+   内部归一化实现。
+4. `test/model-boundary.test.ts` 断言 `src/**` 不导入 `sample/`，库对案例的依赖方向由测试守住。
+
+设计依据见
+[ADR-0012：仓库拆分与包名 craft-harness](./decisions/adr-0012-package-extraction-and-naming.md)，仓库布局见
+[总体架构](../standards/architecture.md)，案例 Runtime 的组装边界见
+[Server Runtime 接入规范](../standards/integrations/server-runtime.md)。
+
+## 24. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -353,9 +394,9 @@ flowchart LR
 - 定义独立 TraceStore 或 TraceSink，不与 Session 的模型事实混写。
 - 支持轨迹脱敏、按 Session/Run 查询和保留策略。
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
-- 保持前端展示数据不进入 CraftAgent 核心协议。
+- 保持前端展示数据不进入 craft-harness 核心协议。
 
-## 24. 阶段 6：异常诊断
+## 25. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -368,7 +409,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 25. 阶段 7：长期安全与扩展（最低优先级）
+## 26. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 
@@ -378,7 +419,7 @@ flowchart LR
 - 独立低权限进程、容器或 OS 沙箱。
 - 文件系统挂载、网络出口、资源和系统调用限制。
 - 更多模型 Adapter、评测体系和 OpenTelemetry。
-- 协议稳定后评估拆分 npm packages。
+- 协议稳定后评估把扩展能力拆成独立子包（例如自建 Adapter 集合），而不是继续扩大单一包。
 
 当前明确不实现：
 

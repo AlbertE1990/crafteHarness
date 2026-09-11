@@ -4,21 +4,21 @@
 
 ## 1. 目标与边界
 
-ModelAdapter 把模型供应商 SDK 隔离在 CraftAgent Core 之外。Core 只认识内部消息、工具定义、
+ModelAdapter 把模型供应商 SDK 隔离在 craft-harness Core 之外。Core 只认识内部消息、工具定义、
 非流式结果、标准流块和规范错误；模型名、API Key、base URL 与供应商参数由 Runtime 配置并交给
 具体 Adapter。
 
 当前协议以 OpenAI Chat Completions 为兼容基线：
 
 - 已有字段保持原名和原语义，不重新发明一套事件名称。
-- CraftAgent 和供应商需要的新能力通过增加可选字段表达，不能删除标准字段。
+- craft-harness 和供应商需要的新能力通过增加可选字段表达，不能删除标准字段。
 - Adapter 在运行时保留未知 chunk 字段，避免供应商或 OpenAI 增加字段后被静默丢弃。
-- CraftAgent 不导入 `openai` 包；结构兼容不等于依赖其 TypeScript 类型。
+- craft-harness 不导入 `openai` 包；结构兼容不等于依赖其 TypeScript 类型。
 
 ## 2. 公共文件
 
 ```text
-src/craft-agent/contracts/
+src/contracts/
   message.ts
   model.ts
   model-events.ts
@@ -161,10 +161,10 @@ Completions 主体字段，并和 chunk 一样透传未知新增字段。用量�
 官方 Adapter 与 Core 同仓库提供，但不是 Core 依赖：
 
 ```text
-src/craft-agent/contracts  <-  src/craft-agent/adapters/openai-compatible
-                              <-  src/craft-agent/adapters/deepseek
+src/contracts  <-  src/adapters/openai-compatible
+               <-  src/adapters/deepseek
 
-src/craft-agent/index.ts  -X->  src/craft-agent/adapters
+src/index.ts  -X->  src/adapters
 ```
 
 `OpenAICompatibleModelAdapter` 提供：
@@ -189,7 +189,7 @@ src/craft-agent/index.ts  -X->  src/craft-agent/adapters
 
 ## 8. 测试支持代码
 
-`test/support` 保存 CraftAgent 仓库自己的测试替身和契约断言：
+`test/support` 保存 craft-harness 仓库自己的测试替身和契约断言：
 
 - `ScriptedModelAdapter` 严格按脚本顺序输出 completion 或 chunk，捕获请求快照并响应取消。
 - 脚本耗尽、调用方法错位作为 `MODEL_PROTOCOL_ERROR`，原始脚本异常作为 `MODEL_CALL_FAILED`。
@@ -198,8 +198,8 @@ src/craft-agent/index.ts  -X->  src/craft-agent/adapters
 契约探针不得直接连接生产模型。供应商 Adapter 测试必须注入 SDK 客户端替身；契约探针也不能替代推理强度、
 供应商请求扩展和错误映射等专项测试。
 
-测试支持代码不从 `src/craft-agent` 或 npm 公共入口导出。外部开发者通过本文的输入、输出、取消和错误规范
-实现自己的契约测试；若未来形成稳定的第三方扩展需求，再单独设计 `craft-agent/testing`。
+测试支持代码不从 `src/` 或 npm 公共入口导出。外部开发者通过本文的输入、输出、取消和错误规范
+实现自己的契约测试；若未来形成稳定的第三方扩展需求，再单独设计 `craft-harness/testing`。
 
 ## 9. 统一配置
 
@@ -234,8 +234,9 @@ Session Store、审批、预算和观察器位于同一配置根，而不是增�
 - 任意非空 `reasoningEffort` 原样透传为供应商等级字段，包括库不认识的等级；Core 保留值 `'off'` 得到各
   Adapter 自己的关闭语义。Adapter 内不存在等级白名单，也不得静默降级为其他等级。
 - 中断和供应商错误得到稳定分类。
-- `src/craft-agent` 的 contracts、core、sessions、tools 与 builtins 不得导入 OpenAI SDK。
-- `src/craft-agent/agent` 可以创建官方 Adapter，但不能直接消费 SDK 对象。
+- `src/` 的 contracts、core、sessions、tools 与 builtins 不得导入 OpenAI SDK。
+- `src/agent` 可以创建官方 Adapter，但不能直接消费 SDK 对象。
 - 通用兼容层不得出现按供应商名称分支的请求或响应逻辑。
 - DeepSeek 专项测试必须证明其差异字段没有回流到通用 Adapter。
 - 核心测试不访问真实模型；真实 API 只用于单独的冒烟验收。
+- 库源码不得导入 `sample/`；打包产物必须能按包名（而不是相对路径）被导入，由 `pnpm smoke:pack` 守住。

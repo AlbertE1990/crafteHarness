@@ -6,7 +6,7 @@
 
 工具定义把名称、模型描述、输入 Schema、成功输出 Schema、业务标签、局部 Guard、执行策略和实现放在
 一起。普通应用只调用 `defineTool()`，再把结果交给 `new Agent({ tools })`；Schema 编译、类型擦除、
-Guard 合并、审批、重试和结果归一化都由 CraftAgent 内部完成。
+Guard 合并、审批、重试和结果归一化都由 craft-harness 内部完成。
 
 模型只能看到 `name`、`description` 和 `inputSchema`。以下内容永远不会发送给模型：
 
@@ -18,7 +18,7 @@ Guard 合并、审批、重试和结果归一化都由 CraftAgent 内部完成�
 ## 2. 定义工具
 
 ```ts
-import { defineTool, ToolError } from 'craft-agent'
+import { defineTool, ToolError } from 'craft-harness'
 import { z } from 'zod'
 
 export const getWeatherTool = defineTool({
@@ -33,7 +33,7 @@ export const getWeatherTool = defineTool({
     weather: z.string(),
   }),
 
-  // 任意 JSON 安全业务标签。CraftAgent 不解释 risk/capabilities 的含义。
+  // 任意 JSON 安全业务标签。craft-harness 不解释 risk/capabilities 的含义。
   metadata: {
     risk: 'read',
     capabilities: ['network:public'],
@@ -79,7 +79,7 @@ export const getWeatherTool = defineTool({
 })
 ```
 
-工具通过闭包接收网络、数据库或领域服务，不能从 CraftAgent 获取万能 service locator。
+工具通过闭包接收网络、数据库或领域服务，不能从 craft-harness 获取万能 service locator。
 
 ## 3. Schema 与 metadata
 
@@ -89,7 +89,7 @@ export const getWeatherTool = defineTool({
 - `outputSchema` 用于发现实现或上游协议错误、推导成功值类型并稳定轨迹结构；当前不发送给模型。
 - `defineTool()` 在注册期转换 Draft 7 JSON Schema，并检查所有对象拒绝未知字段。
 - `metadata` 必须是无循环引用的普通 JSON 对象；未配置时归一化为冻结的空对象。
-- metadata 的字段名和嵌套结构由应用决定。CraftAgent 不根据 `risk`、`capabilities` 等字段自动授权。
+- metadata 的字段名和嵌套结构由应用决定。craft-harness 不根据 `risk`、`capabilities` 等字段自动授权。
 
 ## 4. 运行上下文
 
@@ -107,7 +107,7 @@ interface ToolRunContext<TContext> {
 ```
 
 `context` 来自当前 Agent 请求。它用于传递租户、用户、角色、部署环境或请求级服务，
-只在本次 Run 内存在；CraftAgent 不会把它发送给模型、写入 Session Log、发给前端或保存在 Agent 单例。
+只在本次 Run 内存在；craft-harness 不会把它发送给模型、写入 Session Log、发给前端或保存在 Agent 单例。
 
 ## 5. 两层 Tool Guard
 
@@ -127,7 +127,7 @@ deny > ask > allow
 - 没有 deny、任一层 ask：创建一次用户审批。
 - 两层均 allow 或均缺省：进入执行尝试。
 - 两层同时 ask：有限审批时限取较小值；`-1` 只在没有有限时限时生效。
-- 两层同时给出 reason/details/metadata 时，CraftAgent 使用来源命名空间合并。
+- 两层同时给出 reason/details/metadata 时，craft-harness 使用来源命名空间合并。
 - 任一 Guard 抛错或返回非法结构：产生 `TOOL_GUARD_FAILED`，业务 `execute()` 不运行。
 
 Guard 只返回 `allow | deny | ask`，不直接执行工具，也不自己等待前端。Agent 内部负责审批 ID、pending
@@ -179,7 +179,7 @@ type ToolGuardDecision
 
 ## 7. 重试、超时与取消
 
-工具默认不重试。配置 `execution.retry` 即表示工具作者明确授权 CraftAgent 对同一 `callId` 重复调用
+工具默认不重试。配置 `execution.retry` 即表示工具作者明确授权 craft-harness 对同一 `callId` 重复调用
 `execute()`。框架不再要求或验证单独的 `idempotent` 声明，因为它无法证明实际业务副作用。
 
 一次重试必须同时满足：

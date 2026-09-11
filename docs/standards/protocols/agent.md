@@ -4,7 +4,7 @@
 
 ## 1. 目标与边界
 
-`Agent` 是 CraftAgent 面向应用开发者的默认入口。它统一组装模型 Adapter、工具、SessionStore、
+`Agent` 是 craft-harness 面向应用开发者的默认入口。它统一组装模型 Adapter、工具、SessionStore、
 AgentLoop 和标准应用事件，但不读取环境变量，也不依赖 HTTP 框架、数据库驱动或前端类型。
 
 `AgentLoop` 仍是可直接使用的高级执行内核；应用通常只需要 `Agent`。
@@ -12,7 +12,7 @@ AgentLoop 和标准应用事件，但不读取环境变量，也不依赖 HTTP �
 ## 2. 最小创建方式
 
 ```ts
-import Agent, { defineTool } from 'craft-agent'
+import Agent, { defineTool } from 'craft-harness'
 
 const agent = new Agent({
   model: {
@@ -203,9 +203,9 @@ Guard、全局 Guard 和 `execute()`，不进入模型、Session Log、标准前
 授权必须使用当前 context 或应用权限服务，不能把持久化 metadata 当作授权证明。
 
 `scopeId` 是持久化身份的一部分，不是权限凭证。调用方必须从可信认证或业务路由中组装它；即使单用户部署也要
-显式传固定值（例如 `default`）。CraftAgent 不在 AgentConfig 或 Store 中提供隐式默认 scope，所有数据库读写
+显式传固定值（例如 `default`）。craft-harness 不在 AgentConfig 或 Store 中提供隐式默认 scope，所有数据库读写
 都必须同时约束 `scopeId + sessionId`。`sessionName` 是标准可搜索名称，应用自定义筛选字段仍保留在自己的表、
-投影或 Repository 中，不继续扩张 CraftAgent 的 Session 表。
+投影或 Repository 中，不继续扩张 craft-harness 的 Session 表。
 
 `stream()` 依次输出以下稳定应用事件：
 
@@ -217,9 +217,9 @@ Guard、全局 Guard 和 `execute()`，不进入模型、Session Log、标准前
 - `tool.guard.denied`
 - `error`
 
-`AgentOutputEvent` 是 CraftAgent 面向 CLI、SSE、WebSocket 等应用出口的标准协议。Runtime 默认应原样
+`AgentOutputEvent` 是 craft-harness 面向 CLI、SSE、WebSocket 等应用出口的标准协议。Runtime 默认应原样
 序列化这些事件，不再把 `sessionId` 改名为 `conversationId`，也不删除 `runId` 等关联字段。只有宿主已有
-外部协议或确实需要裁剪字段时，才自行增加 Adapter；该 Adapter 不属于 CraftAgent 核心。
+外部协议或确实需要裁剪字段时，才自行增加 Adapter；该 Adapter 不属于 craft-harness 核心。
 
 `observability.onTrace` 输出完整 `AgentEvent`，包括 Run、Step、模型输出、工具调用、Tool Harness 子事件和终态。流式
 模型输出使用 `agent.model.chunk`，非流式完整响应使用 `agent.model.completed`；
@@ -260,7 +260,7 @@ const agent = new Agent<AppRunContext>({
 类型精度：工具级 `request.input` 由自己的 Zod Schema 推导，全局 Guard 面对任意已注册工具，因此 input
 默认为 `unknown`。两层都能读取同一份 `request.context`，无需学习或转换第二套协议。
 
-工具 `metadata` 是任意 JSON 安全标签，由两层 Guard 自行解释；CraftAgent 不提供固定 risk 枚举，也不根据
+工具 `metadata` 是任意 JSON 安全标签，由两层 Guard 自行解释；craft-harness 不提供固定 risk 枚举，也不根据
 metadata 自动授权。任一 Guard 抛错或返回非法结构时 fail-closed 为当前工具失败。
 
 单次 `ask.approvalTimeoutMs` 优先于通用 `tools.approvalTimeoutMs`，均未提供时默认 120 秒。正整数表示
@@ -307,8 +307,9 @@ Agent 实例只在当前进程中保存 pending 审批。`invoke()` 没有交互
 
 ## 8. 依赖规则
 
-`src/craft-agent/agent` 是产品便利层，因此可以实例化同仓库官方 Adapter。更底层的 `contracts`、
+`src/agent` 是产品便利层，因此可以实例化同仓库官方 Adapter。更底层的 `contracts`、
 `core`、`sessions`、`tools` 和 `builtins` 仍禁止依赖模型 SDK。官方 Adapter 必须直接依赖 contracts，
 不能通过根入口反向导入。
 
-Fastify、SSE、环境变量、数据库连接和前端展示投影只能存在于 Runtime。
+Fastify、SSE、环境变量、数据库连接和前端展示投影只能存在于 Runtime。本仓库的参考 Runtime 是官方案例
+`sample/src/server`；它通过相对路径导入 `src/`，方向只能是案例依赖库，库不得反向依赖案例。

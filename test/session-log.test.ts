@@ -1,14 +1,14 @@
 import type {
   SessionEvent,
   SessionStore,
-} from '../src/craft-agent'
+} from '../src'
 import { describe, expect, it } from 'vitest'
 import {
   deriveModelMessages,
   loadModelMessages,
   MemorySessionStore,
   readSessionSnapshot,
-} from '../src/craft-agent'
+} from '../src'
 
 const SCOPE_ID = 'scope-session-log'
 

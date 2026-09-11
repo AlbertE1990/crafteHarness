@@ -1,10 +1,10 @@
-# CraftAgent 开发与代码规范
+# craft-harness 开发与代码规范
 
 > 文档类型：规范；状态：Accepted。
 
 ## 1. 适用范围
 
-本规范适用于 `src/craft-agent` 及后续 ModelAdapter、Session、Agent Loop 和 Runtime 协议。
+本规范适用于仓库根发布的 `src/**` 库源码，以及后续 ModelAdapter、Session、Agent Loop 和 Runtime 协议。
 它用于保持公共 API、内部函数、注释和测试的可读性。已经稳定发布或存在外部调用方的 API 如需改变，必须
 考虑兼容性；尚未发布的设计草案不保留无实际使用者的兼容层。
 
@@ -28,7 +28,7 @@
   pending Promise、超时、取消和重复提交等通用机制必须由 Agent 内收，不能要求每个 Runtime 重写 Broker。
 - 同一风险判断需要工具参数和部署上下文时，使用工具级与全局 Guard 的固定组合规则，不让调用方手工串联。
   缺省 Guard 的语义必须明确且一致；当前可信第一方工具模型下，缺省表示 allow。
-- CraftAgent 已定义的应用事件应可被 Runtime 直接输出；默认接入不得重复改名和裁剪字段。兼容既有外部协议
+- craft-harness 已定义的应用事件应可被 Runtime 直接输出；默认接入不得重复改名和裁剪字段。兼容既有外部协议
   时才由使用者在边界增加显式 Adapter，核心不同时维护两套等价事件。
 - 同一语义优先只保留一种输入形式；项目未发布时直接删除被替代的包装、别名和识别分支。
 
@@ -60,13 +60,13 @@
 ### 1.3 公共导出与测试代码边界
 
 - 根入口使用显式导出白名单；内部 barrel 新增符号不能自动扩大公共 API。
-- 普通开发路径从 `craft-agent` 根入口获得。供应商 Adapter 等高级能力使用职责明确的独立入口。
+- 普通开发路径从 `craft-harness` 根入口获得。供应商 Adapter 等高级能力使用职责明确的独立入口。
 - 公共类型不能引用一个调用方无法命名或导入的内部类型；配置接受 `defineTool()` 结果时公开
   `AgentToolInput`，但归一化函数仍留在内部。
-- 测试替身、fixture、契约探针和学习型可执行测试统一放在 `test/support` 或 `test/learning`，不能放入
-  `src/craft-agent` 生产源码。
+- 测试替身、fixture、契约探针和学习型可执行测试统一放在库的 `test/support`、`test/learning`，或案例自己的
+  `sample/test`，不能放入 `src/` 生产源码。
 - 面向外部开发者的实现要求写入协议和学习文档。仅当第三方确实需要复用一套稳定工具时，才新增正式
-  `craft-agent/testing` 子入口。
+  `craft-harness/testing` 子入口。
 - 公共 API 变更必须增加从预期入口导入的编译或运行测试，既检查漏导出，也防止内部实现被意外导出。
 
 ## 2. 函数参数排序
@@ -228,7 +228,9 @@ executeAttempt(tool, input, {
 - Run 级租户、用户和环境数据必须通过 Agent 请求的 `context` 传递，不得写入 Agent 单例或隐藏全局变量。
 - Runtime 负责从可信认证结果构造 context；核心不得默认把 context 发给模型、前端或 Session Store。
 - 同职责配置是否已经进入稳定分组，是否避免了单字段包装和含义过大的组名？
-- 新增外部类型是否从预期公共入口显式导出，测试辅助代码是否留在 `test/`？
+- 新增外部类型是否从预期公共入口显式导出，测试辅助代码是否留在库的 `test/` 或案例的 `sample/test`？
+- 新增依赖是否仍停留在 `src/**` 内？`src/**` 不得导入 `sample/`，也不得引入 Fastify、`pg`、Vue 等只属于
+  案例应用或宿主的依赖，否则发布的包会强制使用者安装它们。
 - 集合查询默认返回满足列表展示所需的最小摘要；大体积详情通过 ID 按需读取，禁止在列表内部形成 N+1 查询。
 - 面向应用的详情投影不能为了方便而丢弃已有的关联信息；消息内容与 `turnId/sequence/timestamp` 等上下文应分层保留。
 

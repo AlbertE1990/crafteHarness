@@ -3,9 +3,9 @@ import type {
   SessionEvent,
   SessionEventPage,
   SessionStore,
-} from '../../src/craft-agent/contracts'
+} from '../../src/contracts'
 import { randomUUID } from 'node:crypto'
-import { SessionStoreError } from '../../src/craft-agent/sessions/errors'
+import { SessionStoreError } from '../../src/sessions/errors'
 
 /** SessionStore 契约探针的隔离 ID 和可选目录要求。 */
 export interface SessionStoreContractOptions {

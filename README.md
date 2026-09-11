@@ -1,116 +1,116 @@
-# CraftAgent
+# craft-harness
 
-CraftAgent 是面向 Node.js、与 HTTP、数据库和前端解耦的通用 Agent。当前默认入口已经统一为：
+面向 Node.js 的 **agent harness**：一套确定性的 Agent Loop、工具 harness、追加式 Session Log 和供应商无关的模型契约，
+用来把"模型 + 工具 + 会话事实"组装成可观测、可取消、有预算的 Agent，而不是把编排逻辑散落在业务代码里。
+
+与 HTTP、数据库和前端解耦：库本身不读环境变量、不依赖 Fastify/pg/Vue，也不替调用方决定密钥和模型名。
+
+```bash
+pnpm add craft-harness openai zod
+```
+
+`openai` 与 `zod` 是 peer dependency：库的根入口会静态导入两个官方 Adapter，`openai` 在导入期就需要；
+`zod` 用于 `defineTool()` 的 Schema 与内置工具，因此两者都必须安装。
+
+## 最短可用路径
 
 ```ts
-import Agent from 'craft-agent'
+import Agent from 'craft-harness'
 
 const agent = new Agent({
   model: {
     adapter: 'deepseek',
     apiKey: process.env.DEEPSEEK_API_KEY!,
+    model: process.env.DEEPSEEK_MODEL!, // 模型名属于部署配置，库不内置默认值
   },
+  systemPrompt: '你是一个可靠的助手。',
   execution: {
-    model: {
-      stream: true,
-      reasoning: { enabled: true, effort: 'high' },
-    },
+    reasoningEffort: 'high', // 'off' 关闭推理；省略则用供应商默认
   },
 })
 
-const result = await agent.run({ input: '你好' }, {
-  // 页面或 CLI 可以按次覆盖；非流式会调用 Adapter.complete()。
-  model: { stream: false },
+const result = await agent.invoke({
+  scopeId: 'tenant-42', // Session 数据分区，必须显式提供
+  input: '杭州天气怎么样？',
+})
+
+console.log(result.status, result.content)
+```
+
+流式输出用 `agent.stream()`，两者的差异只体现在方法名上：
+
+```ts
+for await (const event of agent.stream({ scopeId: 'tenant-42', input: '讲个笑话' })) {
+  // event 是可直接转发的标准应用事件：message.delta / message.completed / tool.* / error
+}
+```
+
+## 能力概览
+
+| 能力               | 说明                                                                                            |
+| ------------------ | ----------------------------------------------------------------------------------------------- |
+| 确定性 Agent Loop  | 显式预算（模型步数、工具调用数、耗时、Token）、协作式取消、封闭停止原因，不把预算耗尽伪装成异常 |
+| 工具 harness       | `defineTool()` 用 Zod 声明输入输出与执行函数；参数级 Guard + Agent 级 Guard + 交互式审批        |
+| 追加式 Session Log | 事件只追加不覆盖，消息从固定快照推导；`SessionStore` 是可替换的持久化 Port（内置内存实现）      |
+| 供应商无关模型契约 | `ModelAdapter` 是 Core 唯一依赖；官方提供 OpenAI 兼容与 DeepSeek 两个差异层                     |
+| 标准应用事件       | `AgentOutputEvent` 可被 Runtime 直接输出，不需要为前端再裁剪一套协议                            |
+
+## 高级入口
+
+```ts
+// 直接用 AgentLoop（跳过门面，自行组装 Store 与工具）
+import { AgentLoop, createAgentTool } from 'craft-harness'
+// 供应商 Adapter 与自定义实现
+import { DeepSeekModelAdapter, OpenAICompatibleModelAdapter } from 'craft-harness/adapters'
+```
+
+任何 OpenAI Chat Completions 兼容服务都只需要改 `baseURL` 和模型名，不需要新写 Adapter：
+
+```ts
+const agent = new Agent({
+  model: { provider: 'moonshot', apiKey: '...', baseURL: 'https://api.moonshot.cn/v1', model: 'kimi-k3' },
 })
 ```
 
-需要租户、用户或环境级约束时，使用 `new Agent<AppRunContext>()`，并在每次 `run({ context })` 中传入
-由服务端认证结果构造的上下文；它只会进入当前 Run 的 Guard 和工具执行函数。
+需要租户、用户或环境级约束时，用 `new Agent<AppContext>()` 并在请求里传入由**服务端认证结果**构造的
+`context`；它只进入当前 Run 的 Guard 与工具执行函数，不会被发给模型、前端或 Session Store。
 
-完整架构、使用方式与开发规范见[中文项目文档](./docs/README.md)。下方暂时保留原前端模板说明，前端只用于联调。
+## 官方案例
 
-<p align='center'>
-  <img src='https://user-images.githubusercontent.com/11247099/111864893-a457fd00-899e-11eb-9f05-f4b88987541d.png' alt='Vitesse - Opinionated Vite Starter Template' width='600'/>
-</p>
-
-<h6 align='center'>
-<a href="https://vitesse-lite.netlify.app/">Live Demo</a>
-</h6>
-
-<h5 align='center'>
-<b>Lightweight version of <a href="https://github.com/antfu/vitesse">Vitesse</a></b>
-</h5>
-
-<br>
-
-<p align='center'>
-<b>English</b> | <a href="https://github.com/antfu-collective/vitesse-lite/blob/main/README.zh-CN.md">简体中文</a>
-<!-- Contributors: Thanks for geting interested, however we DON'T accept new transitions to the README, thanks. -->
-</p>
-
-## Features
-
-- ⚡️ [Vue 3](https://github.com/vuejs/core), [Vite](https://github.com/vitejs/vite), [pnpm](https://pnpm.io/), [ESBuild](https://github.com/evanw/esbuild) - born with fastness
-
-- 🗂 [File based routing](./src/pages)
-
-- 📦 [Components auto importing](./src/components)
-
-- 🎨 [UnoCSS](https://github.com/antfu/unocss) - The instant on-demand atomic CSS engine.
-
-- 😃 Use icons from any icon sets in [Pure CSS](https://github.com/antfu/unocss/tree/main/packages/preset-icons)
-
-- 🔥 Use the [new `<script setup>` style](https://github.com/vuejs/rfcs/pull/227)
-
-- ✅ Use [Vitest](http://vitest.dev/) for unit and components testing
-
-- 🦾 TypeScript, of course
-
-- ☁️ Deploy on Netlify, zero-config
-
-<br>
-
-See [Vitesse](https://github.com/antfu/vitesse) for full featureset.
-
-## Dropped Features from [Vitesse](https://github.com/antfu/vitesse)
-
-- ~~i18n~~
-- ~~Layouts~~
-- ~~SSG~~
-- ~~PWA~~
-- ~~Markdown~~
-
-## Pre-packed
-
-### UI Frameworks
-
-- [UnoCSS](https://github.com/antfu/unocss) - The instant on-demand atomic CSS engine.
-
-### Icons
-
-- [Iconify](https://iconify.design) - use icons from any icon sets [🔍Icônes](https://icones.netlify.app/)
-- [Pure CSS Icons via UnoCSS](https://github.com/antfu/unocss/tree/main/packages/preset-icons)
-
-### Plugins
-
-- [Vue Router](https://github.com/vuejs/vue-router) - file system based routing
-- [`unplugin-auto-import`](https://github.com/antfu/unplugin-auto-import) - Directly use Vue Composition API and others without importing
-- [`unplugin-vue-components`](https://github.com/antfu/unplugin-vue-components) - components auto import
-- [`unplugin-vue-macros`](https://github.com/sxzz/unplugin-vue-macros) - Explore and extend more macros and syntax sugar to Vue.
-- [VueUse](https://github.com/antfu/vueuse) - collection of useful composition APIs
-
-## Try it now!
-
-### GitHub Template
-
-[Create a repo from this template on GitHub](https://github.com/antfu-collective/vitesse-lite/generate).
-
-### Clone to local
-
-If you prefer to do it manually with the cleaner git history
+`sample/` 是一个完整的可运行案例：Fastify + PostgreSQL + Vue 聊天界面，包含流式事件直出、
+工具审批卡片、多会话与可搜索会话目录。它**不参与发布**（`files` 只包含 `dist`），演示了如何把
+harness 组装成一个真实 Runtime。
 
 ```bash
-npx degit antfu-collective/vitesse-lite my-vitesse-app
-cd my-vitesse-app
-pnpm i # If you don't have pnpm installed, run: npm install -g pnpm
+cp sample/.env.example sample/.env.local   # 填 DEEPSEEK_API_KEY 等
+pnpm db:migrate                            # 需要本地 PostgreSQL
+pnpm dev                                   # 后端 :3000 + 前端 :3333
 ```
+
+## 开发
+
+```bash
+pnpm install
+pnpm test          # 库测试（node 环境）+ 案例测试（jsdom）两个 project 一起跑
+pnpm typecheck     # 库用 tsc，案例用 vue-tsc
+pnpm lint
+pnpm build         # 构建要发布的库产物到 dist/
+pnpm build:sample  # 构建案例前端
+pnpm smoke:pack    # 打包冒烟测试：npm pack 后按包名导入一次真实产物
+```
+
+`pnpm smoke:pack` 是发布前最该跑的一步：案例通过相对路径导入源码，因此它验证不了 `exports` 映射、
+`files` 白名单和类型声明是否完整，只有冒烟测试能覆盖这一段。
+
+## 文档
+
+- [文档总览](./docs/README.md)
+- [总体架构](./docs/standards/architecture.md)
+- [Agent 门面协议](./docs/standards/protocols/agent.md)
+- [Agent Loop 协议](./docs/standards/protocols/agent-loop.md)
+- [模型 Adapter 协议](./docs/standards/protocols/model-adapter.md)
+- [学习路径](./docs/learning/README.md)
+
+## License
+
+MIT

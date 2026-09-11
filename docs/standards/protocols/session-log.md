@@ -4,11 +4,11 @@
 
 ## 1. 目标
 
-Session Log 是 CraftAgent 的持久事实边界。它使用 append-only 事件记录模型可见消息和 Turn 生命周期，
+Session Log 是 craft-harness 的持久事实边界。它使用 append-only 事件记录模型可见消息和 Turn 生命周期，
 并从事件确定性推导下一次模型请求所需的 `ModelMessage[]`。
 
 本协议定义供应商无关 Store、内存参考实现、外部持久化约束和消息推导，不把数据库、ORM、HTTP 或前端类型
-引入 CraftAgent Core。
+引入 craft-harness Core。
 
 ## 2. 核心原则
 
@@ -201,7 +201,7 @@ interface SessionCatalogStore extends SessionStore {
 - 只支持 Agent 执行的 Store 实现 `SessionStore`；同时支持会话列表的 Store 实现 `SessionCatalogStore`。
 
 内置 `MemorySessionStore` 是无数据库开发、测试和协议验证实现，不是生产持久化层。它的数据随进程退出丢失，
-并且默认不执行 TTL 或容量驱逐。长期运行的 Runtime 应注入外部 Store；CraftAgent 不要求每个使用者为了首次
+并且默认不执行 TTL 或容量驱逐。长期运行的 Runtime 应注入外部 Store；craft-harness 不要求每个使用者为了首次
 运行而重复实现一份内存 Store，也不把缓存、数据库连接或用户权限加入通用协议。
 
 ## 10. 外部持久化适配
@@ -267,7 +267,7 @@ ORM 实现也必须建立同样的数据库约束，不能只依靠进程内检�
 compare-and-swap。
 
 远程 API Adapter 若在一次 `append()` 内自动重试，所有下游尝试必须复用同一幂等键，并在第一次提交成功后
-返回同一结果。无法确认请求是否已经提交时不得用新幂等键盲目重试；CraftAgent Core 当前不会自动重试 Store
+返回同一结果。无法确认请求是否已经提交时不得用新幂等键盲目重试；craft-harness Core 当前不会自动重试 Store
 写入。
 
 ## 12. 规范错误
@@ -302,15 +302,15 @@ await assertSessionStoreContract(store, {
 分页、同 ID 跨 scope 隔离、名称搜索和可选目录分页。它会真实写入多个 Session，测试必须提供临时 schema、事务夹具、测试容器或独立命名空间；
 不得对生产数据源运行。
 
-该探针是 CraftAgent 仓库自己的测试支持代码，不从生产包导出。外部开发者应按照本节列出的不变量在自己的
-测试目录实现契约测试；未来只有在形成明确的第三方开发工具需求后，才评估独立 `craft-agent/testing` API。
+该探针是 craft-harness 仓库自己的测试支持代码，不从生产包导出。外部开发者应按照本节列出的不变量在自己的
+测试目录实现契约测试；未来只有在形成明确的第三方开发工具需求后，才评估独立 `craft-harness/testing` API。
 
 契约探针验证通用行为，不能代替实现专项测试。SQL 实现仍需测试死锁、唯一约束映射和事务回滚；远程 API 实现
 仍需测试超时、认证、幂等重试和响应协议错误。
 
 ## 14. 当前明确不实现
 
-- 随 CraftAgent Core 内置具体数据库、ORM、Redis、文件或 API Store。
+- 随 craft-harness Core 内置具体数据库、ORM、Redis、文件或 API Store。
 - Session 删除、归档和名称重命名。
 - User、Role、所有权、成员关系和授权协议；scopeId 只提供持久化分区。
 - Session 压缩、摘要和历史裁剪。

@@ -14,19 +14,19 @@ import type {
   ToolGuardRequest,
   ToolGuardToolInfo,
   ToolRunContext,
-} from '../src/craft-agent'
+} from '../src'
 import { describe, expect, it } from 'vitest'
 import Agent, {
   DEFAULT_TOOL_APPROVAL_TIMEOUT_MS,
   defineAgentConfig,
   defineTool,
   MemorySessionStore,
-} from '../src/craft-agent'
-import * as publicApi from '../src/craft-agent'
+} from '../src'
+import * as publicApi from '../src'
 import {
   DeepSeekModelAdapter,
   OpenAICompatibleModelAdapter,
-} from '../src/craft-agent/adapters'
+} from '../src/adapters'
 import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
 /** 编译期覆盖普通使用者需要命名的配置与扩展端口类型。 */
@@ -46,7 +46,7 @@ function acceptsPublicTypes(_value: {
   toolRunContext?: ToolRunContext
 }): void {}
 
-describe('craft-agent public API', () => {
+describe('craft-harness public API', () => {
   it('exports the normal developer facade and keeps internal normalization private', () => {
     const model = new ScriptedModelAdapter({ script: [] })
     const config: AgentConfigInput = {

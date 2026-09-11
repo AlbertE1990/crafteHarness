@@ -10,10 +10,10 @@ on:
       - main
 
 jobs:
-  build:
+  verify:
     runs-on: ${{ matrix.os }}
 
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     strategy:
       matrix:
@@ -34,14 +34,21 @@ jobs:
       - name: Install
         run: pnpm i
 
-      - name: Build
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      # 库产物是发布内容，因此先构建再测试与冒烟，确保被验证的就是将要发布的形状。
+      - name: Build library
         run: pnpm run build
 
       - name: Test
         run: pnpm run test
 
-      - name: Lint
-        run: pnpm run lint
+      - name: Pack smoke test
+        run: pnpm run smoke:pack
 
-      - name: TypeCheck
-        run: pnpm run typecheck
+      - name: Build sample
+        run: pnpm run build:sample

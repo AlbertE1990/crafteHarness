@@ -3,7 +3,7 @@ import type {
   ChatCompletion,
   ChatCompletionChunk,
 } from 'openai/resources/chat/completions'
-import type { DeepSeekModelAdapterConfig } from '../src/craft-agent/adapters/deepseek'
+import type { DeepSeekModelAdapterConfig } from '../src/adapters/deepseek'
 import { describe, expect, it, vi } from 'vitest'
 import {
   DeepSeekModelAdapter,
@@ -11,7 +11,7 @@ import {
   normalizeDeepSeekChunk,
   normalizeDeepSeekCompletion,
   normalizeDeepSeekError,
-} from '../src/craft-agent/adapters/deepseek'
+} from '../src/adapters/deepseek'
 
 function createMockClient(create: ReturnType<typeof vi.fn>): OpenAI {
   return {

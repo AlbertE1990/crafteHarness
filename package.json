@@ -1,33 +1,71 @@
 {
-  "name": "craft-agent",
+  "name": "craft-harness",
   "type": "module",
-  "private": true,
+  "version": "0.1.0",
   "packageManager": "pnpm@10.30.3",
-  "scripts": {
-    "build": "vite build",
-    "db:check": "tsx src/server/database/check.ts",
-    "db:migrate": "tsx src/server/database/migrate.ts",
-    "db:test-store": "tsx test/postgres-session-store.contract.ts",
-    "dev": "concurrently -n server,web -c green,cyan \"pnpm dev:server\" \"pnpm dev:web\"",
-    "dev:server": "tsx watch src/server/index.ts",
-    "dev:web": "vite --open",
-    "lint": "eslint .",
-    "typecheck": "vue-tsc",
-    "preview": "vite preview",
-    "test": "vitest",
-    "typecheck:public-api": "tsc --noEmit --strict --skipLibCheck --target ES2021 --lib ESNext,DOM --module ESNext --moduleResolution bundler --types node,vitest/globals test/public-api.test.ts",
-    "up": "taze major -I",
-    "postinstall": "npx simple-git-hooks"
+  "description": "A deterministic, provider-neutral agent harness for Node.js: agent loop, tool harness, append-only session log and model adapters.",
+  "license": "MIT",
+  "homepage": "https://gitee.com/issac_newton/hand-crafted-agent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://gitee.com/issac_newton/hand-crafted-agent.git"
   },
-  "dependencies": {
-    "@vueuse/core": "catalog:frontend",
-    "fastify": "catalog:",
-    "markdown-it": "catalog:",
-    "openai": "catalog:",
-    "pg": "catalog:",
-    "vue": "catalog:frontend",
-    "vue-router": "catalog:frontend",
-    "zod": "catalog:"
+  "bugs": {
+    "url": "https://gitee.com/issac_newton/hand-crafted-agent/issues"
+  },
+  "keywords": [
+    "agent",
+    "agent-loop",
+    "harness",
+    "llm",
+    "tool-calling",
+    "function-calling",
+    "openai",
+    "deepseek",
+    "nodejs",
+    "typescript"
+  ],
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./adapters": {
+      "types": "./dist/adapters/index.d.ts",
+      "import": "./dist/adapters/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "concurrently -n server,web -c green,cyan \"pnpm dev:server\" \"pnpm dev:web\"",
+    "dev:server": "tsx watch sample/src/server/index.ts",
+    "dev:web": "vite --config sample/vite.config.ts --open",
+    "build:sample": "vite build --config sample/vite.config.ts",
+    "preview": "vite preview --config sample/vite.config.ts",
+    "db:check": "tsx sample/src/server/database/check.ts",
+    "db:migrate": "tsx sample/src/server/database/migrate.ts",
+    "db:test-store": "tsx sample/test/postgres-session-store.contract.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json && vue-tsc --noEmit -p sample/tsconfig.json",
+    "typecheck:public-api": "tsc --noEmit --strict --skipLibCheck --target ES2021 --lib ESNext,DOM --module ESNext --moduleResolution bundler --types node,vitest/globals test/public-api.test.ts",
+    "lint": "eslint .",
+    "smoke:pack": "node scripts/smoke-pack.mjs",
+    "prepublishOnly": "pnpm build && pnpm test && pnpm smoke:pack",
+    "up": "taze major -I",
+    "prepare": "simple-git-hooks"
+  },
+  "peerDependencies": {
+    "openai": "^7.0.0",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:dev",
@@ -38,13 +76,19 @@
     "@vitejs/plugin-vue": "catalog:build",
     "@vue-macros/volar": "catalog:dev",
     "@vue/test-utils": "catalog:dev",
+    "@vueuse/core": "catalog:frontend",
     "concurrently": "catalog:",
     "eslint": "catalog:dev",
     "eslint-plugin-format": "catalog:dev",
+    "fastify": "catalog:",
     "jsdom": "catalog:build",
     "lint-staged": "catalog:dev",
+    "markdown-it": "catalog:",
+    "openai": "catalog:",
+    "pg": "catalog:",
     "simple-git-hooks": "catalog:dev",
     "taze": "catalog:dev",
+    "tsup": "catalog:build",
     "tsx": "catalog:",
     "typescript": "catalog:dev",
     "unocss": "catalog:build",
@@ -53,7 +97,10 @@
     "unplugin-vue-macros": "catalog:build",
     "vite": "catalog:build",
     "vitest": "catalog:dev",
-    "vue-tsc": "catalog:dev"
+    "vue": "catalog:frontend",
+    "vue-router": "catalog:frontend",
+    "vue-tsc": "catalog:dev",
+    "zod": "catalog:"
   },
   "resolutions": {
     "unplugin": "catalog:build",

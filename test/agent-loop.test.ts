@@ -4,7 +4,7 @@ import type {
   ModelCompletion,
   ModelStreamChunk,
   SessionStore,
-} from '../src/craft-agent'
+} from '../src'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import {
@@ -15,7 +15,7 @@ import {
   MemorySessionStore,
   readSessionSnapshot,
   SessionStoreError,
-} from '../src/craft-agent'
+} from '../src'
 import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
 const SCOPE_ID = 'scope-agent-loop'

@@ -1,4 +1,4 @@
-# CraftAgent 文档
+# craft-harness 文档
 
 本文档库按用途分为开发规范、学习路径和产品记录。代码与当前规范必须在同一次变更中保持同步；
 学习文档和历史交付记录不能覆盖当前规范。
@@ -29,7 +29,7 @@
 - [Session Log：从可变消息数组到事实日志](./learning/session-log.md)
 - [持久化 SessionStore：从内存调试到 PostgreSQL](./learning/persistent-session-store.md)
 - [Agent Loop：从用户输入到确定终态](./learning/agent-loop.md)
-- [CraftAgent 统一入口：从配置到会话查询](./learning/craft-agent-facade.md)
+- [harness 统一入口：从配置到会话查询](./learning/harness-facade.md)
 - [工具审批全链路：从风险评估到继续 AgentLoop](./learning/tool-approval-flow.md)
 
 ### 查看方向、决策和进度
@@ -44,6 +44,8 @@
 
 当前已完成 Tool Harness、ModelAdapter、官方 Adapter、Session Log、Agent Loop 和统一 Agent 门面：
 
+- 仓库根就是发布的 npm 包 `craft-harness`：ESM-only，`exports` 暴露 `.` 与 `./adapters`，零运行期依赖。
+- 官方案例应用位于 `sample/`，通过相对路径导入库源码，不参与打包与发布。
 - 工具具有 Zod 输入输出边界、两层 Guard、审批、超时、显式重试和执行事件。
 - 模型具有供应商无关消息、OpenAI 兼容标准 chunk、非流式结果、用量和错误协议。
 - OpenAI SDK 仅存在于官方 Adapter；Core 不依赖 SDK，DeepSeek 只维护供应商差异。
@@ -65,7 +67,7 @@
 - 公共配置不要求 ID 工厂，Agent 内部统一生成带语义前缀的 UUID。
 - Agent 内置一次性审批、超时、取消和重复提交控制。
 - 真实 DeepSeek 冒烟仍需在配置 API Key 后执行。
-- Fastify 已迁移到 Agent 门面；持久化轨迹查询接口是下一阶段。
+- 官方案例的 Fastify Runtime 已迁移到 Agent 门面；持久化轨迹查询接口是下一阶段。
 
 ## 权威顺序
 

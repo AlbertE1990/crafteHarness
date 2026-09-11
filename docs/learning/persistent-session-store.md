@@ -9,9 +9,9 @@
 - 判断何时使用 `MemorySessionStore`，何时必须接入持久化 Store。
 - 为 append-only Session Log 设计关系数据库表。
 - 正确实现原子追加、乐观并发和固定版本分页。
-- 将数据库异常转换为 CraftAgent 的稳定错误。
+- 将数据库异常转换为 craft-harness 的稳定错误。
 - 使用契约探针验证自己的 Store。
-- 在不修改 CraftAgent 用户模型的前提下保存 `userId`、`tenantId` 等应用字段。
+- 在不修改 craft-harness 用户模型的前提下保存 `userId`、`tenantId` 等应用字段。
 
 前置阅读：
 
@@ -21,7 +21,7 @@
 
 ## 2. 先明确边界
 
-CraftAgent 只定义会话存储的行为，不负责数据库连接和用户系统：
+craft-harness 只定义会话存储的行为，不负责数据库连接和用户系统：
 
 ```text
 HTTP / CLI / Worker Runtime
@@ -51,13 +51,13 @@ Store 不是模型工具。模型不能选择数据库、拼接 SQL，也不能�
 - 作为第三方 Store 的协议行为参考。
 
 它不是生产持久化方案：数据只存在于当前 Node.js 进程，重启后全部丢失，而且默认不会过期或驱逐 Session。
-长期运行的服务应显式注入持久化 Store。CraftAgent 不在内存实现中加入 LRU、TTL、落盘或分布式同步；这些属于
+长期运行的服务应显式注入持久化 Store。craft-harness 不在内存实现中加入 LRU、TTL、落盘或分布式同步；这些属于
 具体存储实现的选择。
 
 无数据库调试可以直接使用默认值：
 
 ```ts
-import Agent from '../../src/craft-agent'
+import Agent from 'craft-harness'
 
 const agent = new Agent({ model })
 ```
@@ -65,7 +65,7 @@ const agent = new Agent({ model })
 需要直接观察事件时，可以显式创建 Store：
 
 ```ts
-import Agent, { MemorySessionStore } from '../../src/craft-agent'
+import Agent, { MemorySessionStore } from 'craft-harness'
 
 const store = new MemorySessionStore()
 const agent = new Agent({ model, sessionStore: store })
@@ -104,7 +104,7 @@ interface SessionCatalogStore extends SessionStore {
 
 ## 5. PostgreSQL 表结构
 
-CraftAgent 的 ID 是字符串，教程使用 `text`，不强制调用方只能使用 UUID。`bigint` 可以承载长期增长的版本和
+craft-harness 的 ID 是字符串，教程使用 `text`，不强制调用方只能使用 UUID。`bigint` 可以承载长期增长的版本和
 序号；Node.js 驱动通常把 PostgreSQL `bigint` 返回为字符串，转换为 `number` 时必须检查
 `Number.isSafeInteger()`。
 
@@ -285,11 +285,11 @@ ORDER BY catalog_order ASC
 LIMIT $4;
 ```
 
-和事件分页一样，可以多取一条计算 `hasMore`。返回给 CraftAgent 的 `createdAt` 必须是 ISO 8601 字符串。
+和事件分页一样，可以多取一条计算 `hasMore`。返回给 craft-harness 的 `createdAt` 必须是 ISO 8601 字符串。
 
 ## 9. 实现骨架
 
-数据库驱动、ORM 和事务 API 各不相同，因此 CraftAgent 不提供绑定 `pg` 的基类。应用实现的结构通常如下：
+数据库驱动、ORM 和事务 API 各不相同，因此 craft-harness 不提供绑定 `pg` 的基类。应用实现的结构通常如下：
 
 ```ts
 import type {
@@ -300,8 +300,8 @@ import type {
   SessionCatalogStore,
   SessionEventPage,
   SessionListPage,
-} from 'craft-agent'
-import { SessionStoreError } from 'craft-agent'
+} from 'craft-harness'
+import { SessionStoreError } from 'craft-harness'
 
 /** 使用应用连接池实现的 PostgreSQL Session Store。 */
 export class PostgresSessionStore implements SessionCatalogStore {
@@ -372,11 +372,11 @@ export class PostgresSessionStore implements SessionCatalogStore {
 ```
 
 示例中的 `AppDatabase`、`appendSessionEvents()`、`readSessionEventPage()` 和 `listSessionPage()` 由应用根据
-`pg`、Prisma、Drizzle、TypeORM 或已有数据库 Service 实现。不要让这些类型进入 CraftAgent Core。
+`pg`、Prisma、Drizzle、TypeORM 或已有数据库 Service 实现。不要让这些类型进入 craft-harness Core。
 
 ## 10. sessionMetadata、context 与多用户数据
 
-CraftAgent 当前不定义 `User`、`Role`、`Tenant` 或权限协议。`sessionMetadata` 是新 Session 的持久化 JSON
+craft-harness 当前不定义 `User`、`Role`、`Tenant` 或权限协议。`sessionMetadata` 是新 Session 的持久化 JSON
 创建信息；`context` 是每次调用的临时执行依赖。一个多用户 Runtime 通常会同时使用二者：
 
 ```ts
@@ -410,7 +410,7 @@ await agent.invoke({
 Session 事件和投影规则；不能覆盖 append-only 日志。用户名通常会变化，也可能包含个人信息，所以目录归属应使用
 稳定用户 ID，展示时查询最新用户名。只有确实需要“创建时用户名快照”时才放入 metadata。
 
-Store 把 metadata 原样保存在 CraftAgent 管理的 `metadata_json`。业务需要更多可查询字段时，不应继续修改
+Store 把 metadata 原样保存在 craft-harness 管理的 `metadata_json`。业务需要更多可查询字段时，不应继续修改
 `craft_agent_sessions`，而应建立应用自己拥有的投影表，并以完整 Session 身份关联：
 
 ```sql
@@ -428,13 +428,13 @@ CREATE INDEX craft_agent_sessions_app_user_idx
   ON app_session_catalog (owner_user_id, status);
 ```
 
-这张表的迁移、写入时机和查询方法都由应用负责，CraftAgent 无需为每个业务需求增加标准列。具体 Repository
+这张表的迁移、写入时机和查询方法都由应用负责，craft-harness 无需为每个业务需求增加标准列。具体 Repository
 或 Store 扩展还可以公开 Agent 不使用的业务方法：
 
 ```ts
 /** 应用 Store 可以在标准协议之外提供用户会话查询。 */
 class AppSessionStore implements SessionCatalogStore {
-  // append/read/list 供 CraftAgent 使用。
+  // append/read/list 供 craft-harness 使用。
 
   async listByUser(scopeId: string, userId: string) {
     // 供 Fastify、管理后台或业务 Service 使用。
@@ -473,7 +473,7 @@ Session 所有者变更、成员管理和权限判断也不应该通过 Agent �
 
 ## 11. 运行契约测试
 
-实现完成后，必须对隔离数据库运行 CraftAgent 的契约探针：
+实现完成后，必须对隔离数据库运行 craft-harness 的契约探针：
 
 ```ts
 import { assertSessionStoreContract } from '../../test/support/session-store-contract'
@@ -487,8 +487,8 @@ await assertSessionStoreContract(store, {
 探针会真实写入多个 Session，而且协议没有删除方法。测试应使用临时数据库、临时 schema、事务夹具或测试容器，
 不能连接生产库。
 
-`test/support` 是本仓库的测试支持目录，不是 CraftAgent 公共子路径。项目外开发者应将协议中的行为清单写成
-自己测试框架下的契约测试，而不是让生产代码依赖 CraftAgent 的内部测试夹具。
+`test/support` 是本仓库的测试支持目录，不是 craft-harness 公共子路径。项目外开发者应将协议中的行为清单写成
+自己测试框架下的契约测试，而不是让生产代码依赖 craft-harness 的内部测试夹具。
 
 通用探针之外，SQL Store 还应测试：
 
@@ -516,20 +516,21 @@ Turn”，同时继续保留数据库中的完整事件事实。
 - `craft_agent_sessions`
 - `craft_agent_session_events`
 
-仓库内对应文件：
+参考实现全部位于官方案例 `sample/`（库只定义协议，不绑定数据库驱动）：
 
 ```text
-database/migrations/001-create-session-log.sql
-database/migrations/002-add-session-scope-and-name.sql
-database/migrations/003-use-composite-session-identity.sql
-src/server/database/postgres.ts
-src/server/database/migrate.ts
-src/server/database/check.ts
-src/server/stores/postgres-session-store.ts
-test/postgres-session-store.contract.ts
+sample/database/migrations/001-create-session-log.sql
+sample/database/migrations/002-add-session-scope-and-name.sql
+sample/database/migrations/003-use-composite-session-identity.sql
+sample/src/server/database/postgres.ts
+sample/src/server/database/migrate.ts
+sample/src/server/database/check.ts
+sample/src/server/stores/postgres-session-store.ts
+sample/test/postgres-session-store.contract.ts
 ```
 
-先将 `.env.example` 中的数据库配置复制到被 Git 忽略的 `.env.local`，并填写本地真实密码。随后可以运行：
+先将 `sample/.env.example` 中的数据库配置复制到被 Git 忽略的 `sample/.env.local`，并填写本地真实密码。
+随后可以运行：
 
 ```bash
 pnpm db:migrate
@@ -543,7 +544,7 @@ pnpm db:test-store
 
 ### 13.1 当前实现的阅读顺序
 
-[postgres-session-store.ts](../../src/server/stores/postgres-session-store.ts) 是可运行的 `pg` 参考实现。建议按数据流
+[postgres-session-store.ts](../../sample/src/server/stores/postgres-session-store.ts) 是可运行的 `pg` 参考实现。建议按数据流
 而不是按文件行号阅读：
 
 1. 从 `read()` 观察“数据库行 → SessionEvent → 固定快照页”。
@@ -558,13 +559,13 @@ pnpm db:test-store
 
 实现过程中优先使用以下现有代码作为行为参考：
 
-- [memory-session-store.ts](../../src/craft-agent/sessions/memory-session-store.ts)：事件校验、分页结果和错误语义。
+- [memory-session-store.ts](../../src/sessions/memory-session-store.ts)：事件校验、分页结果和错误语义。
 - [session-store-contract.ts](../../test/support/session-store-contract.ts)：本仓库 Store 必须通过的内部行为断言。
 - [Session Log 协议](../standards/protocols/session-log.md)：持久化不变量。
 
 ## 14. 完成检查表
 
-- [x] Runtime 管理数据库连接池，CraftAgent 只接收 Store 对象。
+- [x] Runtime 管理数据库连接池，craft-harness 只接收 Store 对象。
 - [x] `append()` 在一个事务中完成全部写入和版本推进。
 - [x] 数据库约束保证 `(scope_id, session_id, sequence)` 与 `event_id` 唯一。
 - [x] `read()` 支持固定 `throughVersion` 分页。
@@ -572,6 +573,6 @@ pnpm db:test-store
 - [x] `scopeId` 在读写和目录查询中必填，并允许不同 scope 使用相同 sessionId。
 - [x] `sessionName` 使用独立列和索引，支持标准大小写不敏感子串搜索。
 - [x] 驱动异常被包装为 `SessionStoreError`，公开消息不泄露 SQL 和连接信息。
-- [x] 用户字段属于应用扩展，不进入 CraftAgent 用户或权限模型。
+- [x] 用户字段属于应用扩展，不进入 craft-harness 用户或权限模型。
 - [x] Store 已通过契约探针和数据库专项并发测试。
 - [x] Server Agent 显式注入持久化 Store，不依赖默认内存数据。

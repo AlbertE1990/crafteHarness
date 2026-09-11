@@ -12,7 +12,7 @@ import type {
   ModelMessage,
   SessionEvent,
   SessionEventDraft,
-} from '../../src/craft-agent/contracts'
+} from '../../src/contracts'
 import assert from 'node:assert/strict'
 import process from 'node:process'
 import {
@@ -21,7 +21,7 @@ import {
   MemorySessionStore,
   readSessionSnapshot,
   SessionStoreError,
-} from '../../src/craft-agent/sessions'
+} from '../../src/sessions'
 
 const SESSION_ID = 'learning-session-001'
 const SCOPE_ID = 'learning-scope'

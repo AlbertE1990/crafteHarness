@@ -1,7 +1,7 @@
 import type {
   ModelCompletion,
   ModelStreamChunk,
-} from '../src/craft-agent'
+} from '../src'
 import { describe, expect, it } from 'vitest'
 import { assertModelAdapterContract } from './support/model-adapter-contract'
 import {

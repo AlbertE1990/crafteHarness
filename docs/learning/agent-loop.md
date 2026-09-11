@@ -23,7 +23,7 @@
 ## 3. 模块地图
 
 ```text
-src/craft-agent/core/
+src/core/
   types.ts           # 配置、预算、事件、工具注册项和 Run 结果
   tool-registry.ts   # DefinedTool -> AgentTool 泛型擦除边界
   agent-loop.ts      # 主状态机、Session 写入和终态收口
@@ -40,13 +40,13 @@ src/craft-agent/core/
 ## 4. 最小使用示例
 
 ```ts
-import { z } from 'zod'
 import {
   AgentLoop,
   createAgentTool,
   defineTool,
   MemorySessionStore,
-} from './craft-agent'
+} from 'craft-harness'
+import { z } from 'zod'
 
 const weather = defineTool({
   name: 'weather',

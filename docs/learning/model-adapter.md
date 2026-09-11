@@ -36,22 +36,22 @@ flowchart LR
 
 ## 3. 推荐源码阅读顺序
 
-1. [`contracts/message.ts`](../../src/craft-agent/contracts/message.ts)：消息和完整工具调用。
-2. [`contracts/model-events.ts`](../../src/craft-agent/contracts/model-events.ts)：标准 chunk 和增量。
-3. [`contracts/model.ts`](../../src/craft-agent/contracts/model.ts)：请求、非流结果和 Adapter 接口。
-4. [`contracts/model-errors.ts`](../../src/craft-agent/contracts/model-errors.ts)：稳定错误分类。
-5. [`openai-compatible-model-adapter.ts`](../../src/craft-agent/adapters/openai-compatible/openai-compatible-model-adapter.ts)：
+1. [`contracts/message.ts`](../../src/contracts/message.ts)：消息和完整工具调用。
+2. [`contracts/model-events.ts`](../../src/contracts/model-events.ts)：标准 chunk 和增量。
+3. [`contracts/model.ts`](../../src/contracts/model.ts)：请求、非流结果和 Adapter 接口。
+4. [`contracts/model-errors.ts`](../../src/contracts/model-errors.ts)：稳定错误分类。
+5. [`openai-compatible-model-adapter.ts`](../../src/adapters/openai-compatible/openai-compatible-model-adapter.ts)：
    兼容请求、响应、流和错误的公共实现。
-6. [`deepseek-model-adapter.ts`](../../src/craft-agent/adapters/deepseek/deepseek-model-adapter.ts)：
+6. [`deepseek-model-adapter.ts`](../../src/adapters/deepseek/deepseek-model-adapter.ts)：
    DeepSeek 差异层。
 7. [`scripted-model-adapter.ts`](../../test/support/scripted-model-adapter.ts)：
    无网络测试实现。
-8. [`agent/agent.ts`](../../src/craft-agent/agent/agent.ts)：标准 chunk 的消费者与应用事件投影。
+8. [`agent/agent.ts`](../../src/agent/agent.ts)：标准 chunk 的消费者与应用事件投影。
 
 ## 4. “只增不减”如何工作
 
 `ModelStreamChunk` 保留 OpenAI 的 `id`、`choices`、`delta`、`finish_reason`、`usage` 等字段。
-DeepSeek 的 `reasoning_content` 和 CraftAgent 的 `provider` 是新增字段。通用兼容层负责保留标准字段、
+DeepSeek 的 `reasoning_content` 和 craft-harness 的 `provider` 是新增字段。通用兼容层负责保留标准字段、
 未知字段和 provider；DeepSeek 差异层只负责读取 `reasoning_content`。
 
 Adapter 转换 chunk 时先展开原对象，再覆盖需要标准化的字段。因此未知的新字段在运行时仍然存在；
@@ -128,11 +128,13 @@ Agent Loop 统一预算。
 
 ## 10. 从测试反推设计
 
+库测试在 `test/`，案例测试在 `sample/test/`：
+
 - [`test/openai-compatible-adapter.test.ts`](../../test/openai-compatible-adapter.test.ts)：通用映射和流错误。
 - [`test/deepseek-adapter.test.ts`](../../test/deepseek-adapter.test.ts)：请求、响应、扩展字段和错误映射。
 - [`test/model-adapter-testing.test.ts`](../../test/model-adapter-testing.test.ts)：Scripted Adapter 和契约探针。
-- [`test/agent-model-adapter.test.ts`](../../test/agent-model-adapter.test.ts)：Agent 只消费标准协议。
-- [`test/model-boundary.test.ts`](../../test/model-boundary.test.ts)：防止 SDK 类型回流 Core。
+- [`sample/test/agent-model-adapter.test.ts`](../../sample/test/agent-model-adapter.test.ts)：Agent 只消费标准协议。
+- [`test/model-boundary.test.ts`](../../test/model-boundary.test.ts)：防止 SDK 类型回流 Core，并守住库对案例的依赖方向。
 - [`test/agent-config.test.ts`](../../test/agent-config.test.ts)：统一配置根。
 
 建议练习：实现一个只使用固定 mock 响应的 Adapter，分别返回普通文本、分片工具调用和协议错误；如果

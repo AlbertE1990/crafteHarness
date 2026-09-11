@@ -19,8 +19,8 @@
 下面的 `echo` 工具没有外部能力，适合验证完整接入链路：
 
 ```ts
+import { defineTool } from 'craft-harness'
 import { z } from 'zod'
-import { defineTool } from '../craft-agent'
 
 export const echoTool = defineTool({
   name: 'echo',
@@ -41,11 +41,11 @@ export const echoTool = defineTool({
 })
 ```
 
-需要网络、数据库或其他依赖时，优先通过闭包注入。不要从 CraftAgent 获取全局 service locator。
+需要网络、数据库或其他依赖时，优先通过闭包注入。不要从 craft-harness 获取全局 service locator。
 
 ## 3. 加入应用工具注册表
 
-在 `src/server/agent-tools.ts` 中加入定义：
+在官方案例的应用工具注册表 `sample/src/server/agent-tools.ts` 中加入定义：
 
 ```ts
 export const serverTools = [
@@ -88,14 +88,18 @@ ModelAdapter，并在收到同名 Tool Call 时通过 Tool Harness 执行。
 6. 配置 Guard 时，覆盖 allow、deny、ask 以及两层合并路径。
 7. 使用运行上下文时，验证租户和用户信息能到达 Guard 与 execute。
 
-可参考 [`test/server-tools.test.ts`](../../test/server-tools.test.ts) 中的 `invokeServerTool()`。
+可参考 [`sample/test/server-tools.test.ts`](../../sample/test/server-tools.test.ts) 中的 `invokeServerTool()`。
 
 ## 5. 本地验证
 
+开发密钥只写在被 Git 忽略的 `sample/.env.local`（模板见 `sample/.env.example`）中，然后启动案例：
+
 ```powershell
-$env:DEEPSEEK_API_KEY = '你的开发密钥'
 pnpm dev
 ```
+
+该文件缺失时案例会退回宿主环境变量，因此 CI 或容器可以直接注入同名变量，不必提交任何密钥文件。
+变量清单与加载方式见 [Server Runtime 接入规范](../standards/integrations/server-runtime.md)。
 
 依次验证：
 

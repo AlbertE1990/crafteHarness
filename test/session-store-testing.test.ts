@@ -1,8 +1,8 @@
 // @vitest-environment node
 
-import type { SessionStore } from '../src/craft-agent'
+import type { SessionStore } from '../src'
 import { describe, expect, it } from 'vitest'
-import { MemorySessionStore } from '../src/craft-agent'
+import { MemorySessionStore } from '../src'
 import { assertSessionStoreContract } from './support/session-store-contract'
 
 describe('session store testing utilities', () => {

@@ -13,6 +13,7 @@ ADR 记录重要技术选择及其背景、备选方案和后果。
 - [ADR-0009：Agent 配置按使用意图减负并统一 Guard 协议](./adr-0009-agent-config-and-guard-context.md)
 - [ADR-0010：建立可搜索、可隔离的多用户 Session Catalog](./adr-0010-searchable-multi-user-session-catalog.md)
 - [ADR-0011：推理强度收敛为单轴字符串，供应商词表与模型名归部署所有](./adr-0011-single-axis-reasoning-effort.md)
+- [ADR-0012：仓库根成为发布的库，应用下移为 sample，包名改为 craft-harness](./adr-0012-package-extraction-and-naming.md)
 
 状态使用：
 

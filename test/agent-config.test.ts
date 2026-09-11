@@ -7,7 +7,7 @@ import {
   defineAgentConfig,
   defineTool,
   MemorySessionStore,
-} from '../src/craft-agent'
+} from '../src'
 import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
 /** 创建配置测试使用的最小安全工具。 */

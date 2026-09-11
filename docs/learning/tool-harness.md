@@ -1,6 +1,6 @@
 # Tool Harness：从工具定义到规范结果
 
-> 文档类型：学习指南。建议配合 `src/craft-agent/tools` 与 `test/craft-agent-tools.test.ts` 阅读。
+> 文档类型：学习指南。建议配合 `src/tools` 与 `test/tool-harness.test.ts` 阅读。
 
 ## 1. Tool Harness 是什么
 
@@ -25,7 +25,7 @@ AgentLoop 因此不需要知道每个函数的参数类型、风险规则和错�
 ## 2. 目录职责
 
 ```text
-src/craft-agent/tools/
+src/tools/
   types.ts         ToolDefinition、执行配置、ToolRunContext
   define-tool.ts   注册期校验、JSON Schema 编译、冻结
   guard.ts         Guard 输入、决定和审批端口
@@ -207,7 +207,7 @@ const execution = {
 只有规范错误明确 `retryable: true` 才会进入下一 attempt。输入错误、Guard 拒绝、审批拒绝、输出错误和
 主动取消不会重试。
 
-CraftAgent 不验证幂等性。对于创建订单等副作用操作，工具作者必须使用同一 `callId` 建立上游或数据库
+craft-harness 不验证幂等性。对于创建订单等副作用操作，工具作者必须使用同一 `callId` 建立上游或数据库
 幂等约束。
 
 ## 9. 超时与取消
@@ -274,7 +274,7 @@ tool.call.completed        attempts=3
 2. `tools/guard.ts`：理解 Guard 的封闭决定。
 3. `tools/define-tool.ts`：看注册期检查。
 4. `tools/execute-tool.ts`：沿主流程看状态机。
-5. `test/craft-agent-tools.test.ts`：用测试反推边界。
+5. `test/tool-harness.test.ts`：用测试反推边界。
 
 练习：
 

@@ -4,7 +4,7 @@
 
 ## 1. 最重要的心智模型
 
-CraftAgent 把“判断风险”和“等待用户”拆开：
+craft-harness 把“判断风险”和“等待用户”拆开：
 
 - 开发者只实现评估函数，返回 `allow`、`deny` 或 `ask`。
 - Agent 实例固定实现审批 ID、等待、超时、取消和重复提交控制。
@@ -16,12 +16,12 @@ CraftAgent 把“判断风险”和“等待用户”拆开：
 
 ## 2. 四个参与层
 
-| 层         | 负责什么                                         | 不负责什么                |
-| ---------- | ------------------------------------------------ | ------------------------- |
-| 工具定义   | Schema、metadata、局部 Guard、执行策略和业务实现 | 用户登录、页面传输        |
-| CraftAgent | 两层 Guard 合并、审批生命周期、AgentLoop         | Fastify、数据库用户表、UI |
-| Runtime    | 从可信认证结果构造 context；转发事件和决定       | 重写审批状态机            |
-| 前端/CLI   | 展示 ask/deny；提交 approvalId 与决定            | 直接执行工具              |
+| 层            | 负责什么                                         | 不负责什么                |
+| ------------- | ------------------------------------------------ | ------------------------- |
+| 工具定义      | Schema、metadata、局部 Guard、执行策略和业务实现 | 用户登录、页面传输        |
+| craft-harness | 两层 Guard 合并、审批生命周期、AgentLoop         | Fastify、数据库用户表、UI |
+| Runtime       | 从可信认证结果构造 context；转发事件和决定       | 重写审批状态机            |
+| 前端/CLI      | 展示 ask/deny；提交 approvalId 与决定            | 直接执行工具              |
 
 ## 3. 完整数据流
 
@@ -95,7 +95,7 @@ const resourceTool = defineTool({
 })
 ```
 
-`metadata` 的字段完全由应用定义。CraftAgent 只要求它是 JSON 对象，不会自动理解 `risk` 或
+`metadata` 的字段完全由应用定义。craft-harness 只要求它是 JSON 对象，不会自动理解 `risk` 或
 `capabilities`。
 
 ## 5. 用全局 Guard 判断租户、用户和环境
@@ -207,7 +207,7 @@ fastify.post('/api/chat', async (request, reply) => {
 两层都缺省不是错误，而是直接允许。这适合当前“工具由可信开发者静态注册”的阶段。需要统一部署约束时才配置
 全局 Guard，需要参数级规则时才配置工具 Guard。
 
-任一评估器抛错或返回非法决定时，CraftAgent 返回 `TOOL_GUARD_FAILED`，不会把异常降级成 allow。
+任一评估器抛错或返回非法决定时，craft-harness 返回 `TOOL_GUARD_FAILED`，不会把异常降级成 allow。
 
 ## 7. ask 以后 Agent 内部发生什么
 
@@ -343,12 +343,12 @@ const agent = new Agent<AppRunContext>({
 2. `agent/tool-guard.ts`：全局 Guard 适配与默认审批时限。
 3. `agent/tool-approval-manager.ts`：pending、超时和一次性决定。
 4. `core/agent-loop.ts`：工具失败消息如何回到下一 Model Step。
-5. Runtime 聊天与审批接口。
-6. 前端 requested/resolved/denied 事件分支。
+5. 官方案例 Runtime 的聊天与审批接口：`sample/src/server/app.ts`。
+6. 前端的 requested/resolved/denied 事件分支：`sample/src/pages/index.vue`。
 
-配套测试：
+配套测试（库测试在 `test/`，案例测试在 `sample/test/`）：
 
-- `test/craft-agent-tools.test.ts`：两层优先级和 context。
+- `test/tool-harness.test.ts`：两层优先级和 context。
 - `test/agent-facade.test.ts`：从 Agent 请求到 Guard/execute 的 context。
 - `test/tool-approval-manager.test.ts`：重复提交、超时和取消。
-- `test/server-runtime.test.ts`、`test/chat-page.test.ts`：接口与 UI。
+- `sample/test/server-runtime.test.ts`、`sample/test/chat-page.test.ts`：接口与 UI。

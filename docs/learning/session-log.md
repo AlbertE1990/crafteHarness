@@ -45,7 +45,7 @@ append-only 日志记录“发生过什么”：
 ## 4. 模块地图
 
 ```text
-src/craft-agent/
+src/
   contracts/
     session.ts                 # Event、分页、Store 接口
   sessions/
@@ -85,7 +85,7 @@ flowchart TD
 ## 6. 第一次创建 Session
 
 ```ts
-import { MemorySessionStore } from '../../src/craft-agent'
+import { MemorySessionStore } from 'craft-harness'
 
 const store = new MemorySessionStore()
 const identity = { scopeId: 'default', sessionId: 'session-1' }
@@ -166,7 +166,7 @@ Writer B 必须失败。若 Store 自动把它追加成 sequence 6，它的结�
 ## 9. 读取固定快照
 
 ```ts
-import { readSessionSnapshot } from '../../src/craft-agent'
+import { readSessionSnapshot } from 'craft-harness'
 
 const snapshot = await readSessionSnapshot(identity, store, {
   pageSize: 100,
@@ -186,7 +186,7 @@ const snapshot = await readSessionSnapshot(identity, store, {
 ## 10. 推导模型历史
 
 ```ts
-import { loadModelMessages } from '../../src/craft-agent'
+import { loadModelMessages } from 'craft-harness'
 
 const messages = await loadModelMessages(identity, store)
 ```
@@ -331,7 +331,7 @@ await assertSessionStoreContract(store, {
 ```
 
 探针会写数据且 Session Log 没有删除接口，因此应使用临时数据库、测试 schema 或可整体销毁的测试容器。
-该导入是仓库内部测试支持代码，不属于 CraftAgent 生产 API；外部实现应根据本教程和协议建立自己的测试。
+该导入是仓库内部测试支持代码，不属于 craft-harness 生产 API；外部实现应根据本教程和协议建立自己的测试。
 SQL 事务结构、远程重试和错误映射要求见[Session Log 协议](../standards/protocols/session-log.md)。数据库表、
 固定快照查询、用户 metadata 扩展和无数据库调试步骤见
 [持久化 SessionStore 教程](./persistent-session-store.md)。

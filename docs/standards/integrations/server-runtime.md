@@ -4,23 +4,35 @@
 
 ## 1. 范围
 
-当前 Fastify 服务只是 CraftAgent 的一个 Node Runtime，用于真实模型和前端联调。HTTP 路由与展示字段不是
-CraftAgent 公共协议，不需要复制到产品学习文档中。
+本文描述的是**官方案例应用** `sample/` 里的 Fastify Runtime：它是 `sample/src/server/` 的组装示范，演示一个
+真实宿主如何持有 Agent、连接池、传输层和前端。它**不是库的一部分**，不随 `craft-harness` 包发布，
+HTTP 路由与展示字段也不属于 craft-harness 公共协议，不需要复制到产品学习文档中。
+
+因此本文的路径都可以被替换：任何 CLI、Worker 或其他框架的 Runtime 只要遵守同样的组装规则即可。库自身的
+分层与发布边界见[总体架构](../architecture.md)。
 
 ## 2. 文件职责
 
-| 文件                         | 职责                                               |
-| ---------------------------- | -------------------------------------------------- |
-| `src/server/index.ts`        | 读取环境变量、构造 Agent、启动监听                 |
-| `src/server/model-config.ts` | 校验并归一化 DeepSeek 部署配置（模型名、推理等级） |
-| `src/server/agent-tools.ts`  | 定义并静态注册当前应用的第一方工具                 |
-| `src/server/app.ts`          | Fastify 路由、SSE/JSON 传输、断开取消和展示投影    |
-| `src/server/database/*`      | PostgreSQL Runtime 配置、迁移和连通性检查          |
-| `src/server/stores/*`        | 应用 Store；当前 Runtime 使用 PostgreSQL 实现      |
-| `src/craft-agent/agent/*`    | 与传输无关的 Agent 门面、配置、事件和 Session API  |
+案例应用一侧（`sample/`，库的使用者）：
 
-过渡的 `src/server/agent.ts` 与 `src/server/agent-config.ts` 已删除。模型循环、会话目录和通用输出不应再次
-在 Server 中实现。
+| 文件                                | 职责                                               |
+| ----------------------------------- | -------------------------------------------------- |
+| `sample/src/server/index.ts`        | 读取环境变量、构造 Agent、启动监听                 |
+| `sample/src/server/model-config.ts` | 校验并归一化 DeepSeek 部署配置（模型名、推理等级） |
+| `sample/src/server/agent-tools.ts`  | 定义并静态注册当前应用的第一方工具                 |
+| `sample/src/server/app.ts`          | Fastify 路由、SSE/JSON 传输、断开取消和展示投影    |
+| `sample/src/server/database/*`      | PostgreSQL Runtime 配置、迁移和连通性检查          |
+| `sample/src/server/stores/*`        | 应用 Store；当前 Runtime 使用 PostgreSQL 实现      |
+
+库一侧（`src/`，案例通过相对路径导入）：
+
+| 文件           | 职责                                                                    |
+| -------------- | ----------------------------------------------------------------------- |
+| `src/agent/*`  | 与传输无关的 Agent 门面、配置、事件和 Session API                       |
+| `src/index.ts` | 库的根入口；案例用相对路径导入（`sample/src/**` 下写作 `../../../src`） |
+
+过渡的 `sample/src/server/agent.ts` 与 `sample/src/server/agent-config.ts` 已删除。模型循环、会话目录和通用
+输出不应再次在 Server 中实现。
 
 ## 3. 组装规则
 
@@ -46,23 +58,35 @@ const agent = new Agent({
 const app = createServerApp({ agent })
 ```
 
-- 环境变量只在 Runtime 启动边界读取，CraftAgent 不读取 `process.env`。
+- 环境变量只在 Runtime 启动边界读取，craft-harness 不读取 `process.env`。
 - 一个进程复用一个 Agent；当前 Server 显式注入 PostgreSQL Store，进程重启后由数据库恢复 Session。
-- 连接池由 Runtime 创建和关闭，不能进入 CraftAgent Core，也不能由 Store 模块在 import 时隐式创建。
+- 连接池由 Runtime 创建和关闭，不能进入 craft-harness Core，也不能由 Store 模块在 import 时隐式创建。
 - `get_current_time` 和 `calculator` 由 Agent 自动装载，不进入 Server 工具注册表。
 - 应用工具使用 `defineTool()`，可直接组成普通只读数组并通过 `tools.additional` 追加；Agent 负责归一化。
 - Runtime 只实现 `tools.guard(request)` 的业务风险规则；pending 审批、超时和重复提交由 Agent 管理。
 - 当前风险规则只适用于代码仓库内受信第一方工具，不代表第三方插件安全边界。
 
-Runtime 环境变量集中在 `.env.local`（模板见 `.env.example`）：
+Runtime 环境变量集中在 `sample/.env.local`（模板见 `sample/.env.example`，从仓库根执行 `pnpm dev:server`
+时由案例自己加载）：
 
-| 变量                         | 必填 | 含义                                                                                                     |
-| ---------------------------- | ---- | -------------------------------------------------------------------------------------------------------- |
-| `DEEPSEEK_API_KEY`           | 是   | 模型凭据                                                                                                 |
-| `DEEPSEEK_MODEL`             | 是   | 模型名；缺失时在启动阶段报错，不回退到任何内置默认模型名                                                 |
-| `DEEPSEEK_BASE_URL`          | 否   | 默认 `https://api.deepseek.com`                                                                          |
-| `DEEPSEEK_REASONING_EFFORT`  | 否   | 部署默认等级：`off` 或供应商等级（如 `low`/`high`/`max`）；留空或未设置表示不下发该参数                  |
-| `DEEPSEEK_REASONING_EFFORTS` | 否   | 逗号分隔的候选等级；未设置时默认 `off,low,high,max`，留空表示前端退化为自由输入，非空时 `off` 固定在最前 |
+| 变量                            | 必填 | 含义                                                                                                     |
+| ------------------------------- | ---- | -------------------------------------------------------------------------------------------------------- |
+| `DEEPSEEK_API_KEY`              | 是   | 模型凭据                                                                                                 |
+| `DEEPSEEK_MODEL`                | 是   | 模型名；缺失时在启动阶段报错，不回退到任何内置默认模型名                                                 |
+| `DEEPSEEK_BASE_URL`             | 否   | 默认 `https://api.deepseek.com`                                                                          |
+| `DEEPSEEK_REASONING_EFFORT`     | 否   | 部署默认等级：`off` 或供应商等级（如 `low`/`high`/`max`）；留空或未设置表示不下发该参数                  |
+| `DEEPSEEK_REASONING_EFFORTS`    | 否   | 逗号分隔的候选等级；未设置时默认 `off,low,high,max`，留空表示前端退化为自由输入，非空时 `off` 固定在最前 |
+| `CRAFT_AGENT_DATABASE_URL`      | 是   | PostgreSQL 连接串；缺失时启动报错                                                                        |
+| `CRAFT_AGENT_DATABASE_POOL_MAX` | 否   | 连接池上限，默认 10，必须是正整数                                                                        |
+| `CRAFT_AGENT_DATABASE_SSL`      | 否   | 只接受 `true`/`false`，默认 `false`                                                                      |
+| `PORT`                          | 否   | HTTP 监听端口，默认 3000                                                                                 |
+
+配置文件的位置由**相对模块定位**决定，而不是当前工作目录：`sample/src/server/index.ts` 用
+`new URL('../../.env.local', import.meta.url)` 解析出 `sample/.env.local`，因此无论从仓库根执行 `pnpm dev`
+还是直接运行 `tsx sample/src/server/index.ts`，读到的都是同一份配置。文件不存在时跳过加载，继续使用宿主
+环境变量，方便容器和 CI 直接注入；`sample/.env.local` 被 Git 忽略，仓库里只提交不含真实密码的
+`sample/.env.example`。
+库本身仍然不读取 `process.env`。
 
 `DEEPSEEK_REASONING_EFFORT` 是唯一的推理开关，解析时先 trim 再小写归一，设置时必须落在非空的
 `DEEPSEEK_REASONING_EFFORTS` 列表内。旧的 `DEEPSEEK_THINKING` 已删除：它原先判断
@@ -71,7 +95,7 @@ Runtime 环境变量集中在 `.env.local`（模板见 `.env.example`）：
 
 `DEEPSEEK_REASONING_EFFORTS` 的职责只有两件事：（a）启动期校验部署自己的默认等级，（b）驱动前端下拉。
 它**不校验单次请求**——请求等级由供应商最终裁定，否则运维漏更新一个等级就会让合法请求失败，正是库层要
-消除的“过期枚举 fail closed”问题。核心原则是：**换模型或增删推理等级 = 改 `.env.local` + 重启**，不需要
+消除的“过期枚举 fail closed”问题。核心原则是：**换模型或增删推理等级 = 改 `sample/.env.local` + 重启**，不需要
 改库，也不需要改前端代码。
 
 ## 4. 请求与取消
@@ -117,7 +141,7 @@ fail-closed 为本次工具失败并交回 AgentLoop；需要审批卡片时必�
 
 会话列表调用 `agent.listSessions({ scopeId })`，只返回 `id/name/createAt` 摘要；进入某个会话后再通过
 `agent.getSession({ scopeId, sessionId })` 读取详情。标题在创建 Session 时写入标准 `sessionName`，`displayHistory` 只在详情路由中
-从通用 ModelMessage 投影，不写入 CraftAgent Session 协议，也不维护第二份会话 ID Map。
+从通用 ModelMessage 投影，不写入 craft-harness Session 协议，也不维护第二份会话 ID Map。
 
 完整调试轨迹可立即通过 `onTrace` 观察；轨迹的持久化、脱敏和分页 HTTP 查询仍属于下一阶段。
 
@@ -140,9 +164,11 @@ fail-closed 为本次工具失败并交回 AgentLoop；需要审批卡片时必�
 - `reasoningEfforts` 是下拉候选列表，来自 `DEEPSEEK_REASONING_EFFORTS`：未设置时为 `off,low,high,max`，
   显式留空时为 `[]`，此时前端退化为自由文本输入。
 - 该列表只服务下拉与启动期自查，**不校验单次请求**；请求中的等级原样进入模型请求，由供应商裁定。
-- 前端下拉由此渲染，不再硬编码任何供应商词表。此前 [`src/pages/index.vue`](../../../src/pages/index.vue)
+- 前端下拉由此渲染，不再硬编码任何供应商词表。此前
+  [`sample/src/pages/index.vue`](../../../sample/src/pages/index.vue)
   写死 `none/minimal/low/medium/high/xhigh/max`——多家供应商词表的并集，是最易腐化的地方。
 - 端点只暴露部署元数据，不暴露密钥；`provider` 与 `model` 与 Agent 配置同源，不维护第二份模型配置。
 
-推理等级词表归部署所有，模型名也归部署所有：库和前端都不再内置词表，增删等级或换模型只改 `.env.local`
-并重启。这与 [模型 Adapter 协议](../protocols/model-adapter.md)中“开放字符串由 Adapter 原样透传”的分工一致。
+推理等级词表归部署所有，模型名也归部署所有：库和前端都不再内置词表，增删等级或换模型只改
+`sample/.env.local` 并重启。这与 [模型 Adapter 协议](../protocols/model-adapter.md)中“开放字符串由 Adapter
+原样透传”的分工一致。

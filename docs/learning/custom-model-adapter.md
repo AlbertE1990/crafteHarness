@@ -34,7 +34,7 @@ reasoning 和消息差异已经由官方 Adapter 处理。
 
 不要根据 `provider` 名称在通用基类中增加条件分支。`provider` 只是诊断身份，不参与 Adapter 选择；
 一个差异只属于某个供应商时，就留在对应目录。
-可参考 `src/craft-agent/adapters/deepseek/deepseek-model-adapter.ts`。
+可参考 `src/adapters/deepseek/deepseek-model-adapter.ts`。
 
 ## 3. 非兼容协议的最小实现
 
@@ -74,7 +74,7 @@ const agent = new Agent({ model: adapter })
 
 ## 5. 无网络测试
 
-CraftAgent 仓库测试 Agent 行为时使用位于 `test/support` 的 `ScriptedModelAdapter`：
+craft-harness 仓库测试 Agent 行为时使用位于 `test/support` 的 `ScriptedModelAdapter`：
 
 ```ts
 const adapter = new ScriptedModelAdapter({
@@ -93,7 +93,7 @@ const result = await assertModelAdapterContract(adapter)
 契约探针会分别调用一次 `complete()` 和 `stream()`，因此客户端替身必须准备两次响应。它只检查公共
 骨架、异步迭代和 provider 一致性；供应商专属 reasoning、请求扩展和错误映射仍要单独断言。
 
-这两个工具是仓库内部测试夹具，不属于 `craft-agent` 的生产导出。项目外开发者应依据
+这两个工具是仓库内部测试夹具，不属于 `craft-harness` 的生产导出。项目外开发者应依据
 [ModelAdapter 协议](../standards/protocols/model-adapter.md)在自己的测试目录实现同等断言。
 
 ## 6. 提交前检查
