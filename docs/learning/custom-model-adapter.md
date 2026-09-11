@@ -7,23 +7,25 @@
 如果服务支持 OpenAI Chat Completions，通常不需要编写 Adapter：
 
 ```ts
+import Agent from 'craft-harness'
+import { OpenAICompatibleAdapter } from 'craft-harness/adapters'
+
 const agent = new Agent({
-  model: {
+  adapter: new OpenAICompatibleAdapter({
     provider: 'my-provider',
     apiKey: process.env.MY_PROVIDER_API_KEY!,
     baseURL: 'https://example.com/v1',
-    model: 'my-model',
-  },
+  }),
+  model: { id: 'my-model' },
 })
 ```
 
-不填写 `adapter` 时默认使用 OpenAI Compatible。DeepSeek 使用 `adapter: 'deepseek'`，其 thinking、
-reasoning 和消息差异已经由官方 Adapter 处理。
+DeepSeek 使用显式导入的 `DeepSeekAdapter`，其 thinking、reasoning 和消息差异已经由官方实现处理。
 只有服务不是 Chat Completions 兼容，或者兼容接口存在无法用配置表达的差异时，才新增 Adapter。
 
 ## 2. OpenAI 兼容供应商的差异层
 
-兼容供应商可以继承 `OpenAICompatibleModelAdapter`，只覆盖必要的 protected 模板方法：
+兼容供应商可以继承 `OpenAICompatibleAdapter`，只覆盖必要的 protected 模板方法：
 
 - `toMessage()`：角色或 reasoning 回放差异。
 - `createBaseParams()`：请求字段或 token 参数差异。
@@ -43,10 +45,9 @@ reasoning 和消息差异已经由官方 Adapter 处理。
 ```ts
 class NativeModelAdapter implements ModelAdapter {
   readonly provider = 'native-provider'
-  readonly model = 'native-model'
 
   async complete(request, options) {
-    // 1. 将 ModelRequest 转换成供应商请求。
+    // 1. 将 request.model 与其余 ModelRequest 转换成供应商请求。
     // 2. 传递 options.signal。
     // 3. 将结果转换成 ModelCompletion。
   }
@@ -66,11 +67,15 @@ class NativeModelAdapter implements ModelAdapter {
 
 ```ts
 const adapter = new NativeModelAdapter()
-const agent = new Agent({ model: adapter })
+const agent = new Agent({
+  adapter,
+  model: { id: 'native-model' },
+})
 ```
 
-当一个 Adapter 被项目正式支持后，再为 `AgentModelInput` 增加命名分支和默认值。模型配置仍留在
-`AgentConfigInput`，不能在 Adapter、Agent 和环境变量读取代码中维护三份默认值。
+当一个 Adapter 被项目正式支持后，只需从 `craft-harness/adapters` 导出它，不为 `AgentConfigInput`
+增加命名分支或全局注册项。Adapter 构造参数只保存连接和协议配置；默认模型选择始终留在 Agent 的
+`model`，单次切换留在请求的 `model`。
 
 ## 5. 无网络测试
 
@@ -99,7 +104,7 @@ const result = await assertModelAdapterContract(adapter)
 ## 6. 提交前检查
 
 - contracts、core、sessions、tools 与 builtins 没有导入供应商 SDK。
-- provider、model 和标准对象身份非空。
+- provider、`ModelRequest.model` 和标准对象身份非空。
 - `AbortSignal` 同时覆盖请求创建和流迭代。
 - 标准字段与未知扩展字段没有被静默删除。
 - 工具调用可按 index 跨 chunk 拼装。

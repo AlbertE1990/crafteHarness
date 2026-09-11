@@ -4,7 +4,6 @@ export { Agent, Agent as default, DEFAULT_TOOL_APPROVAL_TIMEOUT_MS, defineAgentC
 export type {
   AgentConfigInput,
   AgentExecutionConfig,
-  AgentModelInput,
   AgentObservabilityConfig,
   AgentOutputEvent,
   AgentRequest,
@@ -13,14 +12,12 @@ export type {
   AgentToolInput,
   AgentToolsCommonConfig,
   AgentToolsInput,
-  DeepSeekAgentModelConfig,
   DefinedAgentConfig,
   DefinedAgentExecutionConfig,
   DefinedAgentObservabilityConfig,
   DefinedAgentToolsConfig,
   ExtendAgentToolsConfig,
   GetAgentSessionRequest,
-  OpenAICompatibleAgentModelConfig,
   ReplaceAgentToolsConfig,
   ResolveToolApprovalRequest,
   ResolveToolApprovalResult,
@@ -34,20 +31,6 @@ export type {
   ToolGuardRequest,
   ToolGuardToolInfo,
 } from './agent'
-export {
-  builtinToolNames,
-  createCalculatorTool,
-  createCurrentTimeTool,
-  createWorkspaceTools,
-} from './builtins'
-/** 内置工具的配置和稳定名称类型。 */
-export type {
-  BuiltinToolName,
-  CalculatorOperation,
-  Clock,
-  CurrentTimeToolOptions,
-  WorkspaceToolsOptions,
-} from './builtins'
 export { ModelError } from './contracts'
 /** 供应商无关的模型、消息和 Session 持久化协议。 */
 export type {
@@ -73,6 +56,7 @@ export type {
   ModelMessage,
   ModelMessageRole,
   ModelRequest,
+  ModelSelection,
   ModelStreamChoice,
   ModelStreamChunk,
   ModelTokenUsage,
@@ -102,9 +86,7 @@ export type {
   SessionTurnFailedEventDraft,
   SessionTurnStartedEventDraft,
 } from './contracts'
-
 export { AgentLoop, createAgentTool, createAgentToolMap } from './core'
-
 /** 直接使用 AgentLoop 时所需的高级协议。 */
 export type {
   AgentEvent,
@@ -175,6 +157,22 @@ export type {
   ToolRetryPolicy,
   ToolRunContext,
 } from './tools'
+
+export {
+  builtinToolNames,
+  createCalculatorTool,
+  createCurrentTimeTool,
+  createWorkspaceTools,
+} from './tools/builtins'
+
+/** 内置工具的配置和稳定名称类型。 */
+export type {
+  BuiltinToolName,
+  CalculatorOperation,
+  Clock,
+  CurrentTimeToolOptions,
+  WorkspaceToolsOptions,
+} from './tools/builtins'
 
 /** 可安全跨网络、日志和持久层传递的 JSON 类型。 */
 export type { JsonObject, JsonPrimitive, JsonSchema, JsonValue } from './types/json'

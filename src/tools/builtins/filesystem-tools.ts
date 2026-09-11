@@ -2,7 +2,8 @@ import type { WorkspaceRuntime } from './workspace'
 import { Buffer } from 'node:buffer'
 import { stat } from 'node:fs/promises'
 import { z } from 'zod'
-import { defineTool, ToolError } from '../tools'
+import { defineTool } from '../define-tool'
+import { ToolError } from '../errors'
 import { fileSystemError, pathExists, readWorkspaceText, writeWorkspaceTextAtomically } from './workspace'
 
 const workspacePathSchema = z.string().min(1).max(4_096)

@@ -1,12 +1,6 @@
 import type {
-  DeepSeekModelAdapterConfig,
-} from '../adapters/deepseek'
-import type {
-  OpenAICompatibleModelAdapterConfig,
-} from '../adapters/openai-compatible'
-import type { BuiltinToolName } from '../builtins/registry'
-import type {
   ModelAdapter,
+  ModelSelection,
   SessionStore,
 } from '../contracts'
 import type {
@@ -18,42 +12,14 @@ import type {
   ToolEventListener,
   ToolGuardEvaluator,
 } from '../tools'
+import type { BuiltinToolName } from '../tools/builtins/registry'
 import type { AgentToolInput } from './normalize-tools'
-import { DeepSeekModelAdapter } from '../adapters/deepseek'
-import { OpenAICompatibleModelAdapter } from '../adapters/openai-compatible'
-import { builtinToolNames, createBuiltinTools } from '../builtins/registry'
-import { normalizeReasoningEffort } from '../core'
+import { normalizeModelId, normalizeReasoningEffort } from '../core'
 import { createLimits } from '../core/stop-policy'
 import { MemorySessionStore } from '../sessions'
+import { builtinToolNames, createBuiltinTools } from '../tools/builtins/registry'
 import { normalizeAgentToolDefinitions } from './normalize-tools'
 import { defineToolGuardConfig } from './tool-guard'
-
-/** 使用内置 DeepSeek Adapter 时需要的声明式配置。 */
-export interface DeepSeekAgentModelConfig extends DeepSeekModelAdapterConfig {
-  /** DeepSeek 存在 thinking、reasoning 和消息回放差异，因此需要显式选择专属差异层。 */
-  readonly adapter: 'deepseek'
-  readonly apiKey: string
-  /** 模型名属于部署配置；库不内置会过期的默认模型名。 */
-  readonly model: string
-}
-
-/**
- * 使用任意 OpenAI Chat Completions 兼容服务时需要的声明式配置。
- *
- * 这是声明式模型配置的默认分支；普通兼容供应商无需填写 adapter 或实现 ModelAdapter。
- */
-export interface OpenAICompatibleAgentModelConfig
-  extends Omit<OpenAICompatibleModelAdapterConfig, 'provider'> {
-  readonly adapter?: 'openai-compatible'
-  /** 写入模型事件的真实供应商名称，默认 `openai`。 */
-  readonly provider?: string
-}
-
-/** Agent 支持内置模型配置，也允许直接传入自定义 ModelAdapter。 */
-export type AgentModelInput
-  = | DeepSeekAgentModelConfig
-    | OpenAICompatibleAgentModelConfig
-    | ModelAdapter
 
 /** 两种工具集合模式共用的全局 Guard 和审批设置。 */
 export interface AgentToolsCommonConfig<TContext = undefined> {
@@ -67,7 +33,7 @@ export interface AgentToolsCommonConfig<TContext = undefined> {
 export interface ExtendAgentToolsConfig<TContext = undefined>
   extends AgentToolsCommonConfig<TContext> {
   readonly mode?: 'extend'
-  /** 文件、搜索和终端内置工具的工作区边界，默认创建 Agent 时的 process.cwd()。 */
+  /** 文件、搜索和终端内置工具的工作区边界；省略时不装载这些工作区工具。 */
   readonly workspaceRoot?: string
   readonly disabledBuiltins?: readonly BuiltinToolName[]
   readonly overrides?: Readonly<Partial<Record<BuiltinToolName, AgentToolInput<TContext>>>>
@@ -92,15 +58,8 @@ export interface ReplaceAgentToolsConfig<TContext = undefined>
 export type AgentToolsInput<TContext = undefined>
   = ExtendAgentToolsConfig<TContext> | ReplaceAgentToolsConfig<TContext>
 
-/** AgentLoop 的模型调用方式、预算和确定性运行基础设施。 */
+/** AgentLoop 的预算和确定性运行基础设施。 */
 export interface AgentExecutionConfig {
-  /**
-   * 所有请求默认采用的推理等级；AgentRequest.reasoningEffort 可以按次覆盖。
-   *
-   * `'off'` 表示默认关闭推理，其他非空字符串是供应商定义的等级；省略时不下发
-   * 任何推理参数，由供应商或模型自身默认值决定。
-   */
-  readonly reasoningEffort?: string
   /** 单次 Run 的模型步数、工具调用数、耗时和 Token 预算。 */
   readonly limits?: Partial<AgentLoopLimits>
   /** 测试或宿主环境可注入的时钟。 */
@@ -117,10 +76,13 @@ export interface AgentObservabilityConfig {
 
 /** 创建 CraftAgent 时由开发者提供的单一配置根。 */
 export interface AgentConfigInput<TContext = undefined> {
-  readonly model: AgentModelInput
+  /** 处理供应商连接、鉴权和线协议，不绑定具体模型。 */
+  readonly adapter: ModelAdapter
+  /** 默认模型选择；请求级 model 会整体替换它。 */
+  readonly model: ModelSelection
   /** Agent 的系统指令，不属于模型供应商连接配置。 */
   readonly systemPrompt?: string
-  /** 未配置时自动装载全部内置工具。 */
+  /** 未配置时自动装载不依赖工作区的内置工具。 */
   readonly tools?: AgentToolsInput<TContext>
   /** 默认使用 MemorySessionStore；生产环境可直接注入持久化实现。 */
   readonly sessionStore?: SessionStore
@@ -139,7 +101,6 @@ export interface DefinedAgentToolsConfig<TContext = undefined> {
 
 /** defineAgentConfig() 归一化后的执行配置。 */
 export interface DefinedAgentExecutionConfig {
-  readonly reasoningEffort?: string
   readonly limits: AgentLoopLimits
   readonly now: () => Date
 }
@@ -152,7 +113,8 @@ export interface DefinedAgentObservabilityConfig {
 
 /** defineAgentConfig() 返回的已归一化、只读配置。 */
 export interface DefinedAgentConfig<TContext = undefined> {
-  readonly model: ModelAdapter
+  readonly adapter: ModelAdapter
+  readonly model: Readonly<ModelSelection>
   readonly tools: DefinedAgentToolsConfig<TContext>
   readonly systemPrompt?: string
   readonly sessionStore: SessionStore
@@ -173,12 +135,12 @@ export function defineAgentConfig<TContext = undefined>(
     throw new TypeError('Agent 配置必须是对象')
   assertKnownConfigFields(
     input,
-    ['model', 'systemPrompt', 'tools', 'sessionStore', 'execution', 'observability'],
+    ['adapter', 'model', 'systemPrompt', 'tools', 'sessionStore', 'execution', 'observability'],
     'Agent config',
   )
   assertOptionalConfigGroup(input.execution, 'execution')
   assertOptionalConfigGroup(input.observability, 'observability')
-  assertKnownConfigFields(input.execution, ['reasoningEffort', 'limits', 'now'], 'Agent config.execution')
+  assertKnownConfigFields(input.execution, ['limits', 'now'], 'Agent config.execution')
   assertKnownConfigFields(
     input.observability,
     ['onToolEvent', 'onTrace'],
@@ -201,15 +163,10 @@ export function defineAgentConfig<TContext = undefined>(
     throw new TypeError('Agent config.observability.onTrace 必须是函数')
   }
 
-  const model = createModelAdapter(input.model)
+  validateModelAdapter(input.adapter)
+  const model = defineModelSelection(input.model, 'Agent config.model')
   const registeredTools = createTools<TContext>(input.tools)
   const limits = createLimits(input.execution?.limits)
-  const reasoningEffort = input.execution?.reasoningEffort === undefined
-    ? undefined
-    : normalizeReasoningEffort(
-        input.execution.reasoningEffort,
-        'Agent config.execution.reasoningEffort',
-      )
   const guardConfig = defineToolGuardConfig(
     input.tools?.guard,
     input.tools?.approvalTimeoutMs,
@@ -222,7 +179,6 @@ export function defineAgentConfig<TContext = undefined>(
     approvalTimeoutMs: guardConfig.approvalTimeoutMs,
   })
   const execution = Object.freeze({
-    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     limits,
     now,
   })
@@ -236,6 +192,7 @@ export function defineAgentConfig<TContext = undefined>(
   })
 
   return Object.freeze({
+    adapter: input.adapter,
     model,
     tools,
     ...(systemPrompt ? { systemPrompt } : {}),
@@ -427,64 +384,27 @@ function freezeUniqueTools<TContext>(
   return Object.freeze([...tools])
 }
 
-/** 将声明式供应商配置或自定义实现统一转换为 ModelAdapter。 */
-function createModelAdapter(input: AgentModelInput): ModelAdapter {
-  if (typeof input !== 'object' || input === null)
-    throw new TypeError('Agent config.model 必须是模型配置或 ModelAdapter')
-  if (isModelAdapter(input)) {
-    validateModelAdapter(input)
-    return input
-  }
-
-  const config = input as DeepSeekAgentModelConfig | OpenAICompatibleAgentModelConfig
-  if (config.adapter === 'deepseek') {
-    assertKnownConfigFields(
-      config,
-      ['adapter', 'apiKey', 'baseURL', 'model'],
-      'Agent config.model',
-    )
-    return new DeepSeekModelAdapter({
-      apiKey: config.apiKey,
-      model: config.model,
-      ...(config.baseURL ? { baseURL: config.baseURL } : {}),
-    })
-  }
-  if (config.adapter !== undefined && config.adapter !== 'openai-compatible')
-    throw new TypeError(`不支持的 Agent model adapter：${String(config.adapter)}`)
-
-  if (config.adapter === undefined
-    && (config.provider === 'deepseek' || config.provider === 'openai-compatible')) {
-    throw new TypeError(
-      `Agent config.model.provider 只表示真实供应商；请选择 adapter: '${config.provider}'`,
-    )
-  }
-  assertKnownConfigFields(
-    config,
-    ['adapter', 'provider', 'apiKey', 'baseURL', 'model'],
-    'Agent config.model',
-  )
-  return new OpenAICompatibleModelAdapter({
-    apiKey: config.apiKey,
-    model: config.model,
-    ...(config.baseURL ? { baseURL: config.baseURL } : {}),
-    ...(config.provider ? { provider: config.provider } : {}),
+/** 归一化模型选择；配置与请求使用同一形状。 */
+function defineModelSelection(input: ModelSelection, path: string): Readonly<ModelSelection> {
+  if (typeof input !== 'object' || input === null || Array.isArray(input))
+    throw new TypeError(`${path} 必须是模型选择对象`)
+  assertKnownConfigFields(input, ['id', 'reasoningEffort'], path)
+  const id = normalizeModelId(input.id, `${path}.id`)
+  const reasoningEffort = input.reasoningEffort === undefined
+    ? undefined
+    : normalizeReasoningEffort(input.reasoningEffort, `${path}.reasoningEffort`)
+  return Object.freeze({
+    id,
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
   })
 }
 
-/** 使用行为字段而非 adapter/provider 名称识别直接传入的自定义 Adapter。 */
-function isModelAdapter(input: AgentModelInput): input is ModelAdapter {
-  return typeof (input as ModelAdapter).complete === 'function'
-    && typeof (input as ModelAdapter).stream === 'function'
-}
-
-/** 在 AgentLoop 启动前检查自定义 Adapter 的最小稳定身份。 */
+/** 在 AgentLoop 启动前检查 Adapter 的最小稳定身份。 */
 function validateModelAdapter(adapter: ModelAdapter): void {
-  if (typeof adapter.provider !== 'string'
-    || typeof adapter.model !== 'string'
-    || !adapter.provider.trim()
-    || !adapter.model.trim()) {
-    throw new TypeError('ModelAdapter 的 provider 和 model 不能为空')
-  }
+  if (typeof adapter !== 'object' || adapter === null)
+    throw new TypeError('Agent config.adapter 必须实现 ModelAdapter')
+  if (typeof adapter.provider !== 'string' || !adapter.provider.trim())
+    throw new TypeError('ModelAdapter 的 provider 不能为空')
   if (typeof adapter.complete !== 'function' || typeof adapter.stream !== 'function')
     throw new TypeError('ModelAdapter 必须实现 complete() 和 stream()')
 }

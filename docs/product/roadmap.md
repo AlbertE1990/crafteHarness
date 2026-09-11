@@ -400,7 +400,20 @@ flowchart LR
 详细交付见[Delivery 020](./deliveries/delivery-020-workspace-tools-and-sample-contract.md)，设计依据见
 [ADR-0013](./decisions/adr-0013-default-workspace-tools.md)。
 
-## 25. 阶段 5：轨迹持久化与查询（下一阶段）
+## 25. 阶段 4.17：模型选择与内置工具边界收口（已完成）
+
+已完成范围：
+
+- Adapter 与模型选择分离；配置和请求统一使用 `{ id, reasoningEffort? }`。
+- 请求级模型整体覆盖默认选择，同一 Agent/Adapter 可在运行时切换同协议模型。
+- 删除声明式 Adapter 联合类型，`execution` 收窄为预算和可注入时钟。
+- 内置工具归入 `src/tools/builtins`，工作区工具改为由 `workspaceRoot` 显式启用。
+
+详细交付见[Delivery 021](./deliveries/delivery-021-model-selection-and-tool-layout.md)，决策依据见
+[ADR-0014](./decisions/adr-0014-explicit-adapter-and-model-selection.md)与
+[ADR-0015](./decisions/adr-0015-opt-in-workspace-tools.md)。
+
+## 26. 阶段 5：轨迹持久化与查询（下一阶段）
 
 计划范围：
 
@@ -410,7 +423,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 craft-harness 核心协议。
 
-## 26. 阶段 6：异常诊断
+## 27. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -423,7 +436,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 27. 阶段 7：长期安全与扩展（最低优先级）
+## 28. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

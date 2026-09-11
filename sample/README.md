@@ -70,6 +70,10 @@ pnpm dev               # 在仓库根执行
 **不知道也不校验有哪些模型和等级**。目录在部署、协议形状在 Adapter，两边各自演化：供应商加一档等级时，
 改 JSON 即可生效，不需要等库发版，也不会被库里的旧枚举拒绝。
 
+Runtime 只创建一个 `DeepSeekAdapter` 和一个 `Agent`。每次请求把目录选中的 `{ id, reasoningEffort? }`
+作为 `AgentRequest.model` 传入，因此切换同一供应商下的模型不需要重建 Agent，也不需要模型到 Agent 的注册表。
+本案例没有工作区，所以不配置 `tools.workspaceRoot`；文件、搜索和终端工具不会装载。
+
 ## 环境变量
 
 这里只有**连接与部署凭据**；模型与推理能力一律走 `config/models.json`，不放进环境变量。

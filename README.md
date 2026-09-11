@@ -9,26 +9,26 @@
 pnpm add craft-harness openai zod
 ```
 
-`openai` 与 `zod` 是 peer dependency：库的根入口会静态导入两个官方 Adapter，`openai` 在导入期就需要；
-`zod` 用于 `defineTool()` 的 Schema 与内置工具，因此两者都必须安装。
+`zod` 是必需 peer dependency，用于工具 Schema。`openai` 是可选 peer dependency：只有导入
+`craft-harness/adapters` 的官方 OpenAI Compatible 或 DeepSeek Adapter 时才需要安装。
 
 ## 最短可用路径
 
 ```ts
 import Agent from 'craft-harness'
+import { DeepSeekAdapter } from 'craft-harness/adapters'
 
 const agent = new Agent({
-  model: {
-    adapter: 'deepseek',
+  adapter: new DeepSeekAdapter({
     apiKey: process.env.DEEPSEEK_API_KEY!,
-    model: process.env.DEEPSEEK_MODEL!, // 模型名属于部署配置，库不内置默认值
+  }),
+  model: {
+    id: process.env.DEEPSEEK_MODEL!, // 模型 ID 属于部署配置
+    reasoningEffort: 'high', // 'off' 关闭推理；省略则用供应商默认
   },
   systemPrompt: '你是一个可靠的助手。',
   tools: {
     workspaceRoot: process.cwd(),
-  },
-  execution: {
-    reasoningEffort: 'high', // 'off' 关闭推理；省略则用供应商默认
   },
 })
 
@@ -54,7 +54,7 @@ for await (const event of agent.stream({ scopeId: 'tenant-42', input: '讲个笑
 | ------------------ | ----------------------------------------------------------------------------------------------- |
 | 确定性 Agent Loop  | 显式预算（模型步数、工具调用数、耗时、Token）、协作式取消、封闭停止原因，不把预算耗尽伪装成异常 |
 | 工具 harness       | `defineTool()` 用 Zod 声明输入输出与执行函数；参数级 Guard + Agent 级 Guard + 交互式审批        |
-| 工作区内置工具     | 自动提供文件读写、glob/grep 与一次性终端；高风险操作默认审批，可按名称禁用或覆盖                |
+| 工作区内置工具     | 配置 `workspaceRoot` 后提供文件读写、glob/grep 与一次性终端；高风险操作默认审批                 |
 | 追加式 Session Log | 事件只追加不覆盖，消息从固定快照推导；`SessionStore` 是可替换的持久化 Port（内置内存实现）      |
 | 供应商无关模型契约 | `ModelAdapter` 是 Core 唯一依赖；官方提供 OpenAI 兼容与 DeepSeek 两个差异层                     |
 | 标准应用事件       | `AgentOutputEvent` 可被 Runtime 直接输出，不需要为前端再裁剪一套协议                            |
@@ -65,14 +65,19 @@ for await (const event of agent.stream({ scopeId: 'tenant-42', input: '讲个笑
 // 直接用 AgentLoop（跳过门面，自行组装 Store 与工具）
 import { AgentLoop, createAgentTool } from 'craft-harness'
 // 供应商 Adapter 与自定义实现
-import { DeepSeekModelAdapter, OpenAICompatibleModelAdapter } from 'craft-harness/adapters'
+import { DeepSeekAdapter, OpenAICompatibleAdapter } from 'craft-harness/adapters'
 ```
 
 任何 OpenAI Chat Completions 兼容服务都只需要改 `baseURL` 和模型名，不需要新写 Adapter：
 
 ```ts
 const agent = new Agent({
-  model: { provider: 'moonshot', apiKey: '...', baseURL: 'https://api.moonshot.cn/v1', model: 'kimi-k3' },
+  adapter: new OpenAICompatibleAdapter({
+    provider: 'moonshot',
+    apiKey: '...',
+    baseURL: 'https://api.moonshot.cn/v1',
+  }),
+  model: { id: 'kimi-k3' },
 })
 ```
 

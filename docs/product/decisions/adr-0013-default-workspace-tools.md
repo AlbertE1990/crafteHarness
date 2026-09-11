@@ -1,9 +1,10 @@
 # ADR-0013：默认提供受工作区约束的文件、搜索与终端工具
 
 - 文档类型：架构决策
-- 状态：Accepted
+- 状态：Superseded
 - 日期：2026-09-11
 - 扩展：[ADR-0006](./adr-0006-agent-default-builtin-tools.md)
+- 替代：[ADR-0015](./adr-0015-opt-in-workspace-tools.md)
 
 只有时间与计算能力的 Agent 无法完成常见仓库任务，而让每个使用者重复实现文件和命令工具会产生不一致的
 路径、审批与输出边界。因此默认新增 `read/write/edit/glob/grep/terminal`，复用现有禁用、覆盖、追加和

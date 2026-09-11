@@ -35,11 +35,10 @@ import OpenAI, {
 } from 'openai'
 import { ModelError, REASONING_OFF } from '../../contracts'
 
-/** OpenAI Compatible Adapter 的连接、诊断来源和模型配置。 */
-export interface OpenAICompatibleModelAdapterConfig {
+/** OpenAI Compatible Adapter 的连接与诊断来源配置。 */
+export interface OpenAICompatibleAdapterConfig {
   readonly apiKey: string
   readonly baseURL?: string
-  readonly model: string
   readonly provider?: string
 }
 
@@ -56,25 +55,20 @@ export type OpenAICompatibleRequestParams
  *
  * 子类只覆盖确有差异的消息、请求、响应或错误钩子；Core 不接触 SDK 类型。
  */
-export class OpenAICompatibleModelAdapter implements ModelAdapter {
+export class OpenAICompatibleAdapter implements ModelAdapter {
   readonly provider: string
-  readonly model: string
 
   private readonly client: OpenAI
 
   /** 创建兼容 Adapter；测试可以注入不访问网络的 OpenAI 客户端替身。 */
-  constructor(config: OpenAICompatibleModelAdapterConfig, client?: OpenAI) {
+  constructor(config: OpenAICompatibleAdapterConfig, client?: OpenAI) {
     const apiKey = config.apiKey.trim()
-    const model = config.model.trim()
     const provider = config.provider?.trim() || 'openai'
 
     if (!apiKey)
       throw new Error(`${provider} apiKey 不能为空`)
-    if (!model)
-      throw new Error(`${provider} model 不能为空`)
 
     this.provider = provider
-    this.model = model
     this.client = client ?? new OpenAI({
       apiKey,
       ...(config.baseURL?.trim() ? { baseURL: config.baseURL.trim() } : {}),
@@ -124,7 +118,7 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
   protected createBaseParams(request: ModelRequest): OpenAICompatibleRequestParams {
     const reasoningParams = this.createReasoningParams(request.reasoningEffort)
     return {
-      model: this.model,
+      model: request.model,
       messages: request.messages.map(message => this.toMessage(message)),
       ...(request.tools?.length
         ? { tools: request.tools.map(toOpenAICompatibleTool) }

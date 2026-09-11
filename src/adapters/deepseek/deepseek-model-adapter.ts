@@ -18,7 +18,7 @@ import {
   normalizeOpenAICompatibleChunk,
   normalizeOpenAICompatibleCompletion,
   normalizeOpenAICompatibleError,
-  OpenAICompatibleModelAdapter,
+  OpenAICompatibleAdapter,
 } from '../openai-compatible'
 
 const DEEPSEEK_PROVIDER = 'deepseek'
@@ -27,12 +27,10 @@ const DEEPSEEK_DEFAULT_BASE_URL = 'https://api.deepseek.com'
 /** DeepSeek 请求体内部使用的思考开关，不属于构造配置。 */
 type DeepSeekThinkingMode = 'enabled' | 'disabled'
 
-/** DeepSeek Chat Completions Adapter 的连接与模型配置。 */
-export interface DeepSeekModelAdapterConfig {
+/** DeepSeek Chat Completions Adapter 的连接配置。 */
+export interface DeepSeekAdapterConfig {
   readonly apiKey: string
   readonly baseURL?: string
-  /** DeepSeek 模型名由部署提供；库不内置会过期的默认模型名。 */
-  readonly model: string
 }
 
 /**
@@ -62,17 +60,16 @@ export function getDeepSeekReasoningContent(value: unknown): string {
 /**
  * DeepSeek 的官方模型 Adapter。
  *
- * 通用请求、响应、流和错误处理由 OpenAICompatibleModelAdapter 提供；本类只描述
+ * 通用请求、响应、流和错误处理由 OpenAICompatibleAdapter 提供；本类只描述
  * DeepSeek 的消息降级、token 参数和 reasoning 扩展。
  */
-export class DeepSeekModelAdapter extends OpenAICompatibleModelAdapter {
+export class DeepSeekAdapter extends OpenAICompatibleAdapter {
   /** 创建 DeepSeek 差异层；可注入客户端进行无网络契约测试。 */
-  constructor(config: DeepSeekModelAdapterConfig, client?: OpenAI) {
+  constructor(config: DeepSeekAdapterConfig, client?: OpenAI) {
     super({
       provider: DEEPSEEK_PROVIDER,
       apiKey: config.apiKey,
       baseURL: config.baseURL?.trim() || DEEPSEEK_DEFAULT_BASE_URL,
-      model: requireDeepSeekModel(config.model),
     }, client)
   }
 
@@ -155,16 +152,6 @@ export class DeepSeekModelAdapter extends OpenAICompatibleModelAdapter {
   protected override normalizeError(error: unknown): ModelError {
     return normalizeDeepSeekError(error)
   }
-}
-
-/** DeepSeek 模型名必须由部署显式提供，避免库内置一个会过期的默认值。 */
-function requireDeepSeekModel(value: unknown): string {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new Error(
-      'DeepSeek model 不能为空；模型名属于部署配置，请从环境变量或配置文件提供',
-    )
-  }
-  return value
 }
 
 /** 保留兼容 completion 字段，并标准化 DeepSeek reasoning。 */

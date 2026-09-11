@@ -24,7 +24,8 @@ function chunk(
 /** 使用确定会话 ID 创建测试 Agent，避免测试依赖随机 UUID。 */
 function createAgent(adapter: ScriptedModelAdapter): Agent {
   return new Agent({
-    model: adapter,
+    adapter,
+    model: { id: 'mock-model' },
     tools: {
       additional: serverTools,
       guard: serverToolGuard,
@@ -47,7 +48,6 @@ describe('agent runtime model adapter boundary', () => {
   it('projects standard chunks to frontend events and derives history from Session Log', async () => {
     const adapter = new ScriptedModelAdapter({
       provider: 'mock',
-      model: 'mock-model',
       script: [{
         method: 'stream',
         chunks: [
@@ -71,12 +71,6 @@ describe('agent runtime model adapter boundary', () => {
     expect(adapter.calls[0]?.request.tools?.map(tool => tool.name)).toEqual([
       'get_current_time',
       'calculator',
-      'read',
-      'write',
-      'edit',
-      'glob',
-      'grep',
-      'terminal',
       'get_user_location',
       'get_weather',
       'manage_runtime_resource',
@@ -107,7 +101,6 @@ describe('agent runtime model adapter boundary', () => {
   it('uses AgentLoop to assemble and execute fragmented tool calls', async () => {
     const adapter = new ScriptedModelAdapter({
       provider: 'mock',
-      model: 'mock-model',
       script: [
         {
           method: 'stream',
@@ -205,7 +198,6 @@ describe('agent runtime model adapter boundary', () => {
   it('projects AgentLoop protocol failures as frontend error events', async () => {
     const adapter = new ScriptedModelAdapter({
       provider: 'mock',
-      model: 'mock-model',
       script: [{
         method: 'stream',
         chunks: [chunk({

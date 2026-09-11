@@ -14,7 +14,7 @@ import {
 } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
-import { ToolError } from '../tools'
+import { ToolError } from '../errors'
 
 /** 创建工作区工具时可调整的路径与资源上限。 */
 export interface WorkspaceToolsOptions {

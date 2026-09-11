@@ -12,7 +12,8 @@ import { getTime, getUserLocation, getWeather } from '../src/server/func'
 
 /** 通过真实 Agent 配置边界把服务端原始 DefinedTool 归一化为 Harness 注册项。 */
 const registeredServerTools = defineAgentConfig({
-  model: new ScriptedModelAdapter({ script: [] }),
+  adapter: new ScriptedModelAdapter({ script: [] }),
+  model: { id: 'scripted-model' },
   tools: { mode: 'replace', tools: serverTools },
 }).tools.registered
 
@@ -72,7 +73,8 @@ describe('server tools through CraftAgent', () => {
       execute: input => input,
     })
     const [customTool] = defineAgentConfig({
-      model: new ScriptedModelAdapter({ script: [] }),
+      adapter: new ScriptedModelAdapter({ script: [] }),
+      model: { id: 'scripted-model' },
       tools: { mode: 'replace', tools: [definition] },
     }).tools.registered
     if (!customTool)

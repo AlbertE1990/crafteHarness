@@ -147,7 +147,10 @@ async function readApprovalRequest(
 
 describe('server runtime HTTP boundary', () => {
   it('serves the deployment model vocabulary so the UI never hardcodes it', async () => {
-    const agent = new Agent({ model: new ScriptedModelAdapter({ script: [] }) })
+    const agent = new Agent({
+      adapter: new ScriptedModelAdapter({ script: [] }),
+      model: { id: 'scripted-model' },
+    })
     const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
 
     try {
@@ -174,7 +177,10 @@ describe('server runtime HTTP boundary', () => {
   })
 
   it('renames and deletes conversations through the injected catalog port', async () => {
-    const agent = new Agent({ model: new ScriptedModelAdapter({ script: [] }) })
+    const agent = new Agent({
+      adapter: new ScriptedModelAdapter({ script: [] }),
+      model: { id: 'scripted-model' },
+    })
     // 端口用内存实现即可：真正的 SQL 由 postgres-session-store.contract.ts 覆盖。
     const names = new Map([['session-known', '旧名称']])
     const app = createServerApp({
@@ -245,7 +251,10 @@ describe('server runtime HTTP boundary', () => {
   })
 
   it('refuses conversation mutations when the runtime injects no catalog port', async () => {
-    const agent = new Agent({ model: new ScriptedModelAdapter({ script: [] }) })
+    const agent = new Agent({
+      adapter: new ScriptedModelAdapter({ script: [] }),
+      model: { id: 'scripted-model' },
+    })
     const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
 
     try {
@@ -269,15 +278,12 @@ describe('server runtime HTTP boundary', () => {
     }
   })
 
-  it('dispatches a chat request to the agent bound to the requested model', async () => {
-    const defaultAdapter = new ScriptedModelAdapter({
-      script: [{ method: 'complete', result: completion('默认模型回答') }],
-    })
-    const otherAdapter = new ScriptedModelAdapter({
+  it('selects the requested model on one reusable agent and adapter', async () => {
+    const adapter = new ScriptedModelAdapter({
       script: [{ method: 'complete', result: completion('其它模型回答') }],
     })
     const app = createServerApp({
-      agent: new Agent({ model: defaultAdapter }),
+      agent: new Agent({ adapter, model: { id: 'scripted-model' } }),
       model: {
         ...MODEL_INFO,
         models: [
@@ -290,9 +296,6 @@ describe('server runtime HTTP boundary', () => {
           },
         ],
       },
-      resolveAgent: model => (model === 'other-model'
-        ? new Agent({ model: otherAdapter })
-        : undefined),
       logger: false,
     })
 
@@ -304,8 +307,8 @@ describe('server runtime HTTP boundary', () => {
       })
       expect(switched.statusCode).toBe(200)
       expect(switched.json().data.content).toBe('其它模型回答')
-      expect(otherAdapter.calls).toHaveLength(1)
-      expect(defaultAdapter.calls).toHaveLength(0)
+      expect(adapter.calls).toHaveLength(1)
+      expect(adapter.calls[0]?.request.model).toBe('other-model')
 
       // 未声明的模型直接 400，不静默退回默认模型。
       const unsupported = await app.inject({
@@ -315,7 +318,7 @@ describe('server runtime HTTP boundary', () => {
       })
       expect(unsupported.statusCode).toBe(400)
       expect(unsupported.json().error).toBe('MODEL_NOT_SUPPORTED')
-      expect(defaultAdapter.calls).toHaveLength(0)
+      expect(adapter.calls).toHaveLength(1)
     }
     finally {
       await app.close()
@@ -330,7 +333,7 @@ describe('server runtime HTTP boundary', () => {
       ],
     })
     const app = createServerApp({
-      agent: new Agent({ model: adapter }),
+      agent: new Agent({ adapter, model: { id: 'scripted-model' } }),
       model: {
         ...MODEL_INFO,
         models: [
@@ -344,9 +347,6 @@ describe('server runtime HTTP boundary', () => {
           },
         ],
       },
-      resolveAgent: model => (model === 'reasoner-model'
-        ? new Agent({ model: adapter })
-        : undefined),
       logger: false,
     })
 
@@ -393,7 +393,10 @@ describe('server runtime HTTP boundary', () => {
   })
 
   it('answers the not-found path instead of awaiting the reply object', async () => {
-    const agent = new Agent({ model: new ScriptedModelAdapter({ script: [] }) })
+    const agent = new Agent({
+      adapter: new ScriptedModelAdapter({ script: [] }),
+      model: { id: 'scripted-model' },
+    })
     const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
 
     try {
@@ -414,7 +417,7 @@ describe('server runtime HTTP boundary', () => {
 
   it('rejects blank input at the HTTP boundary instead of failing inside the Agent', async () => {
     const adapter = new ScriptedModelAdapter({ script: [] })
-    const agent = new Agent({ model: adapter })
+    const agent = new Agent({ adapter, model: { id: 'scripted-model' } })
     const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
 
     try {
@@ -450,7 +453,8 @@ describe('server runtime HTTP boundary', () => {
       script: [{ method: 'complete', result: completion('JSON 回答', 'JSON 思考') }],
     })
     const agent = new Agent({
-      model: adapter,
+      adapter,
+      model: { id: 'scripted-model' },
     })
     const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
 
@@ -498,7 +502,8 @@ describe('server runtime HTTP boundary', () => {
       }],
     })
     const agent = new Agent({
-      model: adapter,
+      adapter,
+      model: { id: 'scripted-model' },
       systemPrompt: '你是一个AI助手',
       execution: {
         now: () => new Date('2026-09-08T09:00:00.000Z'),
@@ -648,7 +653,8 @@ describe('server runtime HTTP boundary', () => {
       ],
     })
     const agent = new Agent({
-      model: new ScriptedModelAdapter({ script: [] }),
+      adapter: new ScriptedModelAdapter({ script: [] }),
+      model: { id: 'scripted-model' },
       sessionStore: store,
     })
     const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
@@ -701,7 +707,8 @@ describe('server runtime HTTP boundary', () => {
       ],
     })
     const agent = new Agent({
-      model: adapter,
+      adapter,
+      model: { id: 'scripted-model' },
       execution: {
         now: () => new Date('2026-09-10T02:00:00.000Z'),
       },
@@ -787,7 +794,8 @@ describe('server runtime HTTP boundary', () => {
       ],
     })
     const agent = new Agent({
-      model: adapter,
+      adapter,
+      model: { id: 'scripted-model' },
       tools: {
         mode: 'replace',
         tools: [manageRuntimeResourceTool],
@@ -851,7 +859,8 @@ describe('server runtime HTTP boundary', () => {
       ],
     })
     const agent = new Agent({
-      model: adapter,
+      adapter,
+      model: { id: 'scripted-model' },
       tools: {
         mode: 'replace',
         tools: [manageRuntimeResourceTool],

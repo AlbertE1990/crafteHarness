@@ -6,7 +6,7 @@ import type {
 import { describe, expect, it, vi } from 'vitest'
 import {
   normalizeOpenAICompatibleCompletion,
-  OpenAICompatibleModelAdapter,
+  OpenAICompatibleAdapter,
 } from '../src/adapters/openai-compatible'
 
 function createMockClient(create: ReturnType<typeof vi.fn>): OpenAI {
@@ -57,14 +57,14 @@ describe('openAI compatible model adapter', () => {
     }
 
     const create = vi.fn().mockResolvedValue(sourceStream())
-    const adapter = new OpenAICompatibleModelAdapter({
+    const adapter = new OpenAICompatibleAdapter({
       provider: 'compatible-cloud',
       apiKey: 'test-key',
       baseURL: 'https://example.com/v1',
-      model: 'compatible-model',
     }, createMockClient(create))
 
     const stream = await adapter.stream({
+      model: 'compatible-model',
       messages: [
         { role: 'developer', content: '开发者指令' },
         { role: 'user', content: '你好' },
@@ -131,12 +131,12 @@ describe('openAI compatible model adapter', () => {
       throw new Error('socket closed during stream')
     }
 
-    const adapter = new OpenAICompatibleModelAdapter({
+    const adapter = new OpenAICompatibleAdapter({
       provider: 'compatible-cloud',
       apiKey: 'test-key',
-      model: 'compatible-model',
     }, createMockClient(vi.fn().mockResolvedValue(failingStream())))
     const stream = await adapter.stream({
+      model: 'compatible-model',
       messages: [{ role: 'user', content: '你好' }],
     })
 

@@ -12,7 +12,7 @@
 ## 2. 模块地图
 
 ```text
-src/craft-agent/agent/
+src/agent/
   types.ts                 # 请求、推理强度、输出和会话查询类型
   model-options.ts         # 推理强度的优先级解析与循环前设置构造
   config.ts                # 单一配置根与默认值归一化
@@ -28,16 +28,17 @@ src/craft-agent/agent/
 ## 3. 最短正确用法
 
 ```ts
-import Agent from 'craft-agent'
+import Agent from 'craft-harness'
+import { OpenAICompatibleAdapter } from 'craft-harness/adapters'
 
 const agent = new Agent({
-  model: {
+  adapter: new OpenAICompatibleAdapter({
     provider: 'my-provider',
     apiKey: process.env.MODEL_API_KEY!,
     baseURL: 'https://example.com/v1',
-    model: 'example-model',
-  },
-  execution: {
+  }),
+  model: {
+    id: 'example-model',
     reasoningEffort: 'high',
   },
 })
@@ -45,13 +46,13 @@ const agent = new Agent({
 const result = await agent.invoke({
   scopeId: 'default',
   input: '给出一份完整答案',
-  reasoningEffort: 'max',
+  model: { id: 'example-model', reasoningEffort: 'max' },
 }, signal)
 
 for await (const event of agent.stream({
   scopeId: 'default',
   input: '边生成边显示答案',
-  reasoningEffort: 'off',
+  model: { id: 'example-model', reasoningEffort: 'off' },
 }, signal)) {
   if (event.type === 'message.delta')
     process.stdout.write(event.delta)
@@ -78,12 +79,12 @@ for await (const event of agent.stream({
 
 ## 5. 全链路只有一根推理轴
 
-调用方只写一根轴——一个顶层字符串：
+模型 ID 与推理强度始终放在同一个模型选择对象中：
 
 ```ts
 const request = {
   input: '分析问题',
-  reasoningEffort: 'high',
+  model: { id: 'example-model', reasoningEffort: 'high' },
 }
 ```
 
@@ -91,6 +92,7 @@ Agent 在进入 Loop 前解析优先级，然后把同一个字符串原样交�
 
 ```ts
 const internalModelExecution = {
+  id: 'example-model',
   stream: true, // 由 stream() 方法确定
   reasoningEffort: 'high', // 与公开字段同名同形，不做维度转换
 }
@@ -98,8 +100,7 @@ const internalModelExecution = {
 
 规则如下：
 
-- 请求顶层 `reasoningEffort` 覆盖 `execution.reasoningEffort` 默认值；两者都未提供时不下发任何推理参数，
-  完全采用供应商或模型默认值。
+- 请求省略 `model` 时采用配置级 `model`；请求一旦提供 `model` 就整体替换，不能只换 ID 却继承旧模型等级。
 - `'off'` 是唯一保留值，表示显式关闭推理；按大小写不敏感识别（`'OFF'` 等价）并统一归一化为小写 `'off'`。
 - 其他任何非空字符串都是供应商定义的推理等级，原样透传，不做大小写转换，也不做等级白名单校验。
 - 空白字符串（如 `' '`）在配置边界报错，错误信息带字段路径（如 `Agent request.reasoningEffort 必须是非空
@@ -107,9 +108,9 @@ const internalModelExecution = {
 - 同一 Run 只归一化一次，工具调用后的后续 Step 不会改变设置。
 
 归一化实现也随之收窄：原先校验并合并两个字段的 `defineAgentModelExecutionOptions()` 已被删除，校验与保留值
-归一化统一由 Core 的 `normalizeReasoningEffort()` 负责；门面的 `resolveAgentReasoningEffort()` 只决定优先级
-（请求优先、其次部署默认值），`createAgentLoopModelExecution()` 只构造进入循环前冻结的
-`{ stream, reasoningEffort }`，两者都不再做任何维度分解。
+归一化统一由 Core 的 `normalizeReasoningEffort()` 负责；门面的 `resolveAgentModelSelection()` 只决定
+配置选择或请求整体覆盖，`createAgentLoopModelExecution()` 构造进入循环前冻结的
+`{ id, stream, reasoningEffort? }`，不做任何维度分解。
 
 旧的 `model` 分组和 `reasoningEnabled` 字段已删除，随之消失的还有“只写 effort 会隐式启用推理”和
 “关闭推理时不能同时提供 effort”两条规则：单轴形态下没有第二个字段，也就无法表达出这两种矛盾状态。
@@ -140,7 +141,8 @@ const internalModelExecution = {
 
 ```ts
 const agent = new Agent<AppContext>({
-  model,
+  adapter,
+  model: { id: 'example-model' },
   tools: {
     additional: [businessTool],
     guard: request => request.context.permissions.includes('tools:execute')
@@ -162,7 +164,7 @@ const agent = new Agent<AppContext>({
 
 1. 用 `invoke()` 发起一次完整响应，检查 Adapter 的 `complete()` 被调用。
 2. 用 `for await` 消费 `stream()`，在收到第一个事件后 `break`，观察 AbortSignal 被触发。
-3. 在 `execution.reasoningEffort` 设置默认等级，再在请求顶层用 `'off'` 覆盖它，检查 Adapter 收到的
+3. 在配置 `model.reasoningEffort` 设置默认等级，再用请求级完整 `model` 的 `'off'` 覆盖它，检查 Adapter 收到的
    `ModelRequest.reasoningEffort` 变为规范化的 `'off'`，并观察两种 Adapter 各自的关闭字段。
 4. 创建 `new Agent<AppContext>()`，让 `tools.guard` 根据 tenantId 拒绝一次工具调用。
 

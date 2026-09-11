@@ -12,6 +12,14 @@ import type { ModelStreamChunk } from './model-events'
  */
 export const REASONING_OFF = 'off'
 
+/** 一次 Agent Run 使用的模型标识与可选推理强度。 */
+export interface ModelSelection {
+  /** 供应商识别的模型 ID；展示名称应由应用自己的模型目录维护。 */
+  readonly id: string
+  /** CraftAgent 标准化的推理强度，由 Adapter 翻译成供应商字段。 */
+  readonly reasoningEffort?: string
+}
+
 /** OpenAI Chat Completions 已定义的停止原因，并允许 adapter 保留新增字符串。 */
 export type ModelFinishReason
   = | 'stop'
@@ -32,9 +40,10 @@ export interface ModelTokenUsage {
 }
 
 /**
- * 一次模型请求。模型标识和供应商连接配置归具体 Adapter，而不是每次请求。
+ * 一次模型请求。连接配置归 Adapter，模型标识和推理强度按 Run 传入。
  */
 export interface ModelRequest {
+  readonly model: string
   readonly messages: readonly ModelMessage[]
   readonly tools?: readonly ToolModelDefinition[]
   /**
@@ -86,11 +95,11 @@ export interface ModelCompletion {
 /**
  * 模型供应商适配接口。
  *
- * Core 只依赖本接口。具体 SDK、鉴权、base URL、模型名和供应商错误必须封装在实现内部。
+ * Core 只依赖本接口。具体 SDK、鉴权、base URL 和供应商错误必须封装在实现内部；模型名随
+ * ModelRequest 传入，使同一个 Adapter 可以服务多个兼容模型。
  */
 export interface ModelAdapter {
   readonly provider: string
-  readonly model: string
   complete: (
     request: ModelRequest,
     options?: ModelCallOptions,

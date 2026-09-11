@@ -4,7 +4,8 @@ import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { rgPath } from '@vscode/ripgrep'
 import { z } from 'zod'
-import { defineTool, ToolError } from '../tools'
+import { defineTool } from '../define-tool'
+import { ToolError } from '../errors'
 
 const workspacePathSchema = z.string().min(1).max(4_096)
 const MAX_CAPTURE_BYTES = 4 * 1024 * 1024

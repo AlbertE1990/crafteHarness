@@ -37,8 +37,8 @@ src/                            # 库源码：发布出去的全部内容
     agent.ts                    # 统一门面、输出投影、Session 查询
     tool-guard.ts               # 风险评估公共协议及底层策略适配
     tool-approval-manager.ts    # Agent 内部一次性审批生命周期
-    config.ts                   # defineAgentConfig 与内置模型配置
-    model-options.ts            # 推理强度优先级与循环前执行设置构造
+    config.ts                   # defineAgentConfig、Adapter 注入与默认模型选择
+    model-options.ts            # 请求级模型整体覆盖与循环前执行设置构造
     event-stream.ts             # 应用事件流的背压与消费者取消
     normalize-tools.ts          # 工具定义的内部归一化边界
     types.ts                    # 门面输入、输出与会话投影
@@ -49,7 +49,7 @@ src/                            # 库源码：发布出去的全部内容
   core/                         # AgentLoop 状态机、预算与工具注册
   sessions/                     # Store 实现与消息推导
   tools/                        # defineTool、Harness、策略、重试和错误
-  builtins/                     # 默认工具实现、名称与自动注册表
+    builtins/                   # 内置工具实现、工作区工具与自动注册表
   types/                        # JSON 基础类型
 
 sample/                         # 官方案例应用：库的使用者，不参与发布
@@ -67,8 +67,8 @@ test/                           # 库测试
 ### 2.1 发布边界
 
 - 根目录的包清单、`tsup.config.ts` 和根 `tsconfig.json` 只服务 `src/**`；`dist/` 是唯一发布产物。
-- 根 `dependencies` 为空；`openai` 与 `zod` 是 peerDependency，且都是必装项，因为根入口会静态导入官方
-  Adapter，`openai` 在导入期就需要存在。
+- `zod` 是必需 peerDependency；`openai` 是可选 peerDependency，只有使用 `./adapters` 官方实现时才需要。
+  `@vscode/ripgrep` 是工作区搜索的运行期依赖。
 - `scripts/smoke-pack.mjs`（`pnpm smoke:pack`）用 `npm pack` 产出真实 tarball，装进临时项目后按包名导入，
   验证 `exports` 映射、`files` 白名单和 `.d.ts` 是否完整；案例应用走相对路径导入，测不到这一段，所以必须
   单独冒烟。
@@ -89,7 +89,7 @@ test/                           # 库测试
 
 ### 3.1 Core
 
-`contracts`、`core`、`sessions`、`tools`、`builtins` 和 `types` 构成底层 Core。它们可以依赖 Node.js
+`contracts`、`core`、`sessions`、`tools`（含 `tools/builtins`）和 `types` 构成底层 Core。它们可以依赖 Node.js
 标准库、Zod 和自身协议，但禁止依赖：
 
 - OpenAI 或其他模型 SDK。
@@ -103,8 +103,8 @@ test/                           # 库测试
 官方 Adapter 指向 Core contracts，并负责隔离 SDK。Adapter 不能通过 craft-harness 根入口导入类型，否则根入口
 默认导出 Agent 后会形成循环依赖。
 
-`agent` 是产品便利层，可以根据声明式配置创建官方 Adapter，也可以接受开发者直接注入的 ModelAdapter。
-它不直接接触供应商 SDK 对象，且不把 Adapter 依赖反向传播到 Core。
+`agent` 是产品便利层，只接受开发者显式注入的 ModelAdapter，并将它与可按请求切换的模型选择组装起来。
+它不创建官方 Adapter，不直接接触供应商 SDK 对象，也不把 Adapter 依赖反向传播到 Core。
 
 ### 3.3 Runtime
 

@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { defineTool, ToolError } from '../tools'
+import { defineTool } from '../define-tool'
+import { ToolError } from '../errors'
 
 /** 为时间工具提供可替换时钟，使单元测试不依赖真实当前时间。 */
 export interface Clock {

@@ -5,8 +5,8 @@
 ## 1. 目标与边界
 
 ModelAdapter 把模型供应商 SDK 隔离在 craft-harness Core 之外。Core 只认识内部消息、工具定义、
-非流式结果、标准流块和规范错误；模型名、API Key、base URL 与供应商参数由 Runtime 配置并交给
-具体 Adapter。
+非流式结果、标准流块和规范错误。API Key、base URL 与供应商参数交给具体 Adapter；模型选择随每次
+`ModelRequest` 传入，使同一个连接对象可以服务多个兼容模型。
 
 当前协议以 OpenAI Chat Completions 为兼容基线：
 
@@ -30,7 +30,6 @@ src/contracts/
 ```ts
 interface ModelAdapter {
   readonly provider: string
-  readonly model: string
   complete: (request, options?) => Promise<ModelCompletion>
   stream: (request, options?) => Promise<AsyncIterable<ModelStreamChunk>>
 }
@@ -47,14 +46,15 @@ AgentLoop 根据一次 Run 的 `stream` 设置选择调用方法：`true` 调用
 
 ```ts
 interface ModelRequest {
-  // ...
+  /** 供应商识别的模型 ID。 */
+  model: string
   /** `'off'` 是 Core 保留值，表示显式关闭推理；其他非空字符串是供应商定义的等级。 */
   reasoningEffort?: string
 }
 ```
 
-字段名与 `AgentRequest.reasoningEffort` 完全一致：全链路只有这一种形态，门面、AgentLoop 与 Adapter 之间没有
-维度转换，也不再存在 `ModelReasoningOptions`。等级集合属于“供应商 + 模型版本”的能力，不是 Agent 状态机的
+`AgentConfigInput.model` 与 `AgentRequest.model` 都使用 `{ id, reasoningEffort? }`；AgentLoop 在模型调用边界将
+`id` 映射为 `ModelRequest.model`。推理字段在各层保持同名，不再存在 `ModelReasoningOptions`。等级集合属于“供应商 + 模型版本”的能力，不是 Agent 状态机的
 不变量，因此 Adapter 只把值映射到目标协议字段并原样透传，不维护等级白名单：部署配置只自查自己的默认等级，
 供应商才是最终权威。库内过期枚举会在合法输入上失败（fail closed），而供应商返回的无效请求本来就已归类为
 `MODEL_INVALID_REQUEST`，错误信息也比库内旧枚举更准确。Adapter 不得静默降级为其他等级。
@@ -167,7 +167,7 @@ src/contracts  <-  src/adapters/openai-compatible
 src/index.ts  -X->  src/adapters
 ```
 
-`OpenAICompatibleModelAdapter` 提供：
+`OpenAICompatibleAdapter` 提供：
 
 - 标准消息、工具、请求控制字段和 stream usage 请求。
 - completion、chunk、tool call 和 token usage 标准化。
@@ -205,19 +205,16 @@ src/index.ts  -X->  src/adapters
 
 当前 `Agent` 使用 `defineAgentConfig()` 归一化唯一配置根，集中保存：
 
-- system prompt、最大模型 Step。
-- provider、模型名（必填）、API Key、base URL。库不内置默认模型名，只保留方言自身稳定的默认 endpoint。
-- `execution.reasoningEffort` 中的默认推理强度；该字符串由门面解析后原样传给 AgentLoop 与 Adapter，不再有
-  维度分解，流式方式由 `Agent.invoke()/stream()` 决定。
-- 工具事件监听器。
+- `adapter`：一个显式注入的 `ModelAdapter`，持有 SDK、鉴权、base URL 和 provider 身份。
+- `model: { id, reasoningEffort? }`：默认模型选择，模型 ID 必填；库不内置任何模型名或等级词表。
+- system prompt、工具、Session Store、执行预算和观察器。
 
-声明式模型配置遵循“兼容协议默认、供应商差异显式”的规则：
+请求级 `model` 一旦出现，就整体替换配置级模型选择。这样从模型 A 切换到模型 B 且省略
+`reasoningEffort` 时，不会误继承模型 A 的等级。模型切换无需重建 Adapter 或 Agent；只有供应商、连接或
+协议变化时才应使用另一个 Adapter/Agent。
 
-- 省略 `adapter` 时使用通用 OpenAI Compatible Adapter；API Key、base URL 和模型名不同不构成新 Adapter。
-- `provider` 只保存进入模型事件、错误和诊断的真实供应商名称，默认值为 `openai`。
-- `adapter: 'deepseek'` 使用官方 DeepSeek 差异层。
-- `adapter: 'openai-compatible'` 允许调用方在需要显式协议标识时选择默认兼容实现。
-- 自定义实现直接以 `ModelAdapter` 传入，不增加包装配置。
+官方实现由调用方从 `craft-harness/adapters` 显式导入并实例化。库不提供全局 Adapter 注册表，也不让
+`model` 接受配置对象与 Adapter 实例的联合类型；统一形状比省下一行 import 更能降低长期学习负担。
 
 使用 OpenAI SDK 只代表复用客户端和 Chat Completions 类型，不代表流量经过 OpenAI。请求地址始终由配置的
 `baseURL` 决定。只有请求结构、流事件、工具调用、鉴权或错误语义无法由兼容层表达时，才实现新 Adapter。
@@ -234,8 +231,8 @@ Session Store、审批、预算和观察器位于同一配置根，而不是增�
 - 任意非空 `reasoningEffort` 原样透传为供应商等级字段，包括库不认识的等级；Core 保留值 `'off'` 得到各
   Adapter 自己的关闭语义。Adapter 内不存在等级白名单，也不得静默降级为其他等级。
 - 中断和供应商错误得到稳定分类。
-- `src/` 的 contracts、core、sessions、tools 与 builtins 不得导入 OpenAI SDK。
-- `src/agent` 可以创建官方 Adapter，但不能直接消费 SDK 对象。
+- `src/` 的 contracts、core、sessions 与 tools（含 `tools/builtins`）不得导入 OpenAI SDK。
+- `src/agent` 只消费注入的 `ModelAdapter`，不能创建官方 Adapter 或直接消费 SDK 对象。
 - 通用兼容层不得出现按供应商名称分支的请求或响应逻辑。
 - DeepSeek 专项测试必须证明其差异字段没有回流到通用 Adapter。
 - 核心测试不访问真实模型；真实 API 只用于单独的冒烟验收。

@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import process, { loadEnvFile } from 'node:process'
 import { fileURLToPath } from 'node:url'
 import Agent from '../../../src'
+import { DeepSeekAdapter } from '../../../src/adapters'
 import { serverToolGuard, serverTools } from './agent-tools'
 import { createServerApp } from './app'
 import {
@@ -30,50 +31,39 @@ const { apiKey, baseURL, defaultModel, models, ...providerInfo } = readDeepSeekR
 const databasePool = createPostgresPool(readPostgresRuntimeConfig())
 const postgresSessionStore = new PostgresSessionStore(databasePool)
 
-/**
- * 每个可切换模型一个 Agent；它们共享同一个 Session Store 与工具集合。
- *
- * 库把模型名绑定在 Adapter 实例上（不是请求参数），所以"切换模型"在 Runtime 层就是
- * 选择不同实例。同一会话先后使用不同模型是允许的：会话事实按 Session 记录，与模型无关。
- *
- * 推理等级不在这里固定：目录里的值是**按模型**的，由 HTTP 边界按本次选中的模型解析后再下发。
- */
-function createAgentForModel(model: string): Agent {
-  return new Agent({
-    model: {
-      adapter: 'deepseek',
-      apiKey,
-      baseURL,
-      model,
-    },
-    systemPrompt: '你是一个AI助手',
-    execution: {
-      limits: {
-        maxModelSteps: 5,
-        maxToolCalls: 16,
-        maxDurationMs: 120_000,
-      },
-    },
-    tools: {
-      workspaceRoot: process.cwd(),
-      additional: serverTools,
-      guard: serverToolGuard,
-      approvalTimeoutMs: 120_000,
-    },
-    // 应用只注入持久化 Port；Session ID 由 Agent 使用固定前缀和 UUID 生成。
-    sessionStore: postgresSessionStore,
-  })
-}
-
-const agentsByModel = new Map(models.map(model => [model.id, createAgentForModel(model.id)]))
-const defaultAgent = agentsByModel.get(defaultModel)
-if (!defaultAgent)
+const defaultCapability = models.find(model => model.id === defaultModel)
+if (!defaultCapability)
   throw new Error(`默认模型 ${defaultModel} 没有对应的 Agent 实例`)
 
+// Adapter 只持有连接和供应商协议；模型与推理强度可以在每次 Run 开始时整体切换。
+const agent = new Agent({
+  adapter: new DeepSeekAdapter({ apiKey, baseURL }),
+  model: {
+    id: defaultModel,
+    ...(defaultCapability.defaultReasoningEffort
+      ? { reasoningEffort: defaultCapability.defaultReasoningEffort }
+      : {}),
+  },
+  systemPrompt: '你是一个AI助手',
+  execution: {
+    limits: {
+      maxModelSteps: 5,
+      maxToolCalls: 16,
+      maxDurationMs: 120_000,
+    },
+  },
+  tools: {
+    additional: serverTools,
+    guard: serverToolGuard,
+    approvalTimeoutMs: 120_000,
+  },
+  // 应用只注入持久化 Port；Session ID 由 Agent 使用固定前缀和 UUID 生成。
+  sessionStore: postgresSessionStore,
+})
+
 const fastify = createServerApp({
-  agent: defaultAgent,
+  agent,
   model: { ...providerInfo, defaultModel, models },
-  resolveAgent: model => agentsByModel.get(model),
   // 名称是可变展示属性，删除会移除事实；两者都是应用层能力，不进库的 append-only 契约。
   conversations: {
     rename: (sessionId, name) => postgresSessionStore.rename(

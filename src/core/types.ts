@@ -1,6 +1,7 @@
 import type {
   ModelAdapter,
   ModelCompletion,
+  ModelSelection,
   ModelStreamChunk,
   ModelTokenUsage,
   SessionStore,
@@ -32,7 +33,9 @@ export interface AgentLoopLimits {
 
 /** 创建 AgentLoop 时注入的模型、存储、工具和部署侧策略。 */
 export interface AgentLoopConfig<TContext = undefined> {
-  readonly model: ModelAdapter
+  readonly adapter: ModelAdapter
+  /** 未按 Run 覆盖时使用的默认模型选择。 */
+  readonly model: ModelSelection
   readonly store: SessionStore
   /** 工具必须先通过 createAgentTool() 擦除不同 Schema 的泛型差异。 */
   readonly tools?: readonly AgentTool<TContext>[]
@@ -62,20 +65,15 @@ export interface AgentRunRequest<TContext = undefined> {
 }
 
 /** 单次 Agent Run 的模型调用方式；同一 Run 的所有 Step 使用同一份解析结果。 */
-export interface AgentLoopModelExecutionOptions {
+export interface AgentLoopModelExecutionOptions extends ModelSelection {
   /** true 使用增量流，false 使用 ModelAdapter.complete()；默认 true。 */
   readonly stream?: boolean
-  /**
-   * 通用推理强度；`'off'` 表示显式关闭推理，其他非空字符串是供应商定义的等级。
-   *
-   * 具体供应商字段和合法等级由 ModelAdapter 决定。
-   */
-  readonly reasoningEffort?: string
 }
 
 /** 经过边界校验和默认值合并后的模型调用方式。 */
 export interface DefinedAgentLoopModelExecutionOptions {
   readonly stream: boolean
+  readonly id: string
   readonly reasoningEffort?: string
 }
 
@@ -84,7 +82,7 @@ export interface AgentRunOptions {
   readonly signal?: AbortSignal
   readonly runId?: string
   readonly turnId?: string
-  /** 覆盖本次 Run 的流式与推理设置。 */
+  /** 整体覆盖本次 Run 的模型选择，并可覆盖流式调用方式。 */
   readonly model?: AgentLoopModelExecutionOptions
   /** 观察器异常会被隔离，不能改变 Agent 的执行结果。 */
   readonly onEvent?: AgentEventListener

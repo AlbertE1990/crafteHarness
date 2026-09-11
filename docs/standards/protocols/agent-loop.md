@@ -36,7 +36,8 @@ Model Step，也不会改变模型给出的 `callId`。
 
 ```ts
 const loop = new AgentLoop({
-  model,
+  adapter,
+  model: { id: 'default-model', reasoningEffort: 'high' },
   store,
   tools,
   systemPrompt,
@@ -56,6 +57,7 @@ const result = await loop.run({
   runId,
   turnId,
   model: {
+    id: 'other-model',
     stream: false,
     reasoningEffort: 'high',
   },
@@ -63,7 +65,8 @@ const result = await loop.run({
 })
 ```
 
-- `model` 和 `store` 是必需 Ports。
+- `adapter` 和 `store` 是必需 Ports；`model` 是必需的默认模型选择。
+- Run 级 `model` 一旦提供就整体替换默认模型选择，避免跨模型继承推理等级。
 - 不同 Zod 泛型的 `DefinedTool` 先通过 `createAgentTool()` 转成统一注册项。
 - `systemPrompt` 和 `sessionMetadata` 只在创建新 Session 时写入。
 - 输入会去除首尾空白；空输入在任何 Session 写入前抛出 `TypeError`。

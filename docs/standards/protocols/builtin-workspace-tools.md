@@ -2,14 +2,16 @@
 
 > 文档类型：协议规范；状态：Accepted。
 
-## 默认能力
+## 启用方式
 
-Agent 默认装载 `read`、`write`、`edit`、`glob`、`grep`、`terminal`，并继续支持
+Agent 默认只装载不依赖工作区的 `get_current_time` 与 `calculator`。显式配置 `tools.workspaceRoot` 后，
+才额外装载 `read`、`write`、`edit`、`glob`、`grep`、`terminal`，并继续支持
 `disabledBuiltins`、`overrides`、`guardOverrides`、`additional` 和 `mode: 'replace'`。普通使用者无需导入；
 高级组合可使用 `createWorkspaceTools(options)`。
 
-`tools.workspaceRoot` 是文件路径与终端初始工作目录的边界，默认在创建 Agent 时取 `process.cwd()`。Server
-应显式传稳定绝对目录。replace 模式不创建内置工具，因此不接受 workspaceRoot。
+`tools.workspaceRoot` 是文件路径与终端初始工作目录的边界。Agent 不用 `process.cwd()` 猜测工作区；普通网页
+对话省略该字段便不会获得文件和终端能力。需要工作区的 Server 应显式传稳定绝对目录。replace 模式不创建
+内置工具，因此不接受 workspaceRoot。直接调用 `createWorkspaceTools()` 的高级入口仍默认使用当前工作目录。
 
 ## 文件与搜索
 

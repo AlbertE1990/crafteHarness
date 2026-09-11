@@ -37,9 +37,14 @@
     },
     "./package.json": "./package.json"
   },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=20"
   },
@@ -59,13 +64,19 @@
     "typecheck:public-api": "tsc --noEmit --strict --skipLibCheck --target ES2021 --lib ESNext,DOM --module ESNext --moduleResolution bundler --types node,vitest/globals test/public-api.test.ts",
     "lint": "eslint .",
     "smoke:pack": "node scripts/smoke-pack.mjs",
-    "prepublishOnly": "pnpm build && pnpm test && pnpm smoke:pack",
-    "up": "taze major -I",
-    "prepare": "simple-git-hooks"
+    "release:check": "pnpm lint && pnpm typecheck && pnpm typecheck:public-api && pnpm test && pnpm build && pnpm smoke:pack",
+    "prepublishOnly": "pnpm release:check",
+    "hooks:install": "simple-git-hooks",
+    "up": "taze major -I"
   },
   "peerDependencies": {
     "openai": "^7.0.0",
     "zod": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "openai": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@vscode/ripgrep": "catalog:"

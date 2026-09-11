@@ -31,30 +31,44 @@ export function normalizeReasoningEffort(value: unknown, path: string): string {
  */
 export function defineAgentLoopModelExecutionOptions(
   input: AgentLoopModelExecutionOptions | undefined,
-  base?: DefinedAgentLoopModelExecutionOptions,
+  base: DefinedAgentLoopModelExecutionOptions,
 ): DefinedAgentLoopModelExecutionOptions {
   assertOptionsObject(input, 'Agent model execution options')
   assertKnownFields(
     input,
-    ['stream', 'reasoningEffort'],
+    ['id', 'reasoningEffort', 'stream'],
     'Agent model execution options',
   )
 
   if (input?.stream !== undefined && typeof input.stream !== 'boolean')
     throw new TypeError('Agent model execution options.stream 必须是 boolean')
 
-  const stream = input?.stream ?? base?.stream ?? true
-  const reasoningEffort = input?.reasoningEffort === undefined
-    ? base?.reasoningEffort
+  const stream = input?.stream ?? base.stream
+  const id = normalizeModelId(
+    input?.id ?? base.id,
+    'Agent model execution options.id',
+  )
+  // 一旦覆盖模型选择，就整体替换默认选择，避免新模型继承旧模型的推理强度。
+  const selectedEffort = input === undefined ? base.reasoningEffort : input.reasoningEffort
+  const reasoningEffort = selectedEffort === undefined
+    ? undefined
     : normalizeReasoningEffort(
-        input.reasoningEffort,
+        selectedEffort,
         'Agent model execution options.reasoningEffort',
       )
 
   return Object.freeze({
     stream,
+    id,
     ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
   })
+}
+
+/** 模型 ID 是供应商标识，不是展示名称。 */
+export function normalizeModelId(value: unknown, path: string): string {
+  if (typeof value !== 'string' || !value.trim())
+    throw new TypeError(`${path} 必须是非空字符串`)
+  return value.trim()
 }
 
 /** 可选配置必须是非数组对象。 */

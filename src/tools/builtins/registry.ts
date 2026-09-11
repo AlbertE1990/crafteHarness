@@ -1,11 +1,10 @@
-import type { AgentTool } from '../core'
-import type { WorkspaceToolsOptions } from './workspace'
-import { createAgentTool } from '../core'
+import type { AgentTool } from '../../core'
+import { createAgentTool } from '../../core'
 import { createCalculatorTool } from './calculator'
 import { createCurrentTimeTool } from './current-time'
 import { createWorkspaceTools } from './workspace-tools'
 
-/** Agent 默认装载的稳定内置工具名称。 */
+/** Agent 可装载并允许禁用或覆盖的稳定内置工具名称。 */
 export const builtinToolNames = Object.freeze([
   'get_current_time',
   'calculator',
@@ -22,13 +21,15 @@ export type BuiltinToolName = typeof builtinToolNames[number]
 
 /** 每次创建 Agent 配置时生成独立的内置工具注册项。 */
 export function createBuiltinTools<TContext = undefined>(
-  options: WorkspaceToolsOptions = {},
+  options: { readonly workspaceRoot?: string } = {},
 ): readonly AgentTool<TContext>[] {
   return Object.freeze([
     createAgentTool(createCurrentTimeTool()) as unknown as AgentTool<TContext>,
     createAgentTool(createCalculatorTool()) as unknown as AgentTool<TContext>,
-    ...createWorkspaceTools(options).map(
-      tool => createAgentTool(tool as never) as unknown as AgentTool<TContext>,
-    ),
+    ...(options.workspaceRoot
+      ? createWorkspaceTools({ workspaceRoot: options.workspaceRoot }).map(
+          tool => createAgentTool(tool as never) as unknown as AgentTool<TContext>,
+        )
+      : []),
   ])
 }

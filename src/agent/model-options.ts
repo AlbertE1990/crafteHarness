@@ -1,19 +1,26 @@
-import type { DefinedAgentLoopModelExecutionOptions } from '../core'
-import { normalizeReasoningEffort } from '../core'
+import type { ModelSelection } from '../contracts'
+import type { AgentLoopModelExecutionOptions } from '../core'
+import { normalizeModelId, normalizeReasoningEffort } from '../core'
 
 /**
- * 解析单次 Run 的推理强度：本次请求优先，其次部署默认值。
- *
- * 两者都未提供时返回 undefined，表示不下发任何推理参数，由供应商或模型自身默认值决定。
- * 校验与保留值归一化由 Core 的 normalizeReasoningEffort() 统一负责，门面只决定优先级。
+ * 解析单次 Run 的模型选择。请求一旦提供 model 就整体替换默认选择，避免跨模型继承推理强度。
  */
-export function resolveAgentReasoningEffort(
-  input: string | undefined,
-  base?: string,
-): string | undefined {
-  return input === undefined
-    ? base
-    : normalizeReasoningEffort(input, 'Agent request.reasoningEffort')
+export function resolveAgentModelSelection(
+  input: ModelSelection | undefined,
+  base: Readonly<ModelSelection>,
+): Readonly<ModelSelection> {
+  if (input === undefined)
+    return base
+  if (typeof input !== 'object' || input === null || Array.isArray(input))
+    throw new TypeError('Agent request.model 必须是模型选择对象')
+  const unknown = Object.keys(input).find(field => field !== 'id' && field !== 'reasoningEffort')
+  if (unknown)
+    throw new TypeError(`Agent request.model 包含未知字段：${unknown}`)
+  const id = normalizeModelId(input.id, 'Agent request.model.id')
+  const reasoningEffort = input.reasoningEffort === undefined
+    ? undefined
+    : normalizeReasoningEffort(input.reasoningEffort, 'Agent request.model.reasoningEffort')
+  return Object.freeze({ id, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) })
 }
 
 /**
@@ -23,11 +30,12 @@ export function resolveAgentReasoningEffort(
  * 冻结的最终设置；`'off'` 到供应商具体字段的翻译由各 ModelAdapter 完成。
  */
 export function createAgentLoopModelExecution(
-  reasoningEffort: string | undefined,
+  model: Readonly<ModelSelection>,
   stream: boolean,
-): DefinedAgentLoopModelExecutionOptions {
+): AgentLoopModelExecutionOptions {
   return Object.freeze({
     stream,
-    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+    id: model.id,
+    ...(model.reasoningEffort === undefined ? {} : { reasoningEffort: model.reasoningEffort }),
   })
 }

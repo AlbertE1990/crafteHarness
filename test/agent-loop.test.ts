@@ -102,7 +102,7 @@ describe('agent loop', () => {
       script: [{ method: 'complete', result: completion('完整回答', '完整思考') }],
     })
     const events: AgentEvent[] = []
-    const loop = new AgentLoop({ model: adapter, store: createStore() })
+    const loop = new AgentLoop({ adapter, model: { id: 'scripted-model' }, store: createStore() })
 
     const result = await loop.run({
       scopeId: SCOPE_ID,
@@ -110,6 +110,7 @@ describe('agent loop', () => {
       input: '使用普通响应',
     }, {
       model: {
+        id: 'override-model',
         stream: false,
         reasoningEffort: 'future-level',
       },
@@ -134,6 +135,7 @@ describe('agent loop', () => {
       expect.objectContaining({
         type: 'agent.run.started',
         modelExecution: {
+          id: 'override-model',
           stream: false,
           reasoningEffort: 'future-level',
         },
@@ -158,7 +160,8 @@ describe('agent loop', () => {
       ],
     })
     const loop = new AgentLoop({
-      model: adapter,
+      adapter,
+      model: { id: 'scripted-model' },
       store: createStore(),
       tools: [createAgentTool(tool)],
     })
@@ -167,7 +170,7 @@ describe('agent loop', () => {
       scopeId: SCOPE_ID,
       sessionId: 'session-non-stream-tool',
       input: '调用工具',
-    }, { model: { stream: false } })
+    }, { model: { id: 'scripted-model', stream: false } })
 
     expect(result).toMatchObject({
       status: 'completed',
@@ -202,7 +205,8 @@ describe('agent loop', () => {
     const events: AgentEvent[] = []
     let eventId = 0
     const loop = new AgentLoop({
-      model: adapter,
+      adapter,
+      model: { id: 'scripted-model' },
       store,
       systemPrompt: '你是测试助手',
       createId: kind => kind === 'event' ? `event-${++eventId}` : `${kind}-1`,
@@ -307,7 +311,7 @@ describe('agent loop', () => {
       ],
     })
     const events: AgentEvent[] = []
-    const loop = new AgentLoop({ model: adapter, store, tools: [echo] })
+    const loop = new AgentLoop({ adapter, model: { id: 'scripted-model' }, store, tools: [echo] })
 
     const result = await loop.run(
       { scopeId: SCOPE_ID, sessionId: 'session-tool', input: '转成大写' },
@@ -367,7 +371,7 @@ describe('agent loop', () => {
         { method: 'stream', chunks: [chunk({ content: '已处理工具错误' }, 'stop')] },
       ],
     })
-    const loop = new AgentLoop({ model: adapter, store })
+    const loop = new AgentLoop({ adapter, model: { id: 'scripted-model' }, store })
 
     const result = await loop.run({ scopeId: SCOPE_ID, sessionId: 'session-missing', input: '调用工具' })
 
@@ -421,7 +425,8 @@ describe('agent loop', () => {
       ],
     })
     const loop = new AgentLoop({
-      model: adapter,
+      adapter,
+      model: { id: 'scripted-model' },
       store: createStore(),
       tools: [mutatingTool],
       globalGuard: () => scenario.guardDecision,
@@ -469,7 +474,8 @@ describe('agent loop', () => {
       }],
     })
     const loop = new AgentLoop({
-      model: adapter,
+      adapter,
+      model: { id: 'scripted-model' },
       store,
       tools: [tool],
       limits: { maxToolCalls: 1 },
@@ -510,7 +516,8 @@ describe('agent loop', () => {
       }],
     })
     const loop = new AgentLoop({
-      model: adapter,
+      adapter,
+      model: { id: 'scripted-model' },
       store,
       tools: [tool],
       limits: { maxModelSteps: 1 },
@@ -554,7 +561,8 @@ describe('agent loop', () => {
       }],
     })
     const loop = new AgentLoop({
-      model: adapter,
+      adapter,
+      model: { id: 'scripted-model' },
       store: createStore(),
       tools: [tool],
       limits: { maxTotalTokens: 10 },
@@ -577,7 +585,7 @@ describe('agent loop', () => {
     controller.abort('user left')
     const store = createStore()
     const adapter = new ScriptedModelAdapter({ script: [] })
-    const loop = new AgentLoop({ model: adapter, store })
+    const loop = new AgentLoop({ adapter, model: { id: 'scripted-model' }, store })
 
     const result = await loop.run(
       { scopeId: SCOPE_ID, sessionId: 'session-cancelled', input: '不会请求模型' },
@@ -593,7 +601,6 @@ describe('agent loop', () => {
   it('stops a cooperative model stream when the Run duration budget expires', async () => {
     const adapter: ModelAdapter = {
       provider: 'waiting',
-      model: 'waiting-model',
       complete: async () => { throw new Error('complete should not be called') },
       async stream(_request, options = {}) {
         return (async function* () {
@@ -606,7 +613,8 @@ describe('agent loop', () => {
       },
     }
     const loop = new AgentLoop({
-      model: adapter,
+      adapter,
+      model: { id: 'scripted-model' },
       store: createStore(),
       limits: { maxDurationMs: 5 },
     })
@@ -626,7 +634,7 @@ describe('agent loop', () => {
       provider: 'broken-provider',
       script: [{ method: 'stream', error: new Error('upstream unavailable') }],
     })
-    const loop = new AgentLoop({ model: adapter, store })
+    const loop = new AgentLoop({ adapter, model: { id: 'scripted-model' }, store })
 
     const result = await loop.run({ scopeId: SCOPE_ID, sessionId: 'session-model-error', input: '请求模型' })
 
@@ -646,7 +654,7 @@ describe('agent loop', () => {
   it('fails deterministically when another writer changes the Session during a Run', async () => {
     const store = createStore()
     const adapter = new ScriptedModelAdapter({ script: [] })
-    const loop = new AgentLoop({ model: adapter, store })
+    const loop = new AgentLoop({ adapter, model: { id: 'scripted-model' }, store })
     let inserted = false
 
     const result = await loop.run(
@@ -693,7 +701,7 @@ describe('agent loop', () => {
       },
     }
     const adapter = new ScriptedModelAdapter({ script: [] })
-    const loop = new AgentLoop({ model: adapter, store })
+    const loop = new AgentLoop({ adapter, model: { id: 'scripted-model' }, store })
 
     const result = await loop.run({ scopeId: SCOPE_ID, sessionId: 'session-storage-error', input: '触发存储错误' })
 
@@ -712,7 +720,7 @@ describe('agent loop', () => {
     const adapter = new ScriptedModelAdapter({
       script: [{ method: 'stream', chunks: [chunk({ content: 'ok' }, 'stop')] }],
     })
-    const loop = new AgentLoop({ model: adapter, store: createStore() })
+    const loop = new AgentLoop({ adapter, model: { id: 'scripted-model' }, store: createStore() })
 
     const result = await loop.run(
       { scopeId: SCOPE_ID, sessionId: 'session-observer', input: '继续' },
@@ -733,7 +741,8 @@ describe('agent loop', () => {
     const tool = createAgentTool(defined)
 
     expect(() => new AgentLoop({
-      model: new ScriptedModelAdapter({ script: [] }),
+      adapter: new ScriptedModelAdapter({ script: [] }),
+      model: { id: 'scripted-model' },
       store: createStore(),
       tools: [tool, tool],
     })).toThrow('工具名称重复')

@@ -52,9 +52,9 @@
 - 工具具有 Zod 输入输出边界、两层 Guard、审批、超时、显式重试和执行事件。
 - 模型具有供应商无关消息、OpenAI 兼容标准 chunk、非流式结果、用量和错误协议。
 - OpenAI SDK 仅存在于官方 Adapter；Core 不依赖 SDK，DeepSeek 只维护供应商差异。
-- `new Agent(config)` 可直接组装内置模型、自定义 Adapter、Store、预算和事件观察器，并自动装载内置工具。
+- `new Agent(config)` 通过独立的 `adapter` 与 `model` 组装连接和模型选择，并可注入 Store、预算与观察器。
 - 工具配置支持禁用或覆盖指定内置工具、整体替换内置集合，以及只追加应用工具。
-- 默认工作区工具提供文件读取/写入/编辑、glob/grep 和一次性终端；写与执行默认要求审批。
+- 默认自动装载时间与计算器；配置 `tools.workspaceRoot` 后才装载文件、搜索与一次性终端工具。
 - `defineAgentConfig()` 可显式提前校验配置；`defineTool()` 结果可直接传入 Agent，由内部统一归一化。
 - Scripted Adapter 与契约探针位于仓库 `test/support`，为本项目提供无网络验证，不扩大生产 API。
 - Session 使用 append-only 事件、乐观并发和一致性分页，并可确定性推导模型历史。
@@ -64,7 +64,7 @@
 - Agent Loop 以 Run/Turn/Step 串联模型、工具和 Session，并提供预算、取消、稳定终态和实时事件。
 - Agent 门面自动处理 Session ID，分离标准应用输出与完整轨迹，并提供会话读取和分页列表。
 - Runtime 可直接输出标准 `AgentOutputEvent`；只有兼容自有外部协议时才增加应用侧 Adapter。
-- `agent.invoke()` 返回完整结果，`agent.stream()` 提供带背压和取消的异步事件流；模型设置在请求中保持扁平。
+- `agent.invoke()` 返回完整结果，`agent.stream()` 提供带背压和取消的异步事件流；请求级 `model` 可整体切换模型。
 - 工具级与 Agent 全局 ToolGuard 按 `deny > ask > allow` 合并；缺省 Guard 直接允许。
 - `agent.invoke()/stream()` 可把可信租户、用户和环境数据仅传给本次 Guard 与工具执行。
 - 工具级 `guard` 与全局 `tools.guard` 共用同一协议和请求 context；持久化通过根 `sessionStore` 注入。

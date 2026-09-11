@@ -16,7 +16,7 @@ function collectTypeScriptFiles(path: string): string[] {
 /** 库核心：不包含 co-located 的官方 Adapter，它们有自己的依赖边界。 */
 function collectHarnessCoreFiles(): string[] {
   const root = join(process.cwd(), 'src')
-  return ['builtins', 'contracts', 'core', 'sessions', 'tools', 'types']
+  return ['agent', 'contracts', 'core', 'sessions', 'tools', 'types']
     .flatMap(name => collectTypeScriptFiles(join(root, name)))
 }
 

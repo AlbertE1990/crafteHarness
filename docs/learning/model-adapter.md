@@ -18,10 +18,10 @@
 
 ```mermaid
 flowchart LR
-  Config[defineAgentConfig] --> DeepSeek[DeepSeekModelAdapter]
+  Config[defineAgentConfig] --> DeepSeek[DeepSeekAdapter]
   Agent[Agent] --> Request[ModelRequest]
   Request --> DeepSeek
-  DeepSeek --> Compatible[OpenAICompatibleModelAdapter]
+  DeepSeek --> Compatible[OpenAICompatibleAdapter]
   Compatible --> SDK[OpenAI 兼容 SDK]
   SDK --> Raw[chunk 或 completion]
   Raw --> Compatible
@@ -79,8 +79,8 @@ OpenAI 兼容流可能把一个工具调用拆成多个 delta：名称、ID 和 
 
 这项规则属于供应商适配行为；Agent 只认识内部可选字段，不读取 DeepSeek SDK 类型。
 
-推理设置也按同一边界流转：应用在 `execution.reasoningEffort` 提供部署默认值，或在 Agent 请求顶层的
-`reasoningEffort` 中按次覆盖；门面只解析优先级，同一个字符串原样进入 `ModelRequest.reasoningEffort`。
+推理设置也按同一边界流转：应用在 Agent 配置的 `model.reasoningEffort` 提供默认值，或在请求的
+`model.reasoningEffort` 中按次覆盖；门面只解析模型选择，同一个字符串原样进入 `ModelRequest.reasoningEffort`。
 公共等级是开放字符串，Adapter 不做等级校验：非空字符串原样透传到供应商请求，部署配置只自查自己的默认
 等级，供应商才是最终权威。
 
@@ -109,7 +109,7 @@ AgentLoop 会把两种结果归一化为同一个内部 Step，但轨迹保持�
 
 ## 8. 三种扩展路径
 
-- 只有 base URL、模型名和凭据不同：省略 `adapter`，直接使用默认 OpenAI Compatible 配置。
+- 只有 base URL、模型名和凭据不同：实例化 `OpenAICompatibleAdapter`，把模型名留给 Agent 的 `model.id`。
 - Chat Completions 兼容但存在少量字段差异：继承通用 Adapter 的 protected 模板方法。
 - 原生协议结构不同：直接实现 `ModelAdapter`，完整转换到内部协议。
 
@@ -118,13 +118,13 @@ AgentLoop 会把两种结果归一化为同一个内部 Step，但轨迹保持�
 
 ## 9. 配置和错误
 
-`defineAgentConfig()` 归一化唯一配置根。它保存 Agent 基础参数和模型连接参数，再创建具体 Adapter。
+`defineAgentConfig()` 归一化唯一配置根。调用方显式注入 Adapter，配置根把连接对象与默认模型选择放在一起，
+但不替调用方创建供应商实现。
 Adapter 将 SDK 异常转成 `ModelError`，但不会重试；否则重试次数、时间和 token 消耗无法被未来的
 Agent Loop 统一预算。
 
-内置 Adapter 的 `model` 是必填部署配置：库不内置默认模型名（DeepSeek Adapter 曾回退到
-`'deepseek-v4-flash'`），因为模型名属于部署配置且变化频繁，库不该替部署挑模型。`baseURL` 不同——它是该
-方言自身的稳定 endpoint，因此 DeepSeek Adapter 仍默认 `https://api.deepseek.com`。
+Agent 的 `model.id` 是必填部署配置：库不内置默认模型名。Adapter 不持有模型，因此同一个实例可以在
+不同请求间切换模型；`baseURL` 是连接配置，DeepSeek Adapter 仍默认 `https://api.deepseek.com`。
 
 ## 10. 从测试反推设计
 

@@ -26,7 +26,6 @@ export type ScriptedModelStep
 /** 创建测试 Adapter 时使用的固定身份和调用脚本。 */
 export interface ScriptedModelAdapterConfig {
   readonly provider?: string
-  readonly model?: string
   readonly script: readonly ScriptedModelStep[]
 }
 
@@ -44,7 +43,6 @@ export interface ScriptedModelCall {
  */
 export class ScriptedModelAdapter implements ModelAdapter {
   readonly provider: string
-  readonly model: string
   readonly calls: ScriptedModelCall[] = []
 
   private readonly script: readonly ScriptedModelStep[]
@@ -53,7 +51,6 @@ export class ScriptedModelAdapter implements ModelAdapter {
   /** 创建固定脚本 Adapter；输入脚本会复制，避免外部随后修改执行顺序。 */
   constructor(config: ScriptedModelAdapterConfig) {
     this.provider = config.provider?.trim() || 'scripted'
-    this.model = config.model?.trim() || 'scripted-model'
     this.script = [...config.script]
   }
 

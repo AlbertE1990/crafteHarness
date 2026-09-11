@@ -61,13 +61,12 @@ describe('agent facade', () => {
       script: [
         { method: 'complete', result: completion('默认非流式') },
         { method: 'stream', chunks: [chunk('单次改为流式')] },
+        { method: 'complete', result: completion('新模型使用供应商默认推理') },
       ],
     })
     const agent = new Agent({
-      model: adapter,
-      execution: {
-        reasoningEffort: 'high',
-      },
+      adapter,
+      model: { id: 'default-model', reasoningEffort: 'high' },
     })
 
     await agent.invoke({ scopeId: SCOPE_ID, sessionId: 'facade-default-model', input: '默认设置' })
@@ -75,15 +74,23 @@ describe('agent facade', () => {
       scopeId: SCOPE_ID,
       sessionId: 'facade-run-model',
       input: '覆盖设置',
-      reasoningEffort: 'max',
+      model: { id: 'override-model', reasoningEffort: 'max' },
     }))
+    await agent.invoke({
+      scopeId: SCOPE_ID,
+      sessionId: 'facade-model-without-reasoning',
+      input: '只切换模型',
+      model: { id: 'plain-model' },
+    })
 
     expect(adapter.calls.map(call => ({
       method: call.method,
+      model: call.request.model,
       reasoningEffort: call.request.reasoningEffort,
     }))).toEqual([
-      { method: 'complete', reasoningEffort: 'high' },
-      { method: 'stream', reasoningEffort: 'max' },
+      { method: 'complete', model: 'default-model', reasoningEffort: 'high' },
+      { method: 'stream', model: 'override-model', reasoningEffort: 'max' },
+      { method: 'complete', model: 'plain-model', reasoningEffort: undefined },
     ])
   })
 
@@ -92,8 +99,8 @@ describe('agent facade', () => {
       script: [{ method: 'complete', result: completion('关闭思考') }],
     })
     const agent = new Agent({
-      model: adapter,
-      execution: { reasoningEffort: 'max' },
+      adapter,
+      model: { id: 'scripted-model', reasoningEffort: 'max' },
     })
 
     // 'off' 覆盖部署默认等级；大小写归一化只做在保留值上，其他等级原样透传给 Adapter。
@@ -101,7 +108,7 @@ describe('agent facade', () => {
       scopeId: SCOPE_ID,
       sessionId: 'facade-reasoning-off',
       input: '关闭思考',
-      reasoningEffort: 'OFF',
+      model: { id: 'scripted-model', reasoningEffort: 'OFF' },
     })
 
     expect(adapter.calls[0]!.request.reasoningEffort).toBe('off')
@@ -110,9 +117,10 @@ describe('agent facade', () => {
   it('creates session IDs, emits simplified output and preserves complete traces', async () => {
     const configuredTraces: AgentEvent[] = []
     const agent = new Agent({
-      model: new ScriptedModelAdapter({
+      adapter: new ScriptedModelAdapter({
         script: [{ method: 'stream', chunks: [chunk('门面回答')] }],
       }),
+      model: { id: 'scripted-model' },
       observability: {
         onTrace: event => configuredTraces.push(event),
       },
@@ -144,7 +152,8 @@ describe('agent facade', () => {
 
   it('accepts AbortSignal directly and cancels when a stream consumer stops', async () => {
     const invokeAgent = new Agent({
-      model: new ScriptedModelAdapter({ script: [] }),
+      adapter: new ScriptedModelAdapter({ script: [] }),
+      model: { id: 'scripted-model' },
     })
     const controller = new AbortController()
     controller.abort('caller-cancelled')
@@ -156,7 +165,7 @@ describe('agent facade', () => {
     })
 
     const streamAdapter = new ScriptedModelAdapter({ script: [] })
-    const streamAgent = new Agent({ model: streamAdapter })
+    const streamAgent = new Agent({ adapter: streamAdapter, model: { id: 'scripted-model' } })
     const stream = streamAgent.stream({ scopeId: SCOPE_ID, input: '停止读取事件' })
     expect(streamAdapter.calls).toHaveLength(0)
 
@@ -174,7 +183,7 @@ describe('agent facade', () => {
         { method: 'stream', chunks: [chunk('第二条回答')] },
       ],
     })
-    const agent = new Agent({ model: adapter })
+    const agent = new Agent({ adapter, model: { id: 'scripted-model' } })
 
     await collectEvents(agent.stream({
       scopeId: SCOPE_ID,
@@ -235,7 +244,8 @@ describe('agent facade', () => {
       read: request => memory.read(request),
     }
     const agent = new Agent({
-      model: new ScriptedModelAdapter({ script: [] }),
+      adapter: new ScriptedModelAdapter({ script: [] }),
+      model: { id: 'scripted-model' },
       sessionStore: executionStore,
     })
 
@@ -279,7 +289,8 @@ describe('agent facade', () => {
       ],
     })
     const agent = new Agent({
-      model: adapter,
+      adapter,
+      model: { id: 'scripted-model' },
       tools: {
         mode: 'replace',
         tools: [tool],
@@ -389,7 +400,8 @@ describe('agent facade', () => {
       ],
     })
     const agent = new Agent<AppContext>({
-      model: adapter,
+      adapter,
+      model: { id: 'scripted-model' },
       tools: {
         mode: 'replace',
         tools: [tool],

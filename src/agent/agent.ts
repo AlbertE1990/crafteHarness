@@ -25,7 +25,7 @@ import { defineAgentConfig } from './config'
 import { AsyncEventStream } from './event-stream'
 import {
   createAgentLoopModelExecution,
-  resolveAgentReasoningEffort,
+  resolveAgentModelSelection,
 } from './model-options'
 import { ToolApprovalManager } from './tool-approval-manager'
 
@@ -54,6 +54,7 @@ export class Agent<TContext = undefined> {
       now: this.config.execution.now,
     })
     this.loop = new AgentLoop({
+      adapter: this.config.adapter,
       model: this.config.model,
       store: this.store,
       tools: this.config.tools.registered,
@@ -125,11 +126,8 @@ export class Agent<TContext = undefined> {
 
     const runId = createRunId()
     // 在进入循环前一次性解析，确保同一 Run 的多个模型 Step 不会使用不同设置。
-    const reasoningEffort = resolveAgentReasoningEffort(
-      request.reasoningEffort,
-      this.config.execution.reasoningEffort,
-    )
-    const loopModelExecution = createAgentLoopModelExecution(reasoningEffort, stream)
+    const model = resolveAgentModelSelection(request.model, this.config.model)
+    const loopModelExecution = createAgentLoopModelExecution(model, stream)
     // 没有应用事件出口时 ask 会得到 unavailable；这避免无法展示的审批长期占用内存。
     const stopObservingApprovals = output
       ? this.approvalManager.observeRun(

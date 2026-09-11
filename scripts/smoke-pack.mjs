@@ -2,7 +2,7 @@
  * 打包冒烟测试：验证"发出去的包"真的能用。
  *
  * 案例应用通过相对路径导入源码，因此它**测不到**打包产物的任何问题。这个脚本补上那一段：
- * 真实执行 `npm pack`，把 tarball 装进一个临时项目的 node_modules，再用 `import('craft-harness')`
+ * 真实执行 `pnpm pack`，把 tarball 装进一个临时项目的 node_modules，再用 `import('craft-harness')`
  * 按**包名**导入——只有按包名导入才会真的走 package.json 的 exports 映射。
  *
  * 能抓到的问题：exports 映射写错或漏项、files 白名单漏掉产物、d.ts 未生成、peer 依赖被
@@ -13,7 +13,7 @@
 import { execFileSync, execSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
 
 const repoRoot = resolve(import.meta.dirname, '..')
@@ -31,8 +31,8 @@ assert.equal(typeof runtime.Agent, 'function', '根入口缺少 Agent')
 assert.equal(typeof runtime.defineAgentConfig, 'function', '根入口缺少 defineAgentConfig')
 assert.equal(typeof runtime.MemorySessionStore, 'function', '根入口缺少 MemorySessionStore')
 assert.equal(typeof runtime.createWorkspaceTools, 'function', '根入口缺少 createWorkspaceTools')
-assert.equal(typeof adapters.DeepSeekModelAdapter, 'function', 'adapters 子入口缺少 DeepSeekModelAdapter')
-assert.equal(typeof adapters.OpenAICompatibleModelAdapter, 'function', 'adapters 子入口缺少 OpenAICompatibleModelAdapter')
+assert.equal(typeof adapters.DeepSeekAdapter, 'function', 'adapters 子入口缺少 DeepSeekAdapter')
+assert.equal(typeof adapters.OpenAICompatibleAdapter, 'function', 'adapters 子入口缺少 OpenAICompatibleAdapter')
 
 // 公共入口不应泄漏内部归一化实现。
 assert.ok(!('normalizeAgentToolDefinitions' in runtime), '根入口泄漏了内部实现')
@@ -49,19 +49,23 @@ console.log('probe ok')
 const CONSUMER_SOURCE = `
 import type { AgentConfigInput, AgentRunResult } from ${JSON.stringify(packageName)}
 import Agent, { defineAgentConfig, MemorySessionStore } from ${JSON.stringify(packageName)}
-import { DeepSeekModelAdapter } from ${JSON.stringify(`${packageName}/adapters`)}
+import { DeepSeekAdapter } from ${JSON.stringify(`${packageName}/adapters`)}
 
-const adapter = new DeepSeekModelAdapter({ apiKey: 'test-key', model: 'test-model' })
+const adapter = new DeepSeekAdapter({ apiKey: 'test-key' })
 const config: AgentConfigInput = {
-  model: adapter,
-  execution: { reasoningEffort: 'high' },
+  adapter,
+  model: { id: 'test-model', reasoningEffort: 'high' },
 }
 
 const agent = new Agent(config)
 export const run = (): Promise<AgentRunResult> =>
-  agent.invoke({ scopeId: 'smoke', input: '你好', reasoningEffort: 'off' })
+  agent.invoke({
+    scopeId: 'smoke',
+    input: '你好',
+    model: { id: 'test-model', reasoningEffort: 'off' },
+  })
 
-export const normalized = defineAgentConfig(config).model.model
+export const normalized = defineAgentConfig(config).model.id
 export const store = new MemorySessionStore()
 `
 
@@ -102,19 +106,27 @@ function main() {
 
   const workDir = mkdtempSync(join(tmpdir(), 'craft-harness-smoke-'))
   try {
-    // `npm` 在 Windows 上是 .cmd，必须经 shell 执行；目标目录显式加引号以兼容含空格的临时路径。
-    // --ignore-scripts 避免 `prepare` 在冒烟测试里改动本仓库的 git hooks。
+    // pnpm publish/pack 会把 workspace catalog 解析成普通版本；冒烟必须验证这份最终清单。
     const packOutput = execSync(
-      `npm pack --silent --ignore-scripts --pack-destination "${workDir}"`,
+      `pnpm pack --silent --pack-destination "${workDir}"`,
       { cwd: repoRoot, encoding: 'utf8' },
     ).trim()
-    const tarball = join(workDir, packOutput.split(/\r?\n/).at(-1))
+    const packedPath = packOutput.split(/\r?\n/).at(-1)
+    const tarball = isAbsolute(packedPath) ? packedPath : join(workDir, packedPath)
 
     // 模拟真实安装：包出现在 node_modules/<name>，因此按包名导入会走 exports 映射。
     const appDir = join(workDir, 'app')
     const installed = join(appDir, 'node_modules', packageName)
     mkdirSync(installed, { recursive: true })
     execFileSync('tar', ['-xzf', tarball, '-C', installed, '--strip-components=1'])
+
+    // npm 消费者不认识 workspace/catalog 协议；pnpm 生成的最终清单不得继续泄漏它们。
+    const packedManifest = JSON.parse(readFileSync(join(installed, 'package.json'), 'utf8'))
+    for (const section of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+      for (const [name, specifier] of Object.entries(packedManifest[section] ?? {})) {
+        assertPublishableSpecifier(section, name, specifier)
+      }
+    }
 
     for (const peer of Object.keys(manifest.peerDependencies ?? {}))
       linkPeerDependency(appDir, peer)
@@ -155,6 +167,15 @@ function main() {
   }
   finally {
     rmSync(workDir, { recursive: true, force: true })
+  }
+}
+
+/** 阻止 monorepo 内部依赖协议泄漏到发布清单。 */
+function assertPublishableSpecifier(section, name, specifier) {
+  if (typeof specifier !== 'string' || /^(?:catalog|workspace):/.test(specifier)) {
+    throw new Error(
+      `package.json ${section}.${name} 使用了不可发布的依赖版本：${String(specifier)}`,
+    )
   }
 }
 

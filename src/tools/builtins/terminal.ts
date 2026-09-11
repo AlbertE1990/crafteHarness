@@ -4,7 +4,8 @@ import { spawn } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import process from 'node:process'
 import { z } from 'zod'
-import { defineTool, ToolError } from '../tools'
+import { defineTool } from '../define-tool'
+import { ToolError } from '../errors'
 import { fileSystemError } from './workspace'
 
 /** 创建一次调用一个新 shell、默认要求审批的跨平台终端工具。 */

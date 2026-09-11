@@ -1,5 +1,6 @@
 import type {
   ModelMessage,
+  ModelSelection,
   SessionIdentity,
   SessionSummary,
 } from '../contracts'
@@ -16,15 +17,8 @@ interface AgentRequestBase {
   /** 仅在创建新 Session 时写入标准可搜索名称。 */
   readonly sessionName?: string
   readonly sessionMetadata?: JsonObject
-  /**
-   * 覆盖本次请求的推理等级；流式方式由 invoke()/stream() 决定，不在这里选择。
-   *
-   * 这是单轴设置：`'off'` 是唯一保留值，表示显式关闭推理；其他非空字符串是
-   * 供应商定义的等级，Core 不固定枚举，由具体 ModelAdapter 映射成自己的协议字段
-   * 并原样透传，合法值最终由供应商裁定。省略时不产生任何推理参数，沿用部署默认值
-   * 或供应商自身默认值。
-   */
-  readonly reasoningEffort?: string
+  /** 整体覆盖默认模型选择；省略 reasoningEffort 表示使用供应商默认值。 */
+  readonly model?: ModelSelection
 }
 
 /**

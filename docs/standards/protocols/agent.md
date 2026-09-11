@@ -13,56 +13,48 @@ AgentLoop 和标准应用事件，但不读取环境变量，也不依赖 HTTP �
 
 ```ts
 import Agent, { defineTool } from 'craft-harness'
+import { DeepSeekAdapter } from 'craft-harness/adapters'
 
 const agent = new Agent({
-  model: {
-    adapter: 'deepseek',
+  adapter: new DeepSeekAdapter({
     apiKey: process.env.DEEPSEEK_API_KEY!,
-    model: process.env.DEEPSEEK_MODEL!,
+  }),
+  model: {
+    id: process.env.DEEPSEEK_MODEL!,
+    reasoningEffort: 'high',
   },
   tools: {
     workspaceRoot: process.cwd(),
     additional: [myTool],
   },
-  execution: {
-    reasoningEffort: 'high',
-  },
   systemPrompt: '你是一个可靠的助手。',
 })
 ```
 
-未提供 `tools` 时，Agent 自动注册 `get_current_time`、`calculator`、`read`、`write`、`edit`、`glob`、
-`grep` 和 `terminal`。工作区边界见[内置工作区工具规范](./builtin-workspace-tools.md)。
+未提供 `tools` 时，Agent 自动注册不依赖工作区的 `get_current_time` 和 `calculator`。只有显式配置
+`tools.workspaceRoot` 才加入 `read`、`write`、`edit`、`glob`、`grep` 和 `terminal`；边界见
+[内置工作区工具规范](./builtin-workspace-tools.md)。
 
-`model` 接受三种形式：
-
-- `{ apiKey, model, baseURL?, provider? }`：默认创建 OpenAI Chat Completions 兼容 Adapter；`provider`
-  只表示进入轨迹和错误的真实供应商名称。
-- `{ adapter: 'deepseek', ... }`：创建处理 `thinking`、`reasoning_effort` 和 `reasoning_content` 等供应商
-  字段差异的 DeepSeek Adapter。
-- `{ adapter: 'openai-compatible', ... }`：需要显式表达协议时，也可选择默认兼容 Adapter。
-- 直接传入开发者实现的 `ModelAdapter`。
-
-内置 Adapter 的 `model` 均为必填。模型名属于部署配置且变化频繁，库不为任何供应商内置默认模型名；
-`baseURL` 是该方言自身的稳定 endpoint，因此仍保留默认值（DeepSeek 为 `https://api.deepseek.com`）。
-供应商推理等级词表同样不属于库：`execution.reasoningEffort` 只校验非空字符串，任何其他取值都原样透传到
-供应商请求；部署配置只声明自己的默认等级和候选列表，取值是否有效最终由供应商裁定。
+根字段 `adapter` 只承载供应商连接、鉴权与线协议；`model` 只承载一次 Run 可切换的模型选择：
+`{ id, reasoningEffort? }`。两者形状固定，不接受字符串判别器、全局注册表或“配置对象/Adapter 实例”的联合类型。
+模型 ID 与推理等级属于部署配置且变化频繁，库不内置默认模型名或供应商等级枚举；`baseURL` 属于 Adapter
+连接设置，DeepSeek 默认 `https://api.deepseek.com`。
 
 Kimi、Moonshot 或其他只改变 API Key、base URL 和模型名的兼容服务不需要新增 Adapter：
 
 ```ts
 const kimiAgent = new Agent({
-  model: {
+  adapter: new OpenAICompatibleAdapter({
     provider: 'moonshot',
     apiKey: process.env.MOONSHOT_API_KEY!,
     baseURL: 'https://api.moonshot.cn/v1',
-    model: 'kimi-k3',
-  },
+  }),
+  model: { id: 'kimi-k3' },
 })
 ```
 
-使用 `openai` npm 包只代表复用兼容客户端；实际请求目标由 `baseURL` 决定。旧的 `providerName` 和将
-`provider: 'deepseek' | 'openai-compatible'` 用作 Adapter 判别的配置不再接受。
+使用 `openai` npm 包只代表复用兼容客户端；实际请求目标由 `baseURL` 决定。同一 Adapter 可服务同协议的
+多个模型，模型切换不需要重建 Agent。
 
 ## 3. 配置归一化
 
@@ -71,8 +63,8 @@ const kimiAgent = new Agent({
 
 归一化规则：
 
-- 模型声明转换为 `ModelAdapter`。
-- `execution.reasoningEffort` 校验为所有请求默认采用的推理强度；`'off'` 表示显式关闭推理。
+- `adapter` 校验为 `ModelAdapter`，但保持调用方注入的实例不变。
+- `model.id` 与可选 `model.reasoningEffort` 被裁空白并冻结；`'off'` 表示显式关闭推理。
 - `execution.limits` 由 AgentLoop 的同一规则补齐并校验。
 - 工具配置解析为包含内置、覆盖和应用追加工具的最终只读数组。
 - 未传 Store 时创建 `MemorySessionStore`。
@@ -83,12 +75,12 @@ const kimiAgent = new Agent({
 
 配置按业务意图组织：
 
-| 位置            | 字段                                    | 职责                       |
-| --------------- | --------------------------------------- | -------------------------- |
-| 根配置          | `model`、`systemPrompt`、`sessionStore` | 核心依赖与 Agent 行为      |
-| `tools`         | 集合操作、`workspaceRoot`、Guard 与审批 | 工具注册、工作区、风险决策 |
-| `execution`     | `reasoningEffort`、`limits`、`now`      | 推理默认值、预算和时钟     |
-| `observability` | `onTrace`、`onToolEvent`                | 不参与控制流的全局观察器   |
+| 位置            | 字段                                               | 职责                            |
+| --------------- | -------------------------------------------------- | ------------------------------- |
+| 根配置          | `adapter`、`model`、`systemPrompt`、`sessionStore` | 连接依赖、模型选择与 Agent 行为 |
+| `tools`         | 集合操作、`workspaceRoot`、Guard 与审批            | 工具注册、工作区、风险决策      |
+| `execution`     | `limits`、`now`                                    | 预算和可注入时钟                |
+| `observability` | `onTrace`、`onToolEvent`                           | 不参与控制流的全局观察器        |
 
 `systemPrompt` 描述 Agent 行为，因此不放入模型供应商连接配置。全局 Guard 与工具集合和局部 Guard 紧密协作，
 因此配置为 `tools.guard`，不放入容易暗示沙箱或身份认证能力的 `security`。`sessionStore` 已经完整表达依赖，
@@ -100,7 +92,8 @@ const kimiAgent = new Agent({
 
 ```ts
 const agent = new Agent({
-  model,
+  adapter,
+  model: { id: 'default-model' },
   tools: { additional: [weatherTool, businessTool] },
 })
 ```
@@ -131,7 +124,8 @@ const agent = new Agent({
 })
 
 const isolatedAgent = new Agent({
-  model,
+  adapter,
+  model: { id: 'default-model' },
   tools: {
     mode: 'replace',
     tools: [weatherTool],
@@ -143,7 +137,7 @@ const isolatedAgent = new Agent({
 被覆盖工具的同一名称；追加工具不能与最终集合重名。需要同名替换时必须使用 `overrides`，禁止静默覆盖。
 `guardOverrides` 的函数替换内置工具自身 Guard，`null` 明确移除；全局 Guard 不受影响。
 `replace` 模式不能混入 workspaceRoot、禁用、覆盖、Guard 覆盖或追加字段。默认扩展模式省略 workspaceRoot 时，
-文件、搜索和终端在创建 Agent 时读取 `process.cwd()`。
+不创建任何文件、搜索或终端工具，也不会把 `process.cwd()` 隐式暴露为工作区。
 
 ## 5. 运行与事件
 
@@ -154,13 +148,13 @@ const result = await agent.invoke({
   sessionId: 'optional-session-id',
   sessionName: '杭州天气',
   context: appRunContext,
-  reasoningEffort: 'high',
+  model: { id: 'deepseek-chat', reasoningEffort: 'high' },
 }, signal)
 
 for await (const event of agent.stream({
   scopeId: 'tenant-42',
   input: '杭州天气怎么样？',
-  reasoningEffort: 'max',
+  model: { id: 'deepseek-reasoner', reasoningEffort: 'max' },
 }, signal)) {
   // 可被 Runtime 直接输出的标准应用事件
 }
@@ -171,18 +165,19 @@ for await (const event of agent.stream({
 公开模型配置不存在 `stream` 字段，因此方法名与执行方式不会互相矛盾。唯一的运行控制量是取消信号，直接
 作为第二参数；Run/Turn ID 由 Agent 内部生成，完整轨迹统一通过 `observability.onTrace` 配置。
 
-推理强度是单层字符串：`AgentRequest.reasoningEffort` 优先于 `execution.reasoningEffort`，两者都未提供时
-不下发任何推理参数，完全采用供应商或模型默认值。同一 Run 在进入 AgentLoop 前只解析一次。
+请求省略 `model` 时使用 Agent 配置的默认模型选择；一旦提供，就用请求的 `{ id, reasoningEffort? }` **整体替换**
+默认选择。请求只写新 `id` 不会继承旧模型的推理强度，避免把某模型的等级错误地下发给另一模型。同一 Run
+在进入 AgentLoop 前只解析一次模型选择。
 `'off'` 是唯一保留值，按大小写不敏感识别（`'OFF'` 等价，在进入 AgentLoop 前统一归一化为小写 `'off'`），
 表示显式关闭推理；其他任何非空字符串都是供应商定义的推理等级（如 `'low'`/`'high'`/`'max'`），原样透传、
 不做大小写转换。空白字符串（如 `' '`）在配置边界报错，错误信息带字段路径，例如
-`Agent request.reasoningEffort 必须是非空字符串` 和 `Agent config.execution.reasoningEffort 必须是非空字符串`。
+`Agent request.model.reasoningEffort 必须是非空字符串` 和 `Agent config.model.reasoningEffort 必须是非空字符串`。
 
 旧形态的两条规则已删除：不再存在“只提供 `reasoningEffort` 会自动启用推理”，也不再存在
 “`reasoningEnabled: false` 会清除继承的 effort，且不能同时提供 effort”。单轴形态下没有第二个字段，
 因此无法表达出需要这两条规则约束的矛盾状态。
 
-门面把这一根轴原样交给 AgentLoop：Run 设置是 `{ stream, reasoningEffort }`，AgentLoop 组装的
+门面把模型选择原样交给 AgentLoop：Run 设置是 `{ id, stream, reasoningEffort? }`，AgentLoop 组装的
 `ModelRequest` 直接带 `reasoningEffort`，公开形态与内部契约同形，层间没有任何维度转换。`'off'` 到供应商
 具体字段的翻译只发生在 Adapter 内部：DeepSeek 发送 `thinking: { type: 'disabled' }`，OpenAI 兼容发送
 `reasoning_effort: 'none'`。保留值 `'off'` 由 `contracts/model.ts` 的 `REASONING_OFF` 常量唯一定义，Core 与
@@ -311,8 +306,8 @@ Agent 实例只在当前进程中保存 pending 审批。`invoke()` 没有交互
 
 ## 8. 依赖规则
 
-`src/agent` 是产品便利层，因此可以实例化同仓库官方 Adapter。更底层的 `contracts`、
-`core`、`sessions`、`tools` 和 `builtins` 仍禁止依赖模型 SDK。官方 Adapter 必须直接依赖 contracts，
+`src/agent` 是产品便利层，但只接收调用方注入的 Adapter，不负责实例化供应商实现。更底层的 `contracts`、
+`core`、`sessions` 和 `tools` 仍禁止依赖模型 SDK；内置工具位于 `src/tools/builtins`。官方 Adapter 必须直接依赖 contracts，
 不能通过根入口反向导入。
 
 Fastify、SSE、环境变量、数据库连接和前端展示投影只能存在于 Runtime。本仓库的参考 Runtime 是官方案例

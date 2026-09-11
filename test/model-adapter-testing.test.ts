@@ -61,7 +61,7 @@ describe('model adapter testing utilities', () => {
       script: [{ method: 'stream', chunks: [chunk()] }],
     })
     const messages = [{ role: 'user' as const, content: '原始消息' }]
-    const stream = await adapter.stream({ messages }, { signal: controller.signal })
+    const stream = await adapter.stream({ model: 'scripted-model', messages }, { signal: controller.signal })
     messages.push({ role: 'user', content: '后续消息' })
     controller.abort('test abort')
 

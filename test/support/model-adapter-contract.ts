@@ -20,6 +20,7 @@ export interface ModelAdapterContractOptions {
 
 /** 最小契约请求；真实 Adapter 测试应注入客户端替身，不能因此访问生产模型。 */
 export const modelAdapterContractRequest: ModelRequest = Object.freeze({
+  model: 'contract-model',
   messages: Object.freeze([
     Object.freeze({ role: 'user' as const, content: 'contract probe' }),
   ]),
@@ -35,7 +36,6 @@ export async function assertModelAdapterContract(
   options: ModelAdapterContractOptions = {},
 ): Promise<ModelAdapterContractResult> {
   assertNonEmptyString(adapter.provider, 'adapter.provider')
-  assertNonEmptyString(adapter.model, 'adapter.model')
 
   const request = options.request ?? modelAdapterContractRequest
   const completion = await adapter.complete(request, options.callOptions)

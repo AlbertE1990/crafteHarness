@@ -143,13 +143,6 @@ export interface CreateServerAppOptions {
   readonly agent: Agent
   /** 前端用来渲染模型与推理等级候选的部署信息。 */
   readonly model: ServerModelInfo
-  /**
-   * 按模型名取对应 Agent；省略时所有请求都用 `agent`。
-   *
-   * 库把模型名绑定在 Adapter 实例上（不是每次请求的参数），因此多模型部署由 Runtime
-   * 持有多个 Agent 实例并在这里分发，而不是把模型名塞进 AgentRequest。
-   */
-  readonly resolveAgent?: (model: string) => Agent | undefined
   /** 未注入时，重命名与删除接口返回 501，而不是静默无效。 */
   readonly conversations?: ConversationCatalogMutations
   readonly logger?: FastifyServerOptions['logger']
@@ -291,8 +284,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
   }, async (request, reply) => {
     const abortController = new AbortController()
     const useStream = request.body.stream ?? true
-    // 模型名绑定在 Adapter 实例上，因此按模型选 Agent；未声明的模型直接拒绝，
-    // 而不是静默退回默认模型让用户以为切换生效了。
+    // 未声明的模型直接拒绝，而不是静默退回默认模型让用户以为切换生效了。
     const capability = request.body.model
       ? options.model.models.find(item => item.id === request.body.model)
       : options.model.models.find(item => item.id === options.model.defaultModel)
@@ -303,21 +295,6 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
         message: `未声明的模型：${request.body.model ?? ''}`,
       }
     }
-    /*
-      默认模型直接用门面注入的 `agent`，不要求 Runtime 再注册一次（`createServerApp({ agent })`
-      的语义就是"默认模型的 Agent"）；只有切换到别的模型时才查 `resolveAgent`。
-    */
-    const agent = capability.id === options.model.defaultModel
-      ? options.agent
-      : options.resolveAgent?.(capability.id)
-    if (!agent) {
-      reply.code(400)
-      return {
-        error: 'MODEL_NOT_SUPPORTED',
-        message: `模型 ${capability.id} 没有可用的 Agent 实例`,
-      }
-    }
-
     /*
       推理等级按"选中模型的能力"校验，而不是按全局列表：目录是运维自己写的部署事实，
       在 HTTP 边界拒绝能给出明确原因（这属于部署自查），也避免把明显的非法值送给供应商。
@@ -349,7 +326,10 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
             sessionName: createConversationTitle(request.body.message),
           }
         : {}),
-      ...(reasoningEffort ? { reasoningEffort } : {}),
+      model: {
+        id: capability.id,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+      },
     }
 
     // 浏览器断开连接时取消同一个 Agent Run，模型和工具会收到组合后的 AbortSignal。
@@ -361,7 +341,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     if (!useStream) {
       // 普通 JSON 请求没有实时事件通道，因此不会注册交互式工具审批观察器。
       // ToolGuard 的 ask 会得到 unavailable 并作为工具失败交回 AgentLoop，而不会永久等待。
-      const result = await agent.invoke(agentRequest, abortController.signal)
+      const result = await options.agent.invoke(agentRequest, abortController.signal)
       const response: ServerChatJsonResponse = { data: result }
       return response
     }
@@ -376,7 +356,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     reply.raw.flushHeaders()
 
     try {
-      for await (const event of agent.stream(agentRequest, abortController.signal)) {
+      for await (const event of options.agent.stream(agentRequest, abortController.signal)) {
         // AgentOutputEvent 已是 craft-harness 的标准应用协议，默认原样写出即可。
         await writeSseEvent(reply.raw, event)
       }

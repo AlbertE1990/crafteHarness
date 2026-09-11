@@ -15,6 +15,8 @@ ADR 记录重要技术选择及其背景、备选方案和后果。
 - [ADR-0011：推理强度收敛为单轴字符串，供应商词表与模型名归部署所有](./adr-0011-single-axis-reasoning-effort.md)
 - [ADR-0012：仓库根成为发布的库，应用下移为 sample，包名改为 craft-harness](./adr-0012-package-extraction-and-naming.md)
 - [ADR-0013：默认提供受工作区约束的文件、搜索与终端工具](./adr-0013-default-workspace-tools.md)
+- [ADR-0014：显式注入 Adapter，并统一模型选择对象](./adr-0014-explicit-adapter-and-model-selection.md)
+- [ADR-0015：工作区工具按显式能力边界启用](./adr-0015-opt-in-workspace-tools.md)
 
 状态使用：
 

@@ -58,7 +58,20 @@ export class AgentLoop<TContext = undefined> {
 
   constructor(config: AgentLoopConfig<TContext>) {
     validateConfig(config)
-    this.config = config
+    const model = defineAgentLoopModelExecutionOptions(undefined, {
+      stream: true,
+      id: config.model.id,
+      ...(config.model.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: config.model.reasoningEffort }),
+    })
+    this.config = Object.freeze({
+      ...config,
+      model: Object.freeze({
+        id: model.id,
+        ...(model.reasoningEffort === undefined ? {} : { reasoningEffort: model.reasoningEffort }),
+      }),
+    })
     this.limits = createLimits(config.limits)
     this.tools = createAgentToolMap(config.tools ?? [])
     this.now = config.now ?? (() => new Date())
@@ -74,7 +87,13 @@ export class AgentLoop<TContext = undefined> {
   async run(request: AgentRunRequest<TContext>, options: AgentRunOptions = {}): Promise<AgentRunResult> {
     const input = validateRequest(request)
     // 一次 Run 只解析一次模型设置，工具往返后的后续 Step 继续使用相同配置。
-    const modelExecution = defineAgentLoopModelExecutionOptions(options.model)
+    const modelExecution = defineAgentLoopModelExecutionOptions(options.model, {
+      stream: true,
+      id: this.config.model.id,
+      ...(this.config.model.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: this.config.model.reasoningEffort }),
+    })
     const state = this.createRunState(request, options)
     const signals = createRunSignals(this.limits.maxDurationMs, options.signal)
     const eventBase = (): AgentEventBase => ({
@@ -87,8 +106,8 @@ export class AgentLoop<TContext = undefined> {
     await emit(options.onEvent, {
       ...eventBase(),
       type: 'agent.run.started',
-      provider: this.config.model.provider,
-      model: this.config.model.model,
+      provider: this.config.adapter.provider,
+      model: modelExecution.id,
       modelExecution,
       limits: this.limits,
     })
@@ -178,7 +197,7 @@ export class AgentLoop<TContext = undefined> {
             )
           }
 
-          const normalized = normalizeModelError(error, this.config.model.provider)
+          const normalized = normalizeModelError(error, this.config.adapter.provider)
           return await this.finishFailure(
             state,
             normalized.protocol ? 'model_protocol_error' : 'model_error',
@@ -433,6 +452,7 @@ export class AgentLoop<TContext = undefined> {
     )
     const toolModels = [...this.tools.values()].map(tool => tool.model)
     const request = {
+      model: modelExecution.id,
       messages: deriveModelMessages(snapshot.events),
       ...(toolModels.length > 0
         ? { tools: toolModels, parallel_tool_calls: false as const }
@@ -449,17 +469,17 @@ export class AgentLoop<TContext = undefined> {
     }
 
     if (!modelExecution.stream) {
-      const completion = await this.config.model.complete(request, callOptions)
+      const completion = await this.config.adapter.complete(request, callOptions)
       await emit(listener, {
         ...eventBase(),
         type: 'agent.model.completed',
         step,
         completion,
       })
-      return consumeModelCompletion(completion, this.config.model.provider)
+      return consumeModelCompletion(completion, this.config.adapter.provider)
     }
 
-    const stream = await this.config.model.stream(request, callOptions)
+    const stream = await this.config.adapter.stream(request, callOptions)
 
     return await consumeModelStream(stream, async (chunk) => {
       await emit(listener, {
@@ -468,7 +488,7 @@ export class AgentLoop<TContext = undefined> {
         step,
         chunk,
       })
-    }, this.config.model.provider)
+    }, this.config.adapter.provider)
   }
 
   /** 按模型返回顺序串行执行工具，并在每次执行后立即持久化对应 tool 消息。 */
@@ -752,8 +772,13 @@ export class AgentLoop<TContext = undefined> {
 function validateConfig<TContext>(config: AgentLoopConfig<TContext>): void {
   if (!config || typeof config !== 'object')
     throw new TypeError('AgentLoop config 必须是对象')
-  if (!config.model || typeof config.model.stream !== 'function')
-    throw new TypeError('AgentLoop config.model 必须实现 ModelAdapter')
+  if (!config.adapter
+    || typeof config.adapter.complete !== 'function'
+    || typeof config.adapter.stream !== 'function') {
+    throw new TypeError('AgentLoop config.adapter 必须实现 ModelAdapter')
+  }
+  if (typeof config.model !== 'object' || config.model === null)
+    throw new TypeError('AgentLoop config.model 必须是模型选择对象')
   if (!config.store || typeof config.store.read !== 'function' || typeof config.store.append !== 'function')
     throw new TypeError('AgentLoop config.store 必须实现 SessionStore')
   if (config.systemPrompt !== undefined && !config.systemPrompt.trim())

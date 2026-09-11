@@ -3,10 +3,9 @@ import type {
   ChatCompletion,
   ChatCompletionChunk,
 } from 'openai/resources/chat/completions'
-import type { DeepSeekModelAdapterConfig } from '../src/adapters/deepseek'
 import { describe, expect, it, vi } from 'vitest'
 import {
-  DeepSeekModelAdapter,
+  DeepSeekAdapter,
   getDeepSeekReasoningContent,
   normalizeDeepSeekChunk,
   normalizeDeepSeekCompletion,
@@ -80,12 +79,12 @@ describe('deepSeek model adapter', () => {
     }
 
     const create = vi.fn().mockResolvedValue(sourceStream())
-    const adapter = new DeepSeekModelAdapter({
+    const adapter = new DeepSeekAdapter({
       apiKey: 'test-key',
-      model: 'deepseek-v4-flash',
     }, createMockClient(create))
 
     const stream = await adapter.stream({
+      model: 'deepseek-v4-flash',
       messages: [
         { role: 'system', content: '系统指令' },
         {
@@ -205,13 +204,13 @@ describe('deepSeek model adapter', () => {
       object: 'chat.completion',
     } as unknown as ChatCompletion
     const create = vi.fn().mockResolvedValue(response)
-    const adapter = new DeepSeekModelAdapter({
+    const adapter = new DeepSeekAdapter({
       apiKey: 'test-key',
-      model: 'deepseek-v4-flash',
     }, createMockClient(create))
 
     // 等级集合由 DeepSeek 维护并会新增；库必须原样透传，让供应商成为权威。
     await adapter.complete({
+      model: 'deepseek-v4-flash',
       messages: [{ role: 'user', content: '测试未知等级' }],
       reasoningEffort: 'future-level',
     })
@@ -236,12 +235,12 @@ describe('deepSeek model adapter', () => {
       object: 'chat.completion',
     } as unknown as ChatCompletion
     const create = vi.fn().mockResolvedValue(response)
-    const adapter = new DeepSeekModelAdapter({
+    const adapter = new DeepSeekAdapter({
       apiKey: 'test-key',
-      model: 'deepseek-v4-flash',
     }, createMockClient(create))
 
     await adapter.complete({
+      model: 'deepseek-v4-flash',
       messages: [{ role: 'user', content: '不要思考' }],
       reasoningEffort: 'off',
     })
@@ -266,13 +265,13 @@ describe('deepSeek model adapter', () => {
       object: 'chat.completion',
     } as unknown as ChatCompletion
     const create = vi.fn().mockResolvedValue(response)
-    const adapter = new DeepSeekModelAdapter({
+    const adapter = new DeepSeekAdapter({
       apiKey: 'test-key',
-      model: 'deepseek-v4-flash',
     }, createMockClient(create))
 
     // 省略表示不覆盖：由供应商或模型自身默认值决定，库不替它表态。
     await adapter.complete({
+      model: 'deepseek-v4-flash',
       messages: [{ role: 'user', content: '使用默认设置' }],
     })
 
@@ -281,15 +280,11 @@ describe('deepSeek model adapter', () => {
     expect(sent).not.toHaveProperty('reasoning_effort')
   })
 
-  it('requires an explicit model name instead of a built-in default', () => {
-    expect(() => new DeepSeekModelAdapter({
-      apiKey: 'test-key',
-    } as unknown as DeepSeekModelAdapterConfig)).toThrow('DeepSeek model 不能为空')
+  it('keeps model selection out of the reusable adapter configuration', () => {
+    const adapter = new DeepSeekAdapter({ apiKey: 'test-key' })
 
-    expect(() => new DeepSeekModelAdapter({
-      apiKey: 'test-key',
-      model: '   ',
-    })).toThrow('DeepSeek model 不能为空')
+    expect(adapter.provider).toBe('deepseek')
+    expect(adapter).not.toHaveProperty('model')
   })
 
   it('classifies unknown failures without retrying inside the adapter', () => {

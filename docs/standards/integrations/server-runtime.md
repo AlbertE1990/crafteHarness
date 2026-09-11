@@ -37,16 +37,10 @@ HTTP 路由与展示字段也不属于 craft-harness 公共协议，不需要复
 ## 3. 组装规则
 
 ```ts
+const adapter = new DeepSeekAdapter({ apiKey, baseURL })
 const agent = new Agent({
-  model: {
-    adapter: 'deepseek',
-    apiKey,
-    baseURL,
-    model,
-  },
-  execution: {
-    reasoningEffort,
-  },
+  adapter,
+  model: { id: defaultModel, reasoningEffort: defaultReasoningEffort },
   tools: {
     additional: [getUserLocationTool, getWeatherTool],
     guard: serverToolGuard,
@@ -61,8 +55,8 @@ const app = createServerApp({ agent })
 - 环境变量只在 Runtime 启动边界读取，craft-harness 不读取 `process.env`。
 - 一个进程复用一个 Agent；当前 Server 显式注入 PostgreSQL Store，进程重启后由数据库恢复 Session。
 - 连接池由 Runtime 创建和关闭，不能进入 craft-harness Core，也不能由 Store 模块在 import 时隐式创建。
-- 时间、计算、文件、搜索和终端通用工具由 Agent 自动装载，不进入 Server 工具注册表；Server 显式设置
-  `tools.workspaceRoot`，不需要终端的部署通过 `disabledBuiltins` 关闭。
+- 时间和计算由 Agent 自动装载，不进入 Server 工具注册表。只有具备真实工作区的 Runtime 才设置
+  `tools.workspaceRoot` 并启用文件、搜索和终端；普通网页对话省略它。
 - 应用工具使用 `defineTool()`，可直接组成普通只读数组并通过 `tools.additional` 追加；Agent 负责归一化。
 - Runtime 只实现 `tools.guard(request)` 的业务风险规则；pending 审批、超时和重复提交由 Agent 管理。
 - 当前风险规则只适用于代码仓库内受信第一方工具，不代表第三方插件安全边界。
@@ -102,11 +96,11 @@ Fastify 将 `message` 映射为 Agent 请求的 `input`，并把前端 `sessionI
 消息投影为标准 `sessionName`；`sessionMetadata` 只保存 `source` 等创建扩展。多用户服务必须改为从可信认证和
 业务路由组装 scope，并在进入 Agent 前完成访问校验，不能采用浏览器传入的 scope 作为授权证明。
 
-请求顶层的 `stream` 决定传输：`true`（默认）返回 `text/event-stream` 并调用 `agent.stream()`；`false`
+请求体的 `stream` 决定传输：`true`（默认）返回 `text/event-stream` 并调用 `agent.stream()`；`false`
 返回普通 `application/json` 并调用 `agent.invoke()`，其 `data` 是封闭的 `AgentRunResult`。请求体是
-`{ message, sessionId?, stream, reasoningEffort? }`：`reasoningEffort` 是顶层单个字符串，`'off'`
-表示显式关闭推理，其他非空字符串作为供应商等级原样交给模型 Adapter，省略时不覆盖部署默认值。原来的
-`model: { reasoningEnabled, reasoningEffort }` 对象已删除。传输方式由方法直接表达，不再维护第二个模型开关。
+`{ message, sessionId?, stream, model?, reasoningEffort? }`。HTTP 的模型目录字段会在 Server 边界组装成
+Agent 请求的 `model: { id, reasoningEffort? }`；同一个 Agent 与 Adapter 处理全部已声明模型。传输方式由
+方法直接表达，不进入 Agent 的模型选择对象。
 
 ## 5. 标准事件直出与会话查询
 

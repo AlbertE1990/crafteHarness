@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { defineTool, ToolError } from '../tools'
+import { defineTool } from '../define-tool'
+import { ToolError } from '../errors'
 
 const calculatorOperations = [
   'add',

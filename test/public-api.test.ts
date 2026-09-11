@@ -7,6 +7,7 @@ import type {
   AgentToolInput,
   AgentToolsCommonConfig,
   ModelAdapter,
+  ModelSelection,
   SessionStore,
   ToolExecutionConfig,
   ToolGuardDecision,
@@ -24,8 +25,8 @@ import Agent, {
 } from '../src'
 import * as publicApi from '../src'
 import {
-  DeepSeekModelAdapter,
-  OpenAICompatibleModelAdapter,
+  DeepSeekAdapter,
+  OpenAICompatibleAdapter,
 } from '../src/adapters'
 import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
@@ -36,7 +37,8 @@ function acceptsPublicTypes(_value: {
   observability?: AgentObservabilityConfig
   tools?: AgentToolsCommonConfig
   tool?: AgentToolInput
-  model?: ModelAdapter
+  adapter?: ModelAdapter
+  model?: ModelSelection
   store?: SessionStore
   toolExecution?: ToolExecutionConfig
   guardDecision?: ToolGuardDecision
@@ -48,16 +50,18 @@ function acceptsPublicTypes(_value: {
 
 describe('craft-harness public API', () => {
   it('exports the normal developer facade and keeps internal normalization private', () => {
-    const model = new ScriptedModelAdapter({ script: [] })
+    const adapter = new ScriptedModelAdapter({ script: [] })
     const config: AgentConfigInput = {
-      model,
+      adapter,
+      model: { id: 'scripted-model' },
       sessionStore: new MemorySessionStore(),
       execution: { limits: { maxModelSteps: 2 } },
       observability: {},
     }
 
     acceptsPublicTypes({ config })
-    expect(defineAgentConfig(config).model).toBe(model)
+    expect(defineAgentConfig(config).adapter).toBe(adapter)
+    expect(defineAgentConfig(config).model).toEqual({ id: 'scripted-model' })
     expect(Agent).toBe(publicApi.Agent)
     expect(new Agent(config).invoke).toBeTypeOf('function')
     expect(new Agent(config).stream).toBeTypeOf('function')
@@ -68,32 +72,32 @@ describe('craft-harness public API', () => {
     expect('ToolApprovalManager' in publicApi).toBe(false)
   })
 
-  it('types OpenAI compatible as the default and keeps provider separate from adapter', () => {
+  it('keeps provider connection settings in the adapter and model choice beside it', () => {
     const kimiConfig: AgentConfigInput = {
-      model: {
+      adapter: new OpenAICompatibleAdapter({
         provider: 'moonshot',
         apiKey: 'test-key',
         baseURL: 'https://api.moonshot.cn/v1',
-        model: 'kimi-k3',
-      },
+      }),
+      model: { id: 'kimi-k3' },
     }
     const deepSeekConfig: AgentConfigInput = {
-      model: {
-        adapter: 'deepseek',
+      adapter: new DeepSeekAdapter({
         apiKey: 'test-key',
-        model: 'deepseek-flash',
-      },
-      execution: { reasoningEffort: 'high' },
+      }),
+      model: { id: 'deepseek-flash', reasoningEffort: 'high' },
     }
 
-    expect(defineAgentConfig(kimiConfig).model.provider).toBe('moonshot')
-    expect(defineAgentConfig(deepSeekConfig).model.provider).toBe('deepseek')
+    expect(defineAgentConfig(kimiConfig).adapter.provider).toBe('moonshot')
+    expect(defineAgentConfig(kimiConfig).model.id).toBe('kimi-k3')
+    expect(defineAgentConfig(deepSeekConfig).adapter.provider).toBe('deepseek')
+    expect(defineAgentConfig(deepSeekConfig).model.reasoningEffort).toBe('high')
   })
 
   it('exports production adapters only from the dedicated advanced entry', () => {
-    expect(DeepSeekModelAdapter).toBeTypeOf('function')
-    expect(OpenAICompatibleModelAdapter).toBeTypeOf('function')
-    expect('DeepSeekModelAdapter' in publicApi).toBe(false)
+    expect(DeepSeekAdapter).toBeTypeOf('function')
+    expect(OpenAICompatibleAdapter).toBeTypeOf('function')
+    expect('DeepSeekAdapter' in publicApi).toBe(false)
   })
 
   it('types trusted per-run context at the Agent boundary', () => {
@@ -102,7 +106,8 @@ describe('craft-harness public API', () => {
       readonly environment: 'test'
     }
     const config: AgentConfigInput<AppContext> = {
-      model: new ScriptedModelAdapter({ script: [] }),
+      adapter: new ScriptedModelAdapter({ script: [] }),
+      model: { id: 'scripted-model' },
       tools: {
         guard: request => request.context.tenantId
           ? { decision: 'allow' }

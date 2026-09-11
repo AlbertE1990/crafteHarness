@@ -71,7 +71,11 @@ async function assertAgentRestoresFromDatabase(store: PostgresSessionStore): Pro
   const firstAdapter = new ScriptedModelAdapter({
     script: [{ method: 'stream', chunks: [completionChunk('第一轮回答')] }],
   })
-  await consume(new Agent({ model: firstAdapter, sessionStore: store }).stream({
+  await consume(new Agent({
+    adapter: firstAdapter,
+    model: { id: 'scripted-model' },
+    sessionStore: store,
+  }).stream({
     scopeId,
     sessionId,
     input: '第一轮问题',
@@ -80,7 +84,11 @@ async function assertAgentRestoresFromDatabase(store: PostgresSessionStore): Pro
   const secondAdapter = new ScriptedModelAdapter({
     script: [{ method: 'stream', chunks: [completionChunk('第二轮回答')] }],
   })
-  await consume(new Agent({ model: secondAdapter, sessionStore: store }).stream({
+  await consume(new Agent({
+    adapter: secondAdapter,
+    model: { id: 'scripted-model' },
+    sessionStore: store,
+  }).stream({
     scopeId,
     sessionId,
     input: '第二轮问题',
@@ -108,9 +116,10 @@ async function assertRenameAndRemove(store: PostgresSessionStore): Promise<void>
   const scopeId = 'postgres-contract:mutation-scope'
   const sessionId = 'postgres-contract:mutation'
   await consume(new Agent({
-    model: new ScriptedModelAdapter({
+    adapter: new ScriptedModelAdapter({
       script: [{ method: 'stream', chunks: [completionChunk('待重命名回答')] }],
     }),
+    model: { id: 'scripted-model' },
     sessionStore: store,
   }).stream({
     scopeId,

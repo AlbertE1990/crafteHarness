@@ -8,6 +8,7 @@
 - [分阶段开发路线图](./roadmap.md)
 - [架构决策记录](./decisions/README.md)
 - [阶段交付记录](./deliveries/README.md)
+- [npm 首次发布清单](./npm-release-checklist.md)
 
 ## 状态语义
 
