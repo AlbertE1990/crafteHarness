@@ -14,9 +14,9 @@ import type {
   SessionFailureInfo,
   SessionListPage,
   SessionStoreOperation,
-} from '../../craft-agent'
+} from '../../../../src'
 import { randomUUID } from 'node:crypto'
-import { SessionStoreError } from '../../craft-agent'
+import { SessionStoreError } from '../../../../src'
 
 const DEFAULT_PAGE_SIZE = 100
 const MAX_PAGE_SIZE = 1_000

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AgentOutputEvent, AgentRunResult } from '../craft-agent'
+import type { AgentOutputEvent, AgentRunResult } from '../../../src'
 import MarkdownIt from 'markdown-it'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 

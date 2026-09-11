@@ -41,7 +41,7 @@ export function createPostgresPool(config: PostgresRuntimeConfig): Pool {
   const poolConfig: PoolConfig = {
     connectionString: config.connectionString,
     max: config.maxConnections,
-    application_name: 'craft-agent-server',
+    application_name: 'craft-harness-sample-server',
     ...(config.ssl ? { ssl: { rejectUnauthorized: true } } : {}),
   }
   return new Pool(poolConfig)

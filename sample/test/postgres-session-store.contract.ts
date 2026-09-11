@@ -1,20 +1,23 @@
-import type { ModelStreamChunk } from '../src/craft-agent'
+import type { ModelStreamChunk } from '../../src'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import process, { loadEnvFile } from 'node:process'
+import { fileURLToPath } from 'node:url'
 import { Pool } from 'pg'
-import Agent, { SessionStoreError } from '../src/craft-agent'
+import Agent, { SessionStoreError } from '../../src'
+import { ScriptedModelAdapter } from '../../test/support/scripted-model-adapter'
+import { assertSessionStoreContract } from '../../test/support/session-store-contract'
 import {
   createPostgresPool,
   readPostgresRuntimeConfig,
 } from '../src/server/database/postgres'
 import { PostgresSessionStore } from '../src/server/stores/postgres-session-store'
-import { ScriptedModelAdapter } from './support/scripted-model-adapter'
-import { assertSessionStoreContract } from './support/session-store-contract'
 
-if (existsSync('.env.local'))
-  loadEnvFile('.env.local')
+// 相对模块定位 sample/.env.local，而不是相对当前工作目录：脚本从仓库根执行。
+const envFile = fileURLToPath(new URL('../.env.local', import.meta.url))
+if (existsSync(envFile))
+  loadEnvFile(envFile)
 
 /**
  * 对学习者完成的 PostgreSQL Store 执行真实契约测试。
@@ -33,7 +36,7 @@ async function main(): Promise<void> {
     pool = new Pool({
       connectionString: config.connectionString,
       max: config.maxConnections,
-      application_name: 'craft-agent-store-contract',
+      application_name: 'craft-harness-sample-store-contract',
       // pg_trgm 安装在 public；隔离业务表时仍需让 PostgreSQL 找到扩展的 operator class。
       options: `-c search_path=${schema},public`,
       ...(config.ssl ? { ssl: { rejectUnauthorized: true } } : {}),

@@ -8,7 +8,7 @@ import type {
   AgentSessionMessage,
   ModelMessage,
   SessionSummary,
-} from '../craft-agent'
+} from '../../../src'
 import Fastify from 'fastify'
 
 /** 当前参考 Runtime 是单用户部署，仍显式组装固定 Session 作用域。 */

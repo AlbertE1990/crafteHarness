@@ -45,8 +45,8 @@
   },
   "scripts": {
     "build": "tsup",
-    "dev": "concurrently -n server,web -c green,cyan \"pnpm dev:server\" \"pnpm dev:web\"",
-    "dev:server": "tsx watch sample/src/server/index.ts",
+    "dev": "concurrently -n server,web -c green,cyan \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "node --import tsx --watch sample/src/server/index.ts",
     "dev:web": "vite --config sample/vite.config.ts --open",
     "build:sample": "vite build --config sample/vite.config.ts",
     "preview": "vite preview --config sample/vite.config.ts",

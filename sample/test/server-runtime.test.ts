@@ -3,16 +3,16 @@
 import type {
   ModelCompletion,
   ModelStreamChunk,
-} from '../src/craft-agent'
+} from '../../src'
 import type { ServerModelInfo, ServerStreamEvent } from '../src/server/app'
 import { describe, expect, it } from 'vitest'
-import Agent, { MemorySessionStore } from '../src/craft-agent'
+import Agent, { MemorySessionStore } from '../../src'
+import { ScriptedModelAdapter } from '../../test/support/scripted-model-adapter'
 import {
   manageRuntimeResourceTool,
   serverToolGuard,
 } from '../src/server/agent-tools'
 import { createServerApp } from '../src/server/app'
-import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
 /**
  * 契约测试注入的部署模型信息。
@@ -262,7 +262,11 @@ describe('server runtime HTTP boundary', () => {
       expect(chat.statusCode).toBe(200)
       expect(chat.headers['content-type']).toContain('text/event-stream')
       const events = parseSse(chat.body)
-      const sessionId = events[0]?.sessionId
+      // 首个事件必然是 session.started；显式收窄联合类型，而不是让断言退化成宽松类型。
+      const firstEvent = events[0]
+      if (firstEvent?.type !== 'session.started')
+        throw new Error(`首个事件应为 session.started，实际为 ${String(firstEvent?.type)}`)
+      const sessionId = firstEvent.sessionId
       expect(sessionId).toMatch(/^session-[0-9a-f-]{36}$/)
       expect(events).toEqual([
         { type: 'session.started', sessionId },

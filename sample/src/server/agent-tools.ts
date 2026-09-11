@@ -2,9 +2,9 @@ import type {
   ToolGuardDecision,
   ToolGuardEvaluator,
   ToolGuardRequest,
-} from '../craft-agent'
+} from '../../../src'
 import { z } from 'zod'
-import { defineTool, ToolError } from '../craft-agent'
+import { defineTool, ToolError } from '../../../src'
 import { getUserLocation, getWeather } from './func'
 
 /** 审批演示工具可操作的进程内资源；不会触碰文件、数据库或操作系统。 */

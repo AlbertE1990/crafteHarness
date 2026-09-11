@@ -1,5 +1,7 @@
+import { existsSync } from 'node:fs'
 import process, { loadEnvFile } from 'node:process'
-import Agent from '../craft-agent'
+import { fileURLToPath } from 'node:url'
+import Agent from '../../../src'
 import { serverToolGuard, serverTools } from './agent-tools'
 import { createServerApp } from './app'
 import {
@@ -10,7 +12,12 @@ import {
 import { readDeepSeekRuntimeConfig } from './model-config'
 import { PostgresSessionStore } from './stores/postgres-session-store'
 
-loadEnvFile('.env.local')
+// 相对模块定位 .env.local，而不是相对当前工作目录：脚本从仓库根执行，配置文件在 sample/。
+// 文件缺失时继续使用宿主环境变量，便于容器和 CI 直接注入。
+const envFile = fileURLToPath(new URL('../../.env.local', import.meta.url))
+if (existsSync(envFile))
+  loadEnvFile(envFile)
+
 const PORT = Number(process.env.PORT ?? 3000)
 
 // 模型名、endpoint 和推理等级都是会变化的部署事实，统一在启动期校验一次。

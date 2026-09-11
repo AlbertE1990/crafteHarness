@@ -1,8 +1,8 @@
-import type { AgentOutputEvent, ModelStreamChunk } from '../src/craft-agent'
+import type { AgentOutputEvent, ModelStreamChunk } from '../../src'
 import { describe, expect, it } from 'vitest'
-import Agent from '../src/craft-agent'
+import Agent from '../../src'
+import { ScriptedModelAdapter } from '../../test/support/scripted-model-adapter'
 import { serverToolGuard, serverTools } from '../src/server/agent-tools'
-import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
 const SCOPE_ID = 'scope-agent-model-adapter'
 

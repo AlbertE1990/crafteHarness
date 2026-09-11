@@ -1,4 +1,4 @@
-import type { ToolExecutionEvent } from '../src/craft-agent'
+import type { ToolExecutionEvent } from '../src'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import {
@@ -7,7 +7,7 @@ import {
   defineTool,
   executeTool,
   ToolError,
-} from '../src/craft-agent'
+} from '../src'
 
 describe('defineTool', () => {
   it('keeps model schema and executable implementation in one definition', () => {

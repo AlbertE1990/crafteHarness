@@ -1,14 +1,14 @@
-import type { ExecuteToolOptions } from '../src/craft-agent'
+import type { ExecuteToolOptions } from '../../src'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { defineAgentConfig, defineTool } from '../src/craft-agent'
+import { defineAgentConfig, defineTool } from '../../src'
+import { ScriptedModelAdapter } from '../../test/support/scripted-model-adapter'
 import {
   manageRuntimeResourceTool,
   serverToolGuard,
   serverTools,
 } from '../src/server/agent-tools'
 import { getTime, getUserLocation, getWeather } from '../src/server/func'
-import { ScriptedModelAdapter } from './support/scripted-model-adapter'
 
 /** 通过真实 Agent 配置边界把服务端原始 DefinedTool 归一化为 Harness 注册项。 */
 const registeredServerTools = defineAgentConfig({
@@ -201,8 +201,10 @@ describe('server tools through CraftAgent', () => {
   })
 
   it('uses validated arguments to allow reads, ask for writes and deny protected deletes', async () => {
-    /** 直接调用工具自己的参数级 Guard，并补齐 Agent 正常提供的关联上下文。 */
-    const evaluate = async (input: unknown) => await manageRuntimeResourceTool.guard!({
+    // 直接调用工具自己的参数级 Guard，并补齐 Agent 正常提供的关联上下文。
+    // 参数类型从 Guard 签名推导，避免把工具的真实输入契约退化成 unknown。
+    type GuardInput = Parameters<NonNullable<typeof manageRuntimeResourceTool.guard>>[0]['input']
+    const evaluate = async (input: GuardInput) => await manageRuntimeResourceTool.guard!({
       runId: 'run-server-tool',
       sessionId: 'session-server-tool',
       callId: 'call-server-tool',
