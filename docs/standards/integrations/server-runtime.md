@@ -69,17 +69,17 @@ const app = createServerApp({ agent })
 Runtime 环境变量集中在 `sample/.env.local`（模板见 `sample/.env.example`，从仓库根执行 `pnpm dev:server`
 时由案例自己加载）：
 
-| 变量                            | 必填 | 含义                                                                                                     |
-| ------------------------------- | ---- | -------------------------------------------------------------------------------------------------------- |
-| `DEEPSEEK_API_KEY`              | 是   | 模型凭据                                                                                                 |
-| `DEEPSEEK_MODEL`                | 是   | 模型名；缺失时在启动阶段报错，不回退到任何内置默认模型名                                                 |
-| `DEEPSEEK_BASE_URL`             | 否   | 默认 `https://api.deepseek.com`                                                                          |
-| `DEEPSEEK_REASONING_EFFORT`     | 否   | 部署默认等级：`off` 或供应商等级（如 `low`/`high`/`max`）；留空或未设置表示不下发该参数                  |
-| `DEEPSEEK_REASONING_EFFORTS`    | 否   | 逗号分隔的候选等级；未设置时默认 `off,low,high,max`，留空表示前端退化为自由输入，非空时 `off` 固定在最前 |
-| `CRAFT_AGENT_DATABASE_URL`      | 是   | PostgreSQL 连接串；缺失时启动报错                                                                        |
-| `CRAFT_AGENT_DATABASE_POOL_MAX` | 否   | 连接池上限，默认 10，必须是正整数                                                                        |
-| `CRAFT_AGENT_DATABASE_SSL`      | 否   | 只接受 `true`/`false`，默认 `false`                                                                      |
-| `PORT`                          | 否   | HTTP 监听端口，默认 3000                                                                                 |
+| 变量                            | 必填 | 含义                                |
+| ------------------------------- | ---- | ----------------------------------- |
+| `DEEPSEEK_API_KEY`              | 是   | 模型凭据                            |
+| `DEEPSEEK_BASE_URL`             | 否   | 默认 `https://api.deepseek.com`     |
+| `CRAFT_AGENT_DATABASE_URL`      | 是   | PostgreSQL 连接串；缺失时启动报错   |
+| `CRAFT_AGENT_DATABASE_POOL_MAX` | 否   | 连接池上限，默认 10，必须是正整数   |
+| `CRAFT_AGENT_DATABASE_SSL`      | 否   | 只接受 `true`/`false`，默认 `false` |
+| `PORT`                          | 否   | HTTP 监听端口，默认 3000            |
+
+环境变量里**只有连接与凭据**：模型集合与每个模型的推理能力一律来自 `sample/config/models.json`（见 §6），
+不放进环境变量，也不在库或 Adapter 里。
 
 配置文件的位置由**相对模块定位**决定，而不是当前工作目录：`sample/src/server/index.ts` 用
 `new URL('../../.env.local', import.meta.url)` 解析出 `sample/.env.local`，因此无论从仓库根执行 `pnpm dev`
@@ -88,15 +88,9 @@ Runtime 环境变量集中在 `sample/.env.local`（模板见 `sample/.env.examp
 `sample/.env.example`。
 库本身仍然不读取 `process.env`。
 
-`DEEPSEEK_REASONING_EFFORT` 是唯一的推理开关，解析时先 trim 再小写归一，设置时必须落在非空的
-`DEEPSEEK_REASONING_EFFORTS` 列表内。旧的 `DEEPSEEK_THINKING` 已删除：它原先判断
-`process.env.DEEPSEEK_THINKING === 'disabled'`，于是 `DEEPSEEK_THINKING=false` 这类写法会**反过来开启**
-思考。
-
-`DEEPSEEK_REASONING_EFFORTS` 的职责只有两件事：（a）启动期校验部署自己的默认等级，（b）驱动前端下拉。
-它**不校验单次请求**——请求等级由供应商最终裁定，否则运维漏更新一个等级就会让合法请求失败，正是库层要
-消除的“过期枚举 fail closed”问题。核心原则是：**换模型或增删推理等级 = 改 `sample/.env.local` + 重启**，不需要
-改库，也不需要改前端代码。
+核心原则是：**换模型或增删推理等级 = 改 `sample/config/models.json` + 重启**，不需要改库，也不需要改前端代码。
+旧的 `DEEPSEEK_THINKING` 与 `DEEPSEEK_MODEL` / `DEEPSEEK_MODELS` / `DEEPSEEK_REASONING_EFFORT(S)` 都已删除：
+模型侧的事实统一由 §6 的目录文件表达，环境变量只留连接与凭据。
 
 ## 4. 请求与取消
 
@@ -145,30 +139,82 @@ fail-closed 为本次工具失败并交回 AgentLoop；需要审批卡片时必�
 
 完整调试轨迹可立即通过 `onTrace` 观察；轨迹的持久化、脱敏和分页 HTTP 查询仍属于下一阶段。
 
-## 6. 模型元数据端点
+## 6. 模型目录端点
 
-`GET /api/model` 返回当前部署的模型事实，让页面无需重新构建即可跟随部署配置：
+`GET /api/model` 返回当前部署的**模型目录**：有哪些模型、每个模型各自能用哪些推理等级。
 
 ```json
 {
   "data": {
     "provider": "deepseek",
-    "model": "deepseek-chat",
-    "reasoningEffort": "high",
-    "reasoningEfforts": ["off", "low", "high", "max"]
+    "defaultModel": "deepseek-v4-flash",
+    "models": [
+      {
+        "id": "deepseek-v4-flash",
+        "label": "DeepSeek V4 Flash",
+        "reasoningEfforts": ["off", "low", "high", "max"],
+        "defaultReasoningEffort": "high"
+      },
+      { "id": "deepseek-reasoner", "label": "DeepSeek Reasoner", "reasoningEfforts": [], "defaultReasoningEffort": null }
+    ]
   }
 }
 ```
 
-- `reasoningEffort` 是部署默认等级，未配置时为 `null`。
-- `reasoningEfforts` 是下拉候选列表，来自 `DEEPSEEK_REASONING_EFFORTS`：未设置时为 `off,low,high,max`，
-  显式留空时为 `[]`，此时前端退化为自由文本输入。
-- 该列表只服务下拉与启动期自查，**不校验单次请求**；请求中的等级原样进入模型请求，由供应商裁定。
-- 前端下拉由此渲染，不再硬编码任何供应商词表。此前
+- `models` 是对象数组；`label` 只用于展示，请求体里传的是 `id`。
+- **`reasoningEfforts` 是按模型的**，不是全局列表：切到某个模型时前端只渲染该模型的候选。
+- `reasoningEfforts: []` 表示该模型**没有推理控制**（例如纯推理模型）：前端隐藏等级控件，请求里也不带
+  `reasoningEffort`。
+- `defaultReasoningEffort` 是请求未指定等级时采用的值；`null` 表示不下发该参数，由供应商决定。
+- 端点只暴露部署元数据，不暴露密钥；`provider` 与 `defaultModel` 与 Agent 配置同源，不维护第二份配置。
+
+### 6.1 目录归部署，词表不进库也不进 Adapter
+
+目录文件的唯一位置是 [`sample/config/models.json`](../../../sample/config/models.json)；模型侧的事实没有第二个
+来源——环境变量里只剩连接与凭据，库和 Adapter 里都没有词表。
+
+解析只做让部署能跑起来所必需的检查（有模型、有 `id`、默认值自洽）：配置文件是运维自己写的，
+再堆一层通用校验框架只会让这个案例变得难读。写错的字段会在启动阶段以明确信息报出，不会拖到第一次请求。
+
+这一层分工是刻意的：
+
+- **部署拥有词表**（有哪些模型、每个模型允许哪些等级）——它会随供应商变化，改 JSON 重启即可生效。
+- **Adapter 只拥有协议形状**（把开放值翻译成 `thinking` / `reasoning_effort`），不持有任何等级枚举。
+  库曾经在 DeepSeek Adapter 里维护 `low|high|max` 白名单，结果是供应商新增等级时旧版库把**合法**请求
+  判为非法（[ADR-0011](../../product/decisions/adr-0011-single-axis-reasoning-effort.md)）。
+- **前端只渲染**：不硬编码任何模型名或等级名。此前
   [`sample/src/pages/index.vue`](../../../sample/src/pages/index.vue)
   写死 `none/minimal/low/medium/high/xhigh/max`——多家供应商词表的并集，是最易腐化的地方。
-- 端点只暴露部署元数据，不暴露密钥；`provider` 与 `model` 与 Agent 配置同源，不维护第二份模型配置。
 
-推理等级词表归部署所有，模型名也归部署所有：库和前端都不再内置词表，增删等级或换模型只改
-`sample/.env.local` 并重启。这与 [模型 Adapter 协议](../protocols/model-adapter.md)中“开放字符串由 Adapter
-原样透传”的分工一致。
+请求会在 HTTP 边界**按选中模型**校验等级：模型没声明的等级返回
+`400 REASONING_EFFORT_NOT_SUPPORTED` 并列出可用值。这属于部署自查（目录是运维自己写的），
+比把非法值送给供应商得到的错误更明确。库本身仍然不校验等级，由 Adapter 原样透传，见
+[模型 Adapter 协议](../protocols/model-adapter.md)。
+
+### 6.2 模型切换发生在 Runtime，不在库
+
+库把模型名绑定在 Adapter 实例上，`AgentRequest` 没有模型字段，因此**多模型部署由 Runtime 按目录为每个
+模型创建一个 Agent 实例**，并在 `/api/chat` 里按请求的 `model` 分发（`createServerApp({ resolveAgent })`）。
+请求未声明或声明了目录里没有的模型时返回 `400 MODEL_NOT_SUPPORTED`，不静默退回默认模型——否则用户会
+以为切换生效了。
+
+默认模型直接使用 `createServerApp({ agent })` 注入的实例，不要求 Runtime 重复注册它；其余模型才查
+`resolveAgent`。多个 Agent 共享同一个 Session Store 与工具集合；同一会话先后使用不同模型是允许的，
+会话事实按 Session 记录，与模型无关。
+
+## 7. 会话重命名与删除
+
+`PATCH /api/conversation/:sessionId`（`{ name }`）与 `DELETE /api/conversation/:sessionId` 由 Runtime 通过
+`ConversationCatalogMutations` 端口注入。**库的 `SessionStore` 契约刻意不包含这两件事**：
+
+- 名称是**可变的展示投影**：`session.created` 事件保留创建时的原始名称作为不可变事实，目录表的
+  `session_name` 是它的当前值，`read()`/`list()` 都以目录为准，因此改名后两端点立刻返回新名称，
+  而事件历史不被改写。
+- 删除会**移除已记录的事实**（事件行 + 目录行，同一事务内先删事件以满足外键），这是产品需求，
+  不是 append-only 协议的一部分。把取舍留在 Runtime，库的追加式协议因此不受影响。
+
+未注入该端口时两个端点返回 `501 CONVERSATION_MUTATION_UNSUPPORTED`，而不是返回 200 让调用方以为改成功了。
+
+> 实现注意：Fastify 的 `Reply` 是 thenable，`await reply.code(404)` 会等待一个尚未发送的响应并让该请求
+> 永久挂起。设置状态码时不要 `await`：写 `reply.code(404)` 再 `return` 响应体。
+> [`sample/test/server-runtime.test.ts`](../../../sample/test/server-runtime.test.ts) 里有对应的回归断言。

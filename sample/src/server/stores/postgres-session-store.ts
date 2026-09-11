@@ -12,14 +12,31 @@ import type {
   SessionEventDraft,
   SessionEventPage,
   SessionFailureInfo,
+  SessionIdentity,
   SessionListPage,
   SessionStoreOperation,
+  SessionSummary,
 } from '../../../../src'
 import { randomUUID } from 'node:crypto'
 import { SessionStoreError } from '../../../../src'
 
 const DEFAULT_PAGE_SIZE = 100
 const MAX_PAGE_SIZE = 1_000
+
+/**
+ * 会话目录上的可变操作；库的 `SessionStore` 契约刻意不包含它们。
+ *
+ * 名称是**可变的展示属性**：`session.created` 事件保留创建时的原始名称作为不可变事实，
+ * 而目录表的 `session_name` 是它的当前投影，因此 read/list 都以目录为准。
+ * 删除则会真正移除事实（事件行 + 目录行），属于案例产品需求，不是 append-only 协议的
+ * 一部分——库不支持删除正是为了让这个取舍停留在应用层。
+ */
+export interface SessionCatalogMutations {
+  /** 重命名会话；成功返回更新后的摘要，会话不存在时返回 undefined。 */
+  rename: (identity: SessionIdentity, name: string) => Promise<SessionSummary | undefined>
+  /** 删除会话及其全部事件；返回 false 表示会话不存在。 */
+  remove: (identity: SessionIdentity) => Promise<boolean>
+}
 
 /** PostgreSQL bigint 默认以字符串返回；本类型明确记录数据库边界。 */
 interface SessionVersionRow {
@@ -60,7 +77,7 @@ interface PostgresErrorLike {
  * 本实现不维护进程内会话副本：append/read/list 都直接访问数据库。事务和行锁只负责
  * 单次写入期间的并发一致性，连接释放后不会在应用内缓存对话历史。
  */
-export class PostgresSessionStore implements SessionCatalogStore {
+export class PostgresSessionStore implements SessionCatalogStore, SessionCatalogMutations {
   constructor(readonly pool: Pool) {}
 
   /**
@@ -295,23 +312,7 @@ export class PostgresSessionStore implements SessionCatalogStore {
         LIMIT $4
       `, [options.scopeId, afterCatalogOrder, search ?? null, limit + 1])
       const hasMore = result.rows.length > limit
-      const sessions = result.rows.slice(0, limit).map(row => deepFreeze({
-        scopeId: row.scope_id,
-        sessionId: row.session_id,
-        ...(row.session_name ? { sessionName: row.session_name } : {}),
-        createdAt: toIsoTimestamp(row.created_at, row.session_id, 'list'),
-        version: parseDatabaseInteger(row.version, 'version', row.session_id, 'list'),
-        ...(row.metadata_json === null
-          ? {}
-          : {
-              metadata: restoreJsonObject(
-                row.metadata_json,
-                'metadata_json',
-                row.session_id,
-                'list',
-              ),
-            }),
-      }))
+      const sessions = result.rows.slice(0, limit).map(row => createSessionSummary(row))
       const nextAfterSessionId = sessions.at(-1)?.sessionId
 
       return deepFreeze({
@@ -326,6 +327,105 @@ export class PostgresSessionStore implements SessionCatalogStore {
       throw operationFailed('list', '', 'PostgreSQL 读取 Session 目录失败', error)
     }
   }
+
+  /**
+   * 更新会话的展示名称，成功返回更新后的摘要，会话不存在返回 undefined。
+   *
+   * 只改目录投影，不改写 `session.created` 事件：历史事实保持原样，当前名称以目录为准，
+   * 因此 read()/list() 会立刻看到新名称。返回值直接来自 UPDATE ... RETURNING，
+   * 避免"改名成功但随后读不到"的竞态。
+   */
+  async rename(identity: SessionIdentity, name: string): Promise<SessionSummary | undefined> {
+    validateIdentifier(identity.scopeId, 'scopeId')
+    validateIdentifier(identity.sessionId, 'sessionId')
+    validateSessionName(name)
+
+    try {
+      const result = await this.pool.query<SessionSummaryRow>(`
+        UPDATE craft_agent_sessions
+        SET session_name = $3, updated_at = now()
+        WHERE scope_id = $1 AND session_id = $2
+        RETURNING scope_id, session_id, session_name, version, metadata_json, created_at
+      `, [identity.scopeId, identity.sessionId, name.trim()])
+      const row = result.rows[0]
+      return row ? createSessionSummary(row) : undefined
+    }
+    catch (error) {
+      if (error instanceof SessionStoreError)
+        throw error
+      throw operationFailed('append', identity.sessionId, 'PostgreSQL 更新会话名称失败', error)
+    }
+  }
+
+  /**
+   * 删除会话及其全部事件。
+   *
+   * 事件表对目录表有外键且没有级联删除，因此必须在同一事务里先删事件再删目录行，
+   * 避免失败时留下半删除状态。这是唯一会移除已记录事实的操作，见本文件顶部说明。
+   */
+  async remove(identity: SessionIdentity): Promise<boolean> {
+    validateIdentifier(identity.scopeId, 'scopeId')
+    validateIdentifier(identity.sessionId, 'sessionId')
+    const client = await connectForAppend(this.pool, identity.sessionId)
+
+    try {
+      await client.query('BEGIN')
+      await client.query(`
+        DELETE FROM craft_agent_session_events
+        WHERE scope_id = $1 AND session_id = $2
+      `, [identity.scopeId, identity.sessionId])
+      const result = await client.query(`
+        DELETE FROM craft_agent_sessions
+        WHERE scope_id = $1 AND session_id = $2
+      `, [identity.scopeId, identity.sessionId])
+      await client.query('COMMIT')
+      return (result.rowCount ?? 0) > 0
+    }
+    catch (error) {
+      await safelyRollback(client)
+      if (error instanceof SessionStoreError)
+        throw error
+      throw operationFailed('append', identity.sessionId, 'PostgreSQL 删除会话失败', error)
+    }
+    finally {
+      client.release()
+    }
+  }
+}
+
+/** 会话名称必须是非空字符串，与数据库 CHECK 约束保持一致；长度上限由 HTTP 边界负责。 */
+function validateSessionName(value: string): void {
+  if (typeof value !== 'string' || !value.trim())
+    throw invalidArgument('', 'sessionName 必须是非空字符串')
+}
+
+/**
+ * 把目录行投影为协议摘要。
+ *
+ * `list` 与 `rename` 共用同一份映射，保证两处返回的形状与校验行为完全一致。
+ * operation 只用于诊断，不改变结果。
+ */
+function createSessionSummary(
+  row: SessionSummaryRow,
+  operation: SessionStoreOperation = 'list',
+): SessionSummary {
+  return deepFreeze({
+    scopeId: row.scope_id,
+    sessionId: row.session_id,
+    ...(row.session_name ? { sessionName: row.session_name } : {}),
+    createdAt: toIsoTimestamp(row.created_at, row.session_id, operation),
+    version: parseDatabaseInteger(row.version, 'version', row.session_id, operation),
+    ...(row.metadata_json === null
+      ? {}
+      : {
+          metadata: restoreJsonObject(
+            row.metadata_json,
+            'metadata_json',
+            row.session_id,
+            operation,
+          ),
+        }),
+  })
 }
 
 /** 连接池获取连接失败时也遵守 SessionStore 的稳定错误协议。 */

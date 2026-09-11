@@ -53,6 +53,7 @@ async function main(): Promise<void> {
     })
     await assertConcurrentAppend(store)
     await assertAgentRestoresFromDatabase(store)
+    await assertRenameAndRemove(store)
     process.stdout.write(`PostgresSessionStore 契约测试通过：${JSON.stringify(result, null, 2)}\n`)
   }
   finally {
@@ -95,6 +96,58 @@ async function assertAgentRestoresFromDatabase(store: PostgresSessionStore): Pro
   ]
   if (JSON.stringify(rolesAndContent) !== JSON.stringify(expected))
     throw new Error('PostgreSQL Agent 恢复失败：新实例未加载第一轮数据库历史')
+}
+
+/**
+ * 验证重命名与删除在真实数据库上的行为。
+ *
+ * 名称是目录投影：改名后 list/read 都应看到新名称，而 `session.created` 事件仍保留
+ * 创建时的原始名称。删除必须连同事件一起移除，否则外键会让目录行删不掉。
+ */
+async function assertRenameAndRemove(store: PostgresSessionStore): Promise<void> {
+  const scopeId = 'postgres-contract:mutation-scope'
+  const sessionId = 'postgres-contract:mutation'
+  await consume(new Agent({
+    model: new ScriptedModelAdapter({
+      script: [{ method: 'stream', chunks: [completionChunk('待重命名回答')] }],
+    }),
+    sessionStore: store,
+  }).stream({
+    scopeId,
+    sessionId,
+    sessionName: '原始名称',
+    input: '第一问',
+  }))
+
+  const renamed = await store.rename({ scopeId, sessionId }, '改后的名称')
+  if (renamed?.sessionName !== '改后的名称')
+    throw new Error(`重命名未返回更新后的摘要：${JSON.stringify(renamed)}`)
+
+  const listed = await store.list({ scopeId })
+  if (listed.sessions.find(item => item.sessionId === sessionId)?.sessionName !== '改后的名称')
+    throw new Error('重命名后目录未反映新名称')
+
+  const page = await store.read({ scopeId, sessionId })
+  if (page.sessionName !== '改后的名称')
+    throw new Error('重命名后 read() 未反映新名称')
+  const created = page.events.find(event => event.type === 'session.created')
+  if (created?.type !== 'session.created' || created.sessionName !== '原始名称')
+    throw new Error('重命名不应改写 session.created 事件里的原始名称')
+
+  if (await store.rename({ scopeId, sessionId: 'postgres-contract:absent' }, '名称') !== undefined)
+    throw new Error('对不存在的会话重命名应返回 undefined')
+
+  if (!await store.remove({ scopeId, sessionId }))
+    throw new Error('删除已存在的会话应返回 true')
+  if (await store.remove({ scopeId, sessionId }))
+    throw new Error('重复删除应返回 false')
+
+  const afterRemove = await store.list({ scopeId })
+  if (afterRemove.sessions.some(item => item.sessionId === sessionId))
+    throw new Error('删除后会话仍出现在目录中')
+  const eventsAfterRemove = await store.read({ scopeId, sessionId })
+  if (eventsAfterRemove.events.length !== 0 || eventsAfterRemove.latestVersion !== 0)
+    throw new Error('删除后事件应全部移除')
 }
 
 /** 完整消费 Agent 输出；数据库契约只关心最终持久化事实。 */

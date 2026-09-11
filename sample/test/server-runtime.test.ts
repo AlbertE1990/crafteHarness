@@ -15,16 +15,20 @@ import {
 import { createServerApp } from '../src/server/app'
 
 /**
- * 契约测试注入的部署模型信息。
+ * 契约测试注入的部署模型目录。
  *
- * 真实 Runtime 由环境变量组装这份词表；测试只需要覆盖"前端候选来自 Server 而不是
- * 硬编码"这一契约，因此使用固定值。
+ * 真实 Runtime 从 `sample/config/models.json`（或环境变量回退）读取这份词表；测试只需要
+ * 覆盖"候选由部署提供、前端不硬编码、请求按选中模型校验"这几条契约，因此使用固定值。
  */
 const MODEL_INFO: ServerModelInfo = {
   provider: 'scripted',
-  model: 'scripted-model',
-  reasoningEffort: null,
-  reasoningEfforts: ['off', 'low', 'high', 'max'],
+  defaultModel: 'scripted-model',
+  models: [{
+    id: 'scripted-model',
+    label: 'Scripted Model',
+    reasoningEfforts: ['off', 'low', 'high', 'max'],
+    defaultReasoningEffort: 'high',
+  }],
 }
 
 /** 构造 Server Runtime 契约测试使用的标准模型 chunk。 */
@@ -149,16 +153,259 @@ describe('server runtime HTTP boundary', () => {
     try {
       const response = await app.inject({ method: 'GET', url: '/api/model' })
 
-      // 前端下拉的候选来自部署配置：换模型或增删等级不需要改动前端代码。
+      // 前端下拉的候选来自部署目录：换模型或增删等级不需要改动前端代码，也不需要改 Adapter。
       expect(response.statusCode).toBe(200)
       expect(response.json()).toEqual({
         data: {
           provider: 'scripted',
-          model: 'scripted-model',
-          reasoningEffort: null,
-          reasoningEfforts: ['off', 'low', 'high', 'max'],
+          defaultModel: 'scripted-model',
+          models: [{
+            id: 'scripted-model',
+            label: 'Scripted Model',
+            reasoningEfforts: ['off', 'low', 'high', 'max'],
+            defaultReasoningEffort: 'high',
+          }],
         },
       })
+    }
+    finally {
+      await app.close()
+    }
+  })
+
+  it('renames and deletes conversations through the injected catalog port', async () => {
+    const agent = new Agent({ model: new ScriptedModelAdapter({ script: [] }) })
+    // 端口用内存实现即可：真正的 SQL 由 postgres-session-store.contract.ts 覆盖。
+    const names = new Map([['session-known', '旧名称']])
+    const app = createServerApp({
+      agent,
+      model: MODEL_INFO,
+      logger: false,
+      conversations: {
+        rename: async (sessionId, name) => {
+          if (!names.has(sessionId))
+            return undefined
+          names.set(sessionId, name)
+          return {
+            scopeId: 'default',
+            sessionId,
+            sessionName: name,
+            createdAt: '2026-09-11T00:00:00.000Z',
+            version: 3,
+          }
+        },
+        remove: async sessionId => names.delete(sessionId),
+      },
+    })
+
+    try {
+      const renamed = await app.inject({
+        method: 'PATCH',
+        url: '/api/conversation/session-known',
+        payload: { name: '  新名称  ' },
+      })
+      expect(renamed.statusCode).toBe(200)
+      // 名称前后空白在 HTTP 边界裁掉，返回与列表端点一致的摘要形状。
+      expect(renamed.json().data).toMatchObject({ id: 'session-known', name: '新名称' })
+      expect(names.get('session-known')).toBe('新名称')
+
+      const missing = await app.inject({
+        method: 'PATCH',
+        url: '/api/conversation/session-missing',
+        payload: { name: '新名称' },
+      })
+      expect(missing.statusCode).toBe(404)
+      expect(missing.json().error).toBe('SESSION_NOT_FOUND')
+
+      // 纯空白名称不进入业务层：schema 直接判 400。
+      const blank = await app.inject({
+        method: 'PATCH',
+        url: '/api/conversation/session-known',
+        payload: { name: '   ' },
+      })
+      expect(blank.statusCode).toBe(400)
+
+      const deleted = await app.inject({
+        method: 'DELETE',
+        url: '/api/conversation/session-known',
+      })
+      expect(deleted.statusCode).toBe(200)
+      expect(deleted.json()).toEqual({ data: { id: 'session-known', deleted: true } })
+      expect(names.has('session-known')).toBe(false)
+
+      const deleteMissing = await app.inject({
+        method: 'DELETE',
+        url: '/api/conversation/session-known',
+      })
+      expect(deleteMissing.statusCode).toBe(404)
+    }
+    finally {
+      await app.close()
+    }
+  })
+
+  it('refuses conversation mutations when the runtime injects no catalog port', async () => {
+    const agent = new Agent({ model: new ScriptedModelAdapter({ script: [] }) })
+    const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
+
+    try {
+      // 缺少写能力时必须明确拒绝，而不是返回 200 让调用方以为改成功了。
+      const renamed = await app.inject({
+        method: 'PATCH',
+        url: '/api/conversation/session-any',
+        payload: { name: '新名称' },
+      })
+      const deleted = await app.inject({
+        method: 'DELETE',
+        url: '/api/conversation/session-any',
+      })
+
+      expect(renamed.statusCode).toBe(501)
+      expect(deleted.statusCode).toBe(501)
+      expect(renamed.json().error).toBe('CONVERSATION_MUTATION_UNSUPPORTED')
+    }
+    finally {
+      await app.close()
+    }
+  })
+
+  it('dispatches a chat request to the agent bound to the requested model', async () => {
+    const defaultAdapter = new ScriptedModelAdapter({
+      script: [{ method: 'complete', result: completion('默认模型回答') }],
+    })
+    const otherAdapter = new ScriptedModelAdapter({
+      script: [{ method: 'complete', result: completion('其它模型回答') }],
+    })
+    const app = createServerApp({
+      agent: new Agent({ model: defaultAdapter }),
+      model: {
+        ...MODEL_INFO,
+        models: [
+          ...MODEL_INFO.models,
+          {
+            id: 'other-model',
+            label: 'Other',
+            reasoningEfforts: ['high'],
+            defaultReasoningEffort: null,
+          },
+        ],
+      },
+      resolveAgent: model => (model === 'other-model'
+        ? new Agent({ model: otherAdapter })
+        : undefined),
+      logger: false,
+    })
+
+    try {
+      const switched = await app.inject({
+        method: 'POST',
+        url: '/api/chat',
+        payload: { message: '换模型', stream: false, model: 'other-model' },
+      })
+      expect(switched.statusCode).toBe(200)
+      expect(switched.json().data.content).toBe('其它模型回答')
+      expect(otherAdapter.calls).toHaveLength(1)
+      expect(defaultAdapter.calls).toHaveLength(0)
+
+      // 未声明的模型直接 400，不静默退回默认模型。
+      const unsupported = await app.inject({
+        method: 'POST',
+        url: '/api/chat',
+        payload: { message: '换模型', stream: false, model: 'missing-model' },
+      })
+      expect(unsupported.statusCode).toBe(400)
+      expect(unsupported.json().error).toBe('MODEL_NOT_SUPPORTED')
+      expect(defaultAdapter.calls).toHaveLength(0)
+    }
+    finally {
+      await app.close()
+    }
+  })
+
+  it('validates the reasoning level against the selected model', async () => {
+    const adapter = new ScriptedModelAdapter({
+      script: [
+        { method: 'complete', result: completion('回答一') },
+        { method: 'complete', result: completion('回答二') },
+      ],
+    })
+    const app = createServerApp({
+      agent: new Agent({ model: adapter }),
+      model: {
+        ...MODEL_INFO,
+        models: [
+          ...MODEL_INFO.models,
+          // 纯推理模型：不接受任何等级，因此请求里带等级会被拒绝。
+          {
+            id: 'reasoner-model',
+            label: 'Reasoner',
+            reasoningEfforts: [],
+            defaultReasoningEffort: null,
+          },
+        ],
+      },
+      resolveAgent: model => (model === 'reasoner-model'
+        ? new Agent({ model: adapter })
+        : undefined),
+      logger: false,
+    })
+
+    try {
+      // 模型没声明的等级：在 HTTP 边界拒绝，并说明可用值。
+      const wrongLevel = await app.inject({
+        method: 'POST',
+        url: '/api/chat',
+        payload: { message: '试试', stream: false, model: 'scripted-model', reasoningEffort: 'ultra' },
+      })
+      expect(wrongLevel.statusCode).toBe(400)
+      expect(wrongLevel.json().error).toBe('REASONING_EFFORT_NOT_SUPPORTED')
+      expect(wrongLevel.json().message).toContain('off, low, high, max')
+      expect(adapter.calls).toHaveLength(0)
+
+      // 不支持等级的模型：任何等级都被拒绝。
+      const noLevels = await app.inject({
+        method: 'POST',
+        url: '/api/chat',
+        payload: { message: '试试', stream: false, model: 'reasoner-model', reasoningEffort: 'high' },
+      })
+      expect(noLevels.statusCode).toBe(400)
+      expect(noLevels.json().message).toContain('不支持设置推理等级')
+      expect(adapter.calls).toHaveLength(0)
+
+      // 请求未指定等级时用该模型的默认值；默认值为 null 则不下发该参数。
+      await app.inject({
+        method: 'POST',
+        url: '/api/chat',
+        payload: { message: '默认等级', stream: false, model: 'scripted-model' },
+      })
+      expect(adapter.calls[0]?.request.reasoningEffort).toBe('high')
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/chat',
+        payload: { message: '无默认等级', stream: false, model: 'reasoner-model' },
+      })
+      expect(adapter.calls[1]?.request).not.toHaveProperty('reasoningEffort')
+    }
+    finally {
+      await app.close()
+    }
+  })
+
+  it('answers the not-found path instead of awaiting the reply object', async () => {
+    const agent = new Agent({ model: new ScriptedModelAdapter({ script: [] }) })
+    const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
+
+    try {
+      // 回归保护：Fastify 的 Reply 是 thenable，`await reply.code(404)` 会等待一个
+      // 还没发送的响应，导致该请求永久挂起（表现为测试超时而不是 404）。
+      const missing = await app.inject({
+        method: 'GET',
+        url: '/api/conversation/session-does-not-exist',
+      })
+
+      expect(missing.statusCode).toBe(404)
+      expect(missing.json().error).toBe('SESSION_NOT_FOUND')
     }
     finally {
       await app.close()
@@ -208,7 +455,7 @@ describe('server runtime HTTP boundary', () => {
         payload: {
           message: '使用非流式请求',
           stream: false,
-          reasoningEffort: 'future-level',
+          reasoningEffort: 'max',
         },
       })
 
@@ -223,9 +470,10 @@ describe('server runtime HTTP boundary', () => {
           reasoning: 'JSON 思考',
         },
       })
+      // 请求里给出的等级原样进入模型请求；"库不校验等级"由 Adapter 契约测试守着。
       expect(adapter.calls[0]).toMatchObject({
         method: 'complete',
-        request: { reasoningEffort: 'future-level' },
+        request: { reasoningEffort: 'max' },
       })
     }
     finally {

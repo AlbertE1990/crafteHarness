@@ -1,77 +1,75 @@
 // @vitest-environment node
 
 import { describe, expect, it } from 'vitest'
-import { readDeepSeekRuntimeConfig } from '../src/server/model-config'
+import { parseModelCatalog, readDeepSeekRuntimeConfig } from '../src/server/model-config'
 
-/** 构造包含必需字段的最小部署环境。 */
-function createEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
-    DEEPSEEK_API_KEY: 'test-key',
-    DEEPSEEK_MODEL: 'deepseek-test-model',
-    ...overrides,
-  }
+/** 一份典型的部署目录：两个模型，各自不同的推理能力。 */
+const CATALOG = {
+  defaultModel: 'model-pro',
+  models: [
+    {
+      id: 'model-flash',
+      label: 'Flash',
+      reasoningEfforts: ['off', 'low', 'high'],
+      defaultReasoningEffort: 'low',
+    },
+    { id: 'model-pro', label: 'Pro', reasoningEfforts: ['high', 'max'], defaultReasoningEffort: 'max' },
+    // 纯推理模型：不声明等级，因此不支持表达推理强度。
+    { id: 'model-reasoner' },
+  ],
 }
 
-describe('deepSeek runtime config', () => {
-  it('fails at startup instead of falling back to a built-in model name', () => {
-    expect(() => readDeepSeekRuntimeConfig({})).toThrow('缺少环境变量 DEEPSEEK_API_KEY')
-    expect(() => readDeepSeekRuntimeConfig({ DEEPSEEK_API_KEY: 'test-key' }))
-      .toThrow('缺少环境变量 DEEPSEEK_MODEL')
-    expect(() => readDeepSeekRuntimeConfig(createEnv({ DEEPSEEK_MODEL: '   ' })))
-      .toThrow('缺少环境变量 DEEPSEEK_MODEL')
+describe('model catalog', () => {
+  it('reads per-model reasoning capabilities from the catalog', () => {
+    const catalog = parseModelCatalog(JSON.stringify(CATALOG))
+
+    expect(catalog).toEqual({
+      defaultModel: 'model-pro',
+      models: [
+        {
+          id: 'model-flash',
+          label: 'Flash',
+          reasoningEfforts: ['off', 'low', 'high'],
+          defaultReasoningEffort: 'low',
+        },
+        { id: 'model-pro', label: 'Pro', reasoningEfforts: ['high', 'max'], defaultReasoningEffort: 'max' },
+        // label 缺省等于 id；没有 reasoningEfforts 表示这个模型不接受等级。
+        { id: 'model-reasoner', label: 'model-reasoner', reasoningEfforts: [], defaultReasoningEffort: null },
+      ],
+    })
   })
 
-  it('uses documented defaults when optional values are absent', () => {
-    const config = readDeepSeekRuntimeConfig(createEnv())
+  it('defaults the model to the first entry and requires the models array', () => {
+    expect(parseModelCatalog(JSON.stringify({ models: [{ id: 'only' }] })).defaultModel).toBe('only')
+    expect(() => parseModelCatalog(JSON.stringify({ models: [] }))).toThrow('models 必须是非空数组')
+    expect(() => parseModelCatalog(JSON.stringify({}))).toThrow('models 必须是非空数组')
+  })
+
+  it('rejects entries without an id and an inconsistent default level', () => {
+    expect(() => parseModelCatalog(JSON.stringify({ models: [{ label: '没有 id' }] })))
+      .toThrow('都需要非空的 id')
+    expect(() => parseModelCatalog(JSON.stringify({
+      models: [{ id: 'a', reasoningEfforts: ['low'], defaultReasoningEffort: 'high' }],
+    }))).toThrow('defaultReasoningEffort high 不在 reasoningEfforts 中')
+    expect(() => parseModelCatalog('{ 不是 JSON'))
+      .toThrow()
+  })
+
+  it('reads the repository catalog and the connection config', () => {
+    // 仓库自带的 sample/config/models.json 必须可用，否则案例启动即失败。
+    const config = readDeepSeekRuntimeConfig({ DEEPSEEK_API_KEY: 'test-key' })
 
     expect(config).toMatchObject({
       provider: 'deepseek',
-      model: 'deepseek-test-model',
       baseURL: 'https://api.deepseek.com',
-      // null 表示不覆盖：不下发任何推理参数，由供应商或模型自身默认值决定。
-      reasoningEffort: null,
-      reasoningEfforts: ['off', 'low', 'high', 'max'],
+      apiKey: 'test-key',
     })
+    expect(config.models.length).toBeGreaterThan(0)
+    expect(config.models.some(model => model.id === config.defaultModel)).toBe(true)
     expect(Object.isFrozen(config)).toBe(true)
   })
 
-  it('reads the reasoning vocabulary from the deployment', () => {
-    const config = readDeepSeekRuntimeConfig(createEnv({
-      DEEPSEEK_BASE_URL: ' https://example.test/v1 ',
-      DEEPSEEK_REASONING_EFFORTS: ' LOW , high ,off, high ',
-      DEEPSEEK_REASONING_EFFORT: ' HIGH ',
-    }))
-
-    // 归一化为小写、去重，并让保留值稳定排在最前。
-    expect(config.baseURL).toBe('https://example.test/v1')
-    expect(config.reasoningEfforts).toEqual(['off', 'low', 'high'])
-    expect(config.reasoningEffort).toBe('high')
-  })
-
-  it('keeps off selectable and allows disabling the candidate list entirely', () => {
-    expect(readDeepSeekRuntimeConfig(createEnv({
-      DEEPSEEK_REASONING_EFFORTS: 'low,high',
-      DEEPSEEK_REASONING_EFFORT: 'off',
-    }))).toMatchObject({
-      reasoningEfforts: ['off', 'low', 'high'],
-      reasoningEffort: 'off',
-    })
-
-    // 显式留空表示运维主动关闭下拉候选；前端会退化为自由输入。
-    expect(readDeepSeekRuntimeConfig(createEnv({
-      DEEPSEEK_REASONING_EFFORTS: '  ',
-      DEEPSEEK_REASONING_EFFORT: 'anything',
-    }))).toMatchObject({
-      reasoningEfforts: [],
-      reasoningEffort: 'anything',
-    })
-  })
-
-  it('rejects a default level that is not in the configured candidates', () => {
-    // 只校验部署自己的默认值；请求级等级不经过这份列表，避免过期枚举让合法请求失败。
-    expect(() => readDeepSeekRuntimeConfig(createEnv({
-      DEEPSEEK_REASONING_EFFORTS: 'off,low',
-      DEEPSEEK_REASONING_EFFORT: 'max',
-    }))).toThrow('DEEPSEEK_REASONING_EFFORT 取值 max 不在 DEEPSEEK_REASONING_EFFORTS 中')
+  it('still requires the API key, which is the only model-related value left in env', () => {
+    expect(() => readDeepSeekRuntimeConfig({})).toThrow('缺少环境变量 DEEPSEEK_API_KEY')
   })
 })

@@ -74,6 +74,15 @@ export default defineConfig({
     proxy: {
       '/api': 'http://127.0.0.1:3000',
     },
+    watch: {
+      /*
+        编辑器与工具链常在被写文件旁边建临时目录（例如 `.foo.ts.<pid>.<uuid>.tmpdir/`），
+        并在写完后改名就位。Windows 上这些临时文件在 watcher 注册的瞬间可能仍被占用，
+        chokidar 抛 EBUSY 会让 dev server 直接退出，而不是只报一个警告。
+        这里统一忽略这类临时产物：它们本来就不该参与 HMR。
+      */
+      ignored: ['**/*.tmpdir/**', '**/.*.tmpdir/**', '**/*.tmp', '**/.*.swp'],
+    },
   },
 
   // https://github.com/vitest-dev/vitest

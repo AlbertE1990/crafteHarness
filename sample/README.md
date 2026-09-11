@@ -25,29 +25,77 @@ pnpm dev               # 在仓库根执行
 `.env.local` **相对模块定位**（`sample/src/server/index.ts` 用 `import.meta.url` 解析），不依赖当前工作目录；
 文件不存在时会跳过加载并直接使用宿主环境变量，便于容器与 CI 注入。
 
+## 模型目录：有哪些模型、每个模型能用哪些推理等级
+
+这份数据属于**部署**，唯一来源是 `config/models.json`：
+
+```json
+{
+  "defaultModel": "deepseek-v4-flash",
+  "models": [
+    {
+      "id": "deepseek-v4-flash",
+      "label": "DeepSeek V4 Flash",
+      "reasoningEfforts": ["off", "low", "high", "max"],
+      "defaultReasoningEffort": "high"
+    },
+    { "id": "deepseek-reasoner", "label": "DeepSeek Reasoner" }
+  ]
+}
+```
+
+| 字段                     | 说明                                                         |
+| ------------------------ | ------------------------------------------------------------ |
+| `defaultModel`           | 默认模型 id；省略时取 `models[0]`，必须存在于 `models` 中    |
+| `id`                     | 模型名，请求体里传的就是它；大小写敏感                       |
+| `label`                  | 界面展示名；省略时等于 `id`                                  |
+| `reasoningEfforts`       | **该模型**允许的推理等级；省略或 `[]` 表示这个模型不接受等级 |
+| `defaultReasoningEffort` | 请求未指定等级时采用的值；`null`/省略表示不下发该参数        |
+
+前端只做两件事：`GET /api/model` 拿这份目录、按选中的模型渲染等级下拉。因此**换模型或增删等级
+只需要改这个 JSON 并重启** —— 不用改前端、不用改库，也不用改 Adapter。
+
+三条语义要点：
+
+- **等级是按模型的**：切到某个模型时，等级下拉只显示该模型的 `reasoningEfforts`；当前选中值不在新
+  模型列表里时会重置为该模型的 `defaultReasoningEffort`。
+- **`reasoningEfforts: []` 表示"这个模型没有推理控制"**（例如纯推理模型）：界面隐藏等级控件，
+  请求里也不带 `reasoningEffort`。
+- **请求会在 HTTP 边界按选中模型校验**：模型没声明的等级返回 `400 REASONING_EFFORT_NOT_SUPPORTED`
+  并列出可用值。这属于部署自查——目录是运维自己写的，报错比把非法值送给供应商更清楚。
+
+### Adapter 不持有词表
+
+`craft-harness` 的 DeepSeek Adapter 只负责把开放值翻译成供应商字段（`thinking` / `reasoning_effort`），
+**不知道也不校验有哪些模型和等级**。目录在部署、协议形状在 Adapter，两边各自演化：供应商加一档等级时，
+改 JSON 即可生效，不需要等库发版，也不会被库里的旧枚举拒绝。
+
 ## 环境变量
 
-| 变量                            | 必填 | 说明                                                                   |
-| ------------------------------- | ---- | ---------------------------------------------------------------------- |
-| `DEEPSEEK_API_KEY`              | 是   | 供应商密钥                                                             |
-| `DEEPSEEK_MODEL`                | 是   | 模型名。库不内置默认值：模型名会过期，必须由部署显式声明               |
-| `DEEPSEEK_BASE_URL`             | 否   | 默认 `https://api.deepseek.com`                                        |
-| `DEEPSEEK_REASONING_EFFORT`     | 否   | 部署默认推理等级；`off` 关闭推理；留空表示不下发该参数。解析时统一小写 |
-| `DEEPSEEK_REASONING_EFFORTS`    | 否   | 前端下拉候选（逗号分隔）。**只影响候选与启动自查，不校验单次请求**     |
-| `CRAFT_AGENT_DATABASE_URL`      | 是   | PostgreSQL 连接串                                                      |
-| `CRAFT_AGENT_DATABASE_POOL_MAX` | 否   | 连接池上限                                                             |
-| `CRAFT_AGENT_DATABASE_SSL`      | 否   | 是否启用 SSL                                                           |
-| `PORT`                          | 否   | 后端端口，默认 `3000`                                                  |
+这里只有**连接与部署凭据**；模型与推理能力一律走 `config/models.json`，不放进环境变量。
+
+| 变量                            | 必填 | 说明                            |
+| ------------------------------- | ---- | ------------------------------- |
+| `DEEPSEEK_API_KEY`              | 是   | 供应商密钥                      |
+| `DEEPSEEK_BASE_URL`             | 否   | 默认 `https://api.deepseek.com` |
+| `CRAFT_AGENT_DATABASE_URL`      | 是   | PostgreSQL 连接串               |
+| `CRAFT_AGENT_DATABASE_POOL_MAX` | 否   | 连接池上限                      |
+| `CRAFT_AGENT_DATABASE_SSL`      | 否   | 是否启用 SSL                    |
+| `PORT`                          | 否   | 后端端口，默认 `3000`           |
 
 ## HTTP 接口
 
-| 方法   | 路径                              | 说明                                                                                                                  |
-| ------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `POST` | `/api/chat`                       | 发起一次 Agent Run。请求体 `{ message, conversationId?, stream?, reasoningEffort? }`；`stream` 默认 `true` 时返回 SSE |
-| `GET`  | `/api/model`                      | 返回部署的模型与推理等级候选，前端下拉由此渲染，不在页面里硬编码                                                      |
-| `GET`  | `/api/conversation/list`          | 会话目录（仅列表展示所需的最小摘要）                                                                                  |
-| `GET`  | `/api/conversation/:sessionId`    | 按需读取单个会话的完整投影                                                                                            |
-| `POST` | `/api/tool-approvals/:approvalId` | 提交工具审批决定 `{ decision: 'allow' \| 'deny' }`                                                                    |
+| 方法     | 路径                              | 说明                                                                                                                          |
+| -------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `POST`   | `/api/chat`                       | 发起一次 Agent Run。请求体 `{ message, conversationId?, stream?, reasoningEffort?, model? }`；`stream` 默认 `true` 时返回 SSE |
+| `GET`    | `/api/model`                      | 返回模型目录（每个模型各自的推理能力），前端由此渲染，不在页面里硬编码                                                        |
+| `GET`    | `/api/conversation/list`          | 会话目录（仅列表展示所需的最小摘要）                                                                                          |
+| `GET`    | `/api/conversation/:sessionId`    | 按需读取单个会话的完整投影                                                                                                    |
+| `PATCH`  | `/api/conversation/:sessionId`    | 重命名会话，请求体 `{ name }`（非空、≤80 字符）                                                                               |
+| `DELETE` | `/api/conversation/:sessionId`    | 删除会话及其全部事件                                                                                                          |
+| `POST`   | `/api/tool-approvals/:approvalId` | 提交工具审批决定 `{ decision: 'allow' \| 'deny' }`                                                                            |
+
+重命名与删除**不在库的 `SessionStore` 契约里**：名称是可变的展示投影（`session.created` 事件仍保留创建时的原始名称），删除则会移除已记录的事实。两者都由 Runtime 通过 `ConversationCatalogMutations` 端口注入，未注入时接口明确返回 `501`，库的 append-only 协议保持不变。
 
 ## 测试
 

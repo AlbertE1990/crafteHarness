@@ -1,18 +1,13 @@
 <script setup lang="ts">
-import type { AgentOutputEvent, AgentRunResult } from '../../../src'
-import MarkdownIt from 'markdown-it'
+import type { AgentOutputEvent } from '../../../src'
+import type { ConversationMessage } from '../components/ConversationView.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import ConversationView from '../components/ConversationView.vue'
 
 defineOptions({ name: 'IndexPage' })
 
-interface Message {
-  id: number
-  role: 'user' | 'agent'
-  content: string
-  reasoning?: string
-  isReasoningOpen?: boolean
-  isStreaming?: boolean
-}
+/** 消息对象由消息区组件渲染，类型从它那里导入，页面只负责组装与缓存。 */
+type Message = ConversationMessage
 
 interface HistoryMessage {
   role: string
@@ -26,9 +21,21 @@ interface ConversationSummary {
   createAt: string
 }
 
+/**
+ * 服务端按需返回的展示历史：只包含 user / assistant 两条可见角色。
+ *
+ * 它已经过滤掉 system / tool 等内部上下文，因此页面优先消费它，只有在服务端
+ * 只返回原始 history 时才退回自行过滤。
+ */
+interface DisplayMessage {
+  role: 'user' | 'assistant'
+  content: string
+  reasoning_content?: string
+}
+
 interface ConversationDetail extends ConversationSummary {
   history: HistoryMessage[]
-  displayHistory?: HistoryMessage[]
+  displayHistory?: DisplayMessage[]
 }
 
 /**
@@ -64,23 +71,72 @@ interface ConversationDetailResponse {
   data: ConversationDetail
 }
 
+/** PATCH /api/conversation/:id 成功时返回的是修改后的会话摘要，不是完整详情。 */
+interface ConversationSummaryResponse {
+  data: ConversationSummary
+}
+
+/**
+ * 单个模型的展示信息与推理能力，全部来自 GET /api/model。
+ *
+ * 模型与推理等级都由部署配置，页面不硬编码任何模型名或等级集合；不同模型的推理能力
+ * 可以不同，因此等级列表挂在模型上，页面里不存在"全局推理等级"这种东西。
+ */
+interface ModelOption {
+  /** 请求体里真正发送的模型标识。 */
+  id: string
+  /** 展示名；服务端没给 label 时退化为 id。 */
+  label: string
+  /** 该模型可选的推理等级；空数组表示它没有推理控制（chip 隐藏、请求不带该字段）。 */
+  reasoningEfforts: string[]
+  /** 该模型的默认推理等级；null 表示不表达偏好，请求里省略该字段。 */
+  defaultReasoningEffort: string | null
+}
+
 /**
  * 页面真正消费的模型词汇表，来自 GET /api/model。
  *
- * 等级名由部署决定，不同模型适配器的取值并不一致，因此页面只消费服务端给出的列表，
- * 不再硬编码任何一家的等级集合。
+ * 任一字段缺失或类型不符都退化为"不提供该能力"，而不是抛错：词汇表只是便利信息，
+ * 服务端多返回或少返回字段都不应该让页面进入不可用状态。
  */
 interface ModelVocabulary {
-  /** 部署默认推理等级；服务端未设置时为空串，表示不表达偏好。 */
-  defaultEffort: string
-  /** 部署允许的推理等级；为空表示词汇表不可用，控件退化为自由文本。 */
-  efforts: string[]
+  /** 部署默认模型 id；空串表示服务端没给出模型信息。 */
+  defaultModel: string
+  /** 可切换模型列表；为空表示这次部署不提供模型选择，模型 chip 整体隐藏。 */
+  models: ModelOption[]
 }
 
-/** 非流式 /api/chat 的普通 JSON 响应。 */
-interface ChatJsonResponse {
-  data: AgentRunResult
+/** 推理等级 chip 的一个选项；value 为空串表示"不指定"，此时请求里不带该字段。 */
+interface ReasoningChoice {
+  value: string
+  label: string
 }
+
+/** 会话名称上限；与服务端 400 的约束保持一致，先在前端拦下再谈网络往返。 */
+const MAX_CONVERSATION_NAME_LENGTH = 80
+
+/**
+ * 输入框高度区间。
+ *
+ * 拖动把手与内容自动增高共用同一对上下限：自动增高永远不低于 MIN，
+ * 也不高过 MAX（超过后由输入框内部滚动接管）。
+ */
+const MIN_COMPOSER_HEIGHT = 56
+const MAX_COMPOSER_HEIGHT = 320
+/** 键盘调整把手时的单步高度（ArrowUp / ArrowDown 各 ±24px）。 */
+const COMPOSER_HEIGHT_STEP = 24
+
+/**
+ * 会话 kebab 菜单的估算尺寸。
+ *
+ * 菜单用 position: fixed 脱离滚动容器的裁剪，因此必须自己算坐标；这两个值只用于
+ * 纵向翻转与横向夹取，尺寸不精确只会让翻转早一点或晚一点发生。
+ */
+const CONVERSATION_MENU_WIDTH = 168
+const CONVERSATION_MENU_HEIGHT = 76
+/** 菜单与 kebab 按钮、与视口边缘之间的留白。 */
+const CONVERSATION_MENU_GAP = 6
+const CONVERSATION_MENU_VIEWPORT_MARGIN = 8
 
 const messages = ref<Message[]>([])
 const conversations = ref<ConversationSummary[]>([])
@@ -90,43 +146,104 @@ const isSending = ref(false)
 const isAwaitingFirstToken = ref(false)
 const isLoadingConversations = ref(false)
 const isSidebarOpen = ref(false)
+// 桌面端侧边栏收缩状态；收缩后仍保留展开按钮，不隐藏对话区。
+const isSidebarCollapsed = ref(false)
 const errorMessage = ref('')
 const conversationError = ref('')
+// 重命名 / 删除的失败提示；与首次加载失败分开展示，避免把列表整体替换成错误态。
+const conversationActionError = ref('')
 const failedPrompt = ref('')
-// 模型选项由用户显式控制，并随每次 Agent 请求发送，不会通过自然语言推断。
-const useStreaming = ref(true)
-// 推理等级是单个字符串：'off' 表示显式关闭，其余值是部署自定义等级；空串表示省略该字段，
-// 交由部署默认决定。请求体不再有 model 对象，也不再有独立的“启用思考”开关。
+// 推理等级是单个字符串，且**属于当前选中的模型**：'off' 表示显式关闭，其余值是部署定义的
+// 等级；空串表示不表达偏好，请求体里整个省略该字段，由模型的默认等级决定。
 const reasoningEffort = ref('')
-// 部署允许的推理等级，挂载时从 GET /api/model 读取；空列表表示词汇表不可用，控件退化为自由文本。
-const reasoningEfforts = ref<string[]>([])
+// 可选模型来自 GET /api/model 的 models（对象数组）；空列表表示部署不提供模型选择，
+// 此时模型 chip 不渲染，请求体也不携带 model 键。
+const modelOptions = ref<ModelOption[]>([])
+// 当前选中的模型 id；取值一定来自 modelOptions，空串表示页面不表达模型偏好。
+const selectedModel = ref('')
+// 就地重命名 / 删除二次确认的状态，同一时间只作用于一个会话。
+const renamingId = ref('')
+const renameDraft = ref('')
+const renameError = ref('')
+const pendingDeleteId = ref('')
+// 打开 kebab 菜单的会话 ID；同一时间只允许一个会话的菜单展开。
+const openMenuId = ref<string | null>(null)
+// 菜单的视口坐标；菜单是 position: fixed，必须由页面按 kebab 的位置算出来。
+const conversationMenuPosition = ref<{ top: number, left: number } | null>(null)
 // undefined 表示普通 Composer；有值时由状态决定展示审批卡片或自动拒绝卡片。
 const toolInteraction = ref<ToolInteraction>()
 // 审批 POST 失败只影响卡片提交，可恢复 pending 后重试，不应中断原聊天 SSE。
 const approvalError = ref('')
 const approvalRemainingSeconds = ref<number>()
-const messageList = ref<HTMLElement>()
+const composerInput = ref<HTMLTextAreaElement>()
+/**
+ * 用户拖动把手设定的高度，null 表示没有手动设定。
+ *
+ * 它是“下限”而不是固定值：内容比它高时输入框继续自动增高，内容变少时也不会低于它。
+ */
+const manualComposerHeight = ref<number | null>(null)
+/** 最近一次生效的高度，键盘微调以它为基准（还没有内容测量结果时从 MIN 起算）。 */
+const composerHeight = ref(MIN_COMPOSER_HEIGHT)
+/**
+ * 会话详情缓存：已加载过的会话再次切换时直接复用内存数据，不再请求网络。
+ *
+ * 键是会话 ID；发送新消息与重命名后会同步回填，避免切回来看到旧内容或旧标题。
+ */
+const conversationCache = new Map<string, ConversationDetail>()
+/**
+ * 会话消息缓存：与详情缓存同生共死，存的是页面自己的消息对象（含思考面板展开状态）。
+ *
+ * 切回旧会话时复用同一批对象，消息行的 :key 因此保持不变，DOM 只是打补丁而不是重建——
+ * 这正是 KeepAlive 缓存消息区想要的效果。
+ */
+const messageCache = new Map<string, Message[]>()
+/**
+ * 菜单定位用的内联样式；没有打开菜单时返回 undefined，不写任何内联坐标。
+ *
+ * position 也放在这里而不是只写在样式表里：坐标本来就是脚本按 kebab 的矩形算出来的，
+ * 两者是一个整体，一起内联才能保证"脱出 overflow 裁剪"这件事只依赖一处实现。
+ */
+const conversationMenuStyle = computed(() => conversationMenuPosition.value
+  ? {
+      position: 'fixed' as const,
+      top: `${conversationMenuPosition.value.top}px`,
+      left: `${conversationMenuPosition.value.left}px`,
+    }
+  : undefined)
 let nextMessageId = 1
 let approvalCountdown: ReturnType<typeof setInterval> | undefined
-
-// 模型输出是不可信文本：关闭原始 HTML，只允许 markdown-it 生成受控标签。
-const markdown = new MarkdownIt({
-  html: false,
-  breaks: true,
-  linkify: true,
-  typographer: false,
-})
-
-/** 将助手回复转换为 HTML；原始 HTML 会被转义，不会作为页面节点执行。 */
-function renderMarkdown(content: string): string {
-  return markdown.render(content)
-}
+/** 正在进行的把手拖动；同一次拖动内用起始高度 + 指针位移计算新高度。 */
+let composerResizeState: { pointerId: number, startY: number, startHeight: number } | undefined
 
 const displayedConversations = computed(() => [...conversations.value].reverse())
 const activeConversation = computed(() => (
   conversations.value.find(conversation => conversation.id === conversationId.value)
 ))
 const pageTitle = computed(() => activeConversation.value?.name?.trim() || '新对话')
+/** 当前选中的模型；没有可用模型时为 undefined，此时页面不表达模型偏好。 */
+const activeModel = computed(() => (
+  modelOptions.value.find(model => model.id === selectedModel.value)
+))
+/**
+ * 推理等级 chip 的选项，随当前模型变化。
+ *
+ * 模型没有可选等级时为空数组，chip 整体不渲染（该模型没有推理控制，请求里也不带该字段）。
+ * 模型声明了可选等级但默认等级为 null（服务端表示“不表达偏好”）时补一个空值选项，
+ * 让“不指定”在下拉里有明确文案，而不是显示成空白项。
+ */
+const reasoningChoices = computed<ReasoningChoice[]>(() => {
+  const model = activeModel.value
+  if (!model || model.reasoningEfforts.length === 0)
+    return []
+
+  const choices = model.reasoningEfforts.map(level => ({
+    value: level,
+    label: formatReasoningEffort(level),
+  }))
+  return model.defaultReasoningEffort === null
+    ? [{ value: '', label: '默认（不指定）' }, ...choices]
+    : choices
+})
 
 /** 兼容字符串和 OpenAI 内容分片数组，只提取可展示的文本部分。 */
 function getContentText(content: unknown): string {
@@ -207,30 +324,74 @@ function formatConversationDate(value: string): string {
 }
 
 /**
- * 从 GET /api/model 的未知 JSON 中提取词汇表。
+ * 从 GET /api/model 的未知 JSON 中提取模型词汇表。
  *
- * 任一字段缺失或类型不符都退化为空值，而不是抛错：词汇表只是便利信息，
+ * 模型是对象数组：id 用于请求、label 用于展示、每个模型自带推理能力。
+ * 任何字段缺失或类型不符都退化为"不提供该能力"，而不是抛错：词汇表只是便利信息，
  * 服务端多返回或少返回字段都不应该让页面进入不可用状态。
  */
 function readModelVocabulary(value: unknown): ModelVocabulary {
   if (typeof value !== 'object' || value === null)
-    return { defaultEffort: '', efforts: [] }
+    return { defaultModel: '', models: [] }
 
-  const data = value as { reasoningEffort?: unknown, reasoningEfforts?: unknown }
-  const defaultEffort = typeof data.reasoningEffort === 'string'
-    ? data.reasoningEffort.trim()
-    : ''
-  const efforts = Array.isArray(data.reasoningEfforts)
-    ? (data.reasoningEfforts as unknown[])
-        .filter((level): level is string => typeof level === 'string' && level.trim() !== '')
-        .map(level => level.trim())
+  const data = value as { defaultModel?: unknown, models?: unknown }
+  /** 只接受非空字符串，避免把 null / 数字 / 空串渲染成无法使用的选项。 */
+  const readStringList = (input: unknown): string[] => Array.isArray(input)
+    ? (input as unknown[])
+        .filter((item): item is string => typeof item === 'string' && item.trim() !== '')
+        .map(item => item.trim())
     : []
 
-  // 部署默认必须始终可选：服务端是最终权威，UI 不能因为词汇表缺项就悄悄改写它的默认值。
-  if (defaultEffort && !efforts.includes(defaultEffort))
-    efforts.unshift(defaultEffort)
+  const models: ModelOption[] = []
+  const seenIds = new Set<string>()
+  if (Array.isArray(data.models)) {
+    for (const item of data.models as unknown[]) {
+      if (typeof item !== 'object' || item === null)
+        continue
 
-  return { defaultEffort, efforts }
+      const entry = item as {
+        id?: unknown
+        label?: unknown
+        reasoningEfforts?: unknown
+        defaultReasoningEffort?: unknown
+      }
+      const id = typeof entry.id === 'string' ? entry.id.trim() : ''
+      // 没有 id 的条目无法用于请求，只能丢弃；重复 id 只保留第一条。
+      if (!id || seenIds.has(id))
+        continue
+
+      seenIds.add(id)
+      const label = typeof entry.label === 'string' ? entry.label.trim() : ''
+      const efforts = readStringList(entry.reasoningEfforts)
+      const defaultEffort = typeof entry.defaultReasoningEffort === 'string'
+        ? entry.defaultReasoningEffort.trim()
+        : ''
+      // 服务端给出的默认等级必须始终可选，否则用户会被迫改选成别的等级。
+      if (defaultEffort && !efforts.includes(defaultEffort))
+        efforts.unshift(defaultEffort)
+
+      models.push({
+        id,
+        label: label || id,
+        reasoningEfforts: efforts,
+        defaultReasoningEffort: defaultEffort || null,
+      })
+    }
+  }
+
+  const defaultModel = typeof data.defaultModel === 'string' ? data.defaultModel.trim() : ''
+  // 部署默认模型必须可选：列表里没有它时补一条“没有声明推理能力”的条目，
+  // 至少保证用户能回到部署默认模型，而不是被 silently 换到别的模型。
+  if (defaultModel && !seenIds.has(defaultModel)) {
+    models.unshift({
+      id: defaultModel,
+      label: defaultModel,
+      reasoningEfforts: [],
+      defaultReasoningEffort: null,
+    })
+  }
+
+  return { defaultModel, models }
 }
 
 /** 'off' 是协议保留值，裸英文对用户不友好；其余等级名由部署定义，原样展示。 */
@@ -238,19 +399,274 @@ function formatReasoningEffort(level: string): string {
   return level === 'off' ? '不推理（off）' : level
 }
 
-/** 等待 DOM 更新后滚动到底部，确保新消息已参与高度计算。 */
-async function scrollToLatest(behavior: ScrollBehavior = 'smooth') {
-  await nextTick()
-  messageList.value?.scrollTo({
-    top: messageList.value.scrollHeight,
-    behavior,
+/**
+ * 让选中的推理等级与当前模型保持一致。
+ *
+ * 推理能力挂在模型上：换模型后如果原等级不在新模型的列表里，就回到新模型的默认等级；
+ * 默认等级为 null（或该模型没有推理控制）时置空，请求体里不发送该字段。
+ */
+function syncReasoningEffortWithModel(): void {
+  const model = activeModel.value
+  if (model?.reasoningEfforts.includes(reasoningEffort.value))
+    return
+
+  reasoningEffort.value = model?.defaultReasoningEffort ?? ''
+}
+
+// 模型一变就重算等级，避免把一个模型不支持的等级发给另一个模型。
+watch(selectedModel, syncReasoningEffortWithModel)
+
+/** 把任意高度夹到 [MIN_COMPOSER_HEIGHT, MAX_COMPOSER_HEIGHT] 内。 */
+function clampComposerHeight(height: number): number {
+  return Math.min(MAX_COMPOSER_HEIGHT, Math.max(MIN_COMPOSER_HEIGHT, height))
+}
+
+/**
+ * 重新计算并写入输入框高度。
+ *
+ * 高度有两种来源，手动优先：一旦用户拖动过把手（`manualComposerHeight` 非 null），
+ * 该高度就是**权威值**——内容再多也不会把它顶高，只在内容超出时出现内部滚动；
+ * 这与系统 textarea 的 resizing 语义一致，也是"能向下拖矮"的前提。
+ * 没有手动高度时按内容自动增高，两者都被同一对上下限裁剪。
+ * jsdom 等无布局环境里 scrollHeight 恒为 0，此时按“无内容”处理，高度由 MIN 或手动值决定。
+ */
+function resizeComposer(): void {
+  const element = composerInput.value
+  if (!element)
+    return
+
+  // 先把内联高度归零再读取：只有 height: auto 时 scrollHeight 才等于内容真实高度。
+  element.style.height = 'auto'
+  const measured = element.scrollHeight
+  const contentHeight = Number.isFinite(measured) && measured > 0 ? measured : 0
+
+  const effectiveHeight = clampComposerHeight(
+    manualComposerHeight.value ?? contentHeight,
+  )
+  composerHeight.value = effectiveHeight
+  element.style.height = `${effectiveHeight}px`
+  element.style.overflowY = contentHeight > effectiveHeight ? 'auto' : 'hidden'
+}
+
+/**
+ * 发送、切换会话、删除会话后重新测量输入框高度。
+ *
+ * 没有手动高度时回到内容驱动的高度；手动拖过的高度继续保留——
+ * 用户显式设定的尺寸不应被一次发送重置。
+ */
+function resetComposerHeight(): void {
+  void nextTick(resizeComposer)
+}
+
+/** 键盘微调把手：以当前生效高度为基准上下移动一步，并夹在上下限内。 */
+function stepComposerHeight(delta: number): void {
+  const base = manualComposerHeight.value ?? composerHeight.value
+  manualComposerHeight.value = clampComposerHeight(base + delta)
+  resizeComposer()
+}
+
+/**
+ * 开始拖动输入框顶部把手。
+ *
+ * 用 Pointer Events + setPointerCapture：指针移出把手后仍能继续收到 pointermove，
+ * 直到 pointerup / pointercancel 才结束。
+ */
+function beginComposerResize(event: PointerEvent): void {
+  composerResizeState = {
+    pointerId: event.pointerId,
+    startY: event.clientY,
+    startHeight: composerHeight.value,
+  }
+
+  const handle = event.currentTarget
+  // jsdom 等环境可能没有 setPointerCapture，或没有活跃指针（合成事件），两种都直接跳过。
+  if (handle instanceof HTMLElement && typeof handle.setPointerCapture === 'function') {
+    try {
+      handle.setPointerCapture(event.pointerId)
+    }
+    catch {
+      // 捕获失败只影响“指针移出把手后继续跟踪”，不影响已记录的拖动起点。
+    }
+  }
+}
+
+/** 拖动中：向上拖变高，向下拖变矮；结果是手动高度下限。 */
+function moveComposerResize(event: PointerEvent): void {
+  const state = composerResizeState
+  if (!state || state.pointerId !== event.pointerId)
+    return
+
+  event.preventDefault()
+  manualComposerHeight.value = clampComposerHeight(
+    state.startHeight - (event.clientY - state.startY),
+  )
+  resizeComposer()
+}
+
+/** 结束拖动（pointerup / pointercancel）：释放指针捕获并停止跟踪。 */
+function endComposerResize(event: PointerEvent): void {
+  const state = composerResizeState
+  if (!state || state.pointerId !== event.pointerId)
+    return
+
+  composerResizeState = undefined
+  const handle = event.currentTarget
+  if (handle instanceof HTMLElement && typeof handle.releasePointerCapture === 'function') {
+    try {
+      handle.releasePointerCapture(event.pointerId)
+    }
+    catch {
+      // 指针已经失效时释放会抛错，忽略即可：拖动状态已经清空。
+    }
+  }
+}
+
+/**
+ * 把 kebab 按钮的视口矩形换算成菜单的 fixed 坐标。
+ *
+ * 纵向优先开在按钮下方；下方空间不够时向上翻转。横向右对齐到按钮右边缘，
+ * 再夹进视口，保证菜单既不会被裁剪也不会跑出屏幕。
+ */
+function computeConversationMenuPosition(button: HTMLElement): { top: number, left: number } {
+  const rect = button.getBoundingClientRect()
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+  const { width: menuWidth, height: menuHeight } = {
+    width: CONVERSATION_MENU_WIDTH,
+    height: CONVERSATION_MENU_HEIGHT,
+  }
+
+  let top = rect.bottom + CONVERSATION_MENU_GAP
+  if (top + menuHeight > viewportHeight - CONVERSATION_MENU_VIEWPORT_MARGIN)
+    top = rect.top - menuHeight - CONVERSATION_MENU_GAP
+
+  const left = Math.min(
+    Math.max(rect.right - menuWidth, CONVERSATION_MENU_VIEWPORT_MARGIN),
+    Math.max(
+      CONVERSATION_MENU_VIEWPORT_MARGIN,
+      viewportWidth - menuWidth - CONVERSATION_MENU_VIEWPORT_MARGIN,
+    ),
+  )
+
+  return { top, left }
+}
+
+/** 打开 / 关闭某个会话的 kebab 菜单；同时只允许一个菜单展开，并用按钮位置算出坐标。 */
+function toggleConversationMenu(conversation: ConversationSummary, event: MouseEvent): void {
+  if (openMenuId.value === conversation.id) {
+    closeConversationMenu()
+    return
+  }
+
+  const button = event.currentTarget
+  if (button instanceof HTMLElement)
+    conversationMenuPosition.value = computeConversationMenuPosition(button)
+
+  openMenuId.value = conversation.id
+}
+
+/** 关闭当前 kebab 菜单；坐标一并清空，避免下次打开时先闪一下旧位置。 */
+function closeConversationMenu(): void {
+  openMenuId.value = null
+  conversationMenuPosition.value = null
+}
+
+/**
+ * 点击页面其它位置时关闭 kebab 菜单。
+ *
+ * 监听常驻在 document 上（挂载时注册、卸载时移除），因此菜单自身与 kebab 按钮上的点击
+ * 必须被识别为“内部点击”，否则打开菜单的那一次点击会立刻把它关掉。
+ */
+function handleDocumentClick(event: MouseEvent): void {
+  if (!openMenuId.value)
+    return
+
+  const target = event.target
+  if (target instanceof Element && target.closest('.conversation-menu, .conversation-menu-button'))
+    return
+
+  closeConversationMenu()
+}
+
+/** 把当前消息列表转换成服务端的展示历史形状，用于回填会话详情缓存。 */
+function messagesToDisplayHistory(): DisplayMessage[] {
+  return messages.value.flatMap<DisplayMessage>((message) => {
+    if (message.role === 'user')
+      return [{ role: 'user', content: message.content }]
+    // 还没有正文的助手消息（例如被中断）不进入历史，与服务端的过滤口径一致。
+    if (!message.content)
+      return []
+    return [{
+      role: 'assistant',
+      content: message.content,
+      ...(message.reasoning ? { reasoning_content: message.reasoning } : {}),
+    }]
   })
 }
 
-/** 切换会话时按 ID 加载详情，避免列表请求一次读取所有历史。 */
+/**
+ * 用会话详情（来自内存缓存或网络）填充对话区。
+ *
+ * 消息对象同样走缓存：已加载过的会话复用同一批对象，消息行的 key 不变，
+ * 于是消息区组件既不重建行 DOM，也保留用户展开过的思考面板。
+ */
+function applyConversationDetail(conversation: ConversationSummary, detail: ConversationDetail): void {
+  const cachedMessages = messageCache.get(conversation.id)
+  const nextMessages = cachedMessages ?? historyToMessages(detail.displayHistory ?? detail.history)
+  if (!cachedMessages)
+    messageCache.set(conversation.id, nextMessages)
+
+  conversationId.value = conversation.id
+  messages.value = nextMessages
+  input.value = ''
+  errorMessage.value = ''
+  conversationError.value = ''
+  failedPrompt.value = ''
+  toolInteraction.value = undefined
+  stopApprovalCountdown()
+  isSidebarOpen.value = false
+  resetComposerHeight()
+  // 滚动交给消息区组件：首次挂载时它会落到最新一条，切回旧会话时保持原位置不动。
+}
+
+/** 发送完成后把内存消息回填进缓存，避免切回该会话时看到发送前的旧内容。 */
+function syncConversationCache(): void {
+  const id = conversationId.value
+  if (!id)
+    return
+
+  const summary = conversations.value.find(conversation => conversation.id === id)
+  const cached = conversationCache.get(id)
+  conversationCache.set(id, {
+    id,
+    name: summary?.name ?? cached?.name ?? '新对话',
+    createAt: summary?.createAt ?? cached?.createAt ?? new Date().toISOString(),
+    // 页面只消费 displayHistory，缓存里让 history 保持为空即可，
+    // 不需要把内存消息反推成 ModelMessage（那会重新引入 tool / system 上下文）。
+    history: [],
+    displayHistory: messagesToDisplayHistory(),
+  })
+  // 继续持有同一批消息对象：流式增量是原地追加的，缓存与页面看到的是同一份状态。
+  messageCache.set(id, messages.value)
+}
+
+/**
+ * 切换会话。
+ *
+ * 详情优先取内存缓存：已加载过的会话直接渲染，不再发出第二次网络请求；
+ * 只有第一次打开某会话时才按 ID 请求详情，随后写入缓存。
+ */
 async function selectConversation(conversation: ConversationSummary) {
   if (isSending.value)
     return
+
+  conversationActionError.value = ''
+  closeConversationMenu()
+  const cached = conversationCache.get(conversation.id)
+  if (cached) {
+    applyConversationDetail(conversation, cached)
+    return
+  }
 
   try {
     const response = await fetch(`/api/conversation/${encodeURIComponent(conversation.id)}`)
@@ -261,13 +677,8 @@ async function selectConversation(conversation: ConversationSummary) {
     if (!isConversationDetail(result.data))
       throw new TypeError('会话详情返回格式不正确')
 
-    conversationId.value = conversation.id
-    messages.value = historyToMessages(result.data.displayHistory ?? result.data.history)
-    input.value = ''
-    errorMessage.value = ''
-    failedPrompt.value = ''
-    isSidebarOpen.value = false
-    void scrollToLatest('auto')
+    conversationCache.set(conversation.id, result.data)
+    applyConversationDetail(conversation, result.data)
   }
   catch (error) {
     conversationError.value = error instanceof Error ? error.message : '会话详情加载失败'
@@ -280,11 +691,131 @@ function startNewConversation() {
     return
 
   conversationId.value = ''
+  // 换一个全新的数组：草稿会话的消息随后会作为新会话的缓存内容被接管，
+  // 直接复用同一个数组会让两个会话共享状态。
   messages.value = []
   input.value = ''
   errorMessage.value = ''
   failedPrompt.value = ''
   isSidebarOpen.value = false
+  renamingId.value = ''
+  pendingDeleteId.value = ''
+  closeConversationMenu()
+  resetComposerHeight()
+}
+
+/** 进入就地重命名；同一时间只编辑一个会话，并收起该会话的 kebab 菜单。 */
+function startRename(conversation: ConversationSummary): void {
+  renamingId.value = conversation.id
+  renameDraft.value = conversation.name
+  renameError.value = ''
+  pendingDeleteId.value = ''
+  closeConversationMenu()
+}
+
+/** 放弃重命名，恢复列表项原状。 */
+function cancelRename(): void {
+  renamingId.value = ''
+  renameDraft.value = ''
+  renameError.value = ''
+}
+
+/**
+ * 提交重命名。
+ *
+ * 空名与超过 80 字符都是服务端 400 的已知约束，前端先拦下，不发无意义的请求；
+ * 其余失败（404 / 网络）由服务端返回的 message 决定提示文案。
+ */
+async function submitRename(conversation: ConversationSummary): Promise<void> {
+  const name = renameDraft.value.trim()
+  if (!name) {
+    renameError.value = '会话名称不能为空'
+    return
+  }
+  if (name.length > MAX_CONVERSATION_NAME_LENGTH) {
+    renameError.value = `会话名称不能超过 ${MAX_CONVERSATION_NAME_LENGTH} 个字符`
+    return
+  }
+
+  renameError.value = ''
+  try {
+    const response = await fetch(`/api/conversation/${encodeURIComponent(conversation.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    if (!response.ok) {
+      const payload: unknown = await response.json().catch(() => undefined)
+      throw new Error(readServerMessage(payload) ?? `重命名失败（${response.status}）`)
+    }
+
+    const result = await response.json() as Partial<ConversationSummaryResponse>
+    const updatedName = isConversationSummary(result.data) ? result.data.name : name
+    conversations.value = conversations.value.map(item => (
+      item.id === conversation.id ? { ...item, name: updatedName } : item
+    ))
+
+    // 缓存里的详情同步改名，否则切回该会话时页面标题会退回旧名字。
+    const cached = conversationCache.get(conversation.id)
+    if (cached)
+      conversationCache.set(conversation.id, { ...cached, name: updatedName })
+
+    cancelRename()
+  }
+  catch (error) {
+    renameError.value = error instanceof Error ? error.message : '重命名失败'
+  }
+}
+
+/** 请求删除；破坏性操作先进入二次确认，再由用户确认后发出 DELETE。 */
+function askDeleteConversation(conversation: ConversationSummary): void {
+  pendingDeleteId.value = conversation.id
+  renamingId.value = ''
+  renameError.value = ''
+  conversationActionError.value = ''
+  closeConversationMenu()
+}
+
+/**
+ * 删除会话。
+ *
+ * 成功后就地更新列表与缓存，不再多拉一次列表；删除的是当前会话时回到“新对话”空态，
+ * 避免留下一个已经在服务端消失的 conversationId 继续发送。
+ */
+async function deleteConversation(conversation: ConversationSummary): Promise<void> {
+  if (isSending.value)
+    return
+
+  conversationActionError.value = ''
+  try {
+    const response = await fetch(`/api/conversation/${encodeURIComponent(conversation.id)}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) {
+      const payload: unknown = await response.json().catch(() => undefined)
+      throw new Error(readServerMessage(payload) ?? `删除失败（${response.status}）`)
+    }
+
+    conversations.value = conversations.value.filter(item => item.id !== conversation.id)
+    // 详情与消息两份缓存一起失效，避免删掉的会话从缓存里“复活”。
+    conversationCache.delete(conversation.id)
+    messageCache.delete(conversation.id)
+    pendingDeleteId.value = ''
+
+    if (conversationId.value === conversation.id)
+      startNewConversation()
+  }
+  catch (error) {
+    conversationActionError.value = error instanceof Error ? error.message : '删除失败'
+  }
+}
+
+/** 读取服务端 `{ error, message }` 结构里的可展示文案，格式不符时返回 undefined。 */
+function readServerMessage(payload: unknown): string | undefined {
+  if (typeof payload !== 'object' || payload === null || !('message' in payload))
+    return undefined
+  const message = (payload as { message?: unknown }).message
+  return typeof message === 'string' && message.trim() ? message : undefined
 }
 
 /** 刷新会话列表；首次进入页面时默认打开最近一条会话。 */
@@ -315,10 +846,11 @@ async function loadConversations(selectInitial = false) {
 }
 
 /**
- * 读取部署的模型词汇表，用它渲染推理等级控件。
+ * 读取部署的模型词汇表，用它渲染模型下拉与推理等级 chip。
  *
- * 等级名因部署而异，所以控件选项只能来自服务端；加载失败时保持空列表并由自由文本输入兜底，
- * 不展示阻塞性错误，因为词汇表只是便利信息，不是发消息的前提。
+ * 模型名与等级名都因部署而异，所以选项只能来自服务端；加载失败时保持空列表，
+ * 模型与等级 chip 都不渲染、请求里也不带这两个字段，不展示阻塞性错误——
+ * 词汇表只是便利信息，不是发消息的前提。
  */
 async function loadModelVocabulary() {
   try {
@@ -332,12 +864,21 @@ async function loadModelVocabulary() {
       : undefined
     const vocabulary = readModelVocabulary(data)
 
-    reasoningEfforts.value = vocabulary.efforts
-    reasoningEffort.value = vocabulary.defaultEffort
+    modelOptions.value = vocabulary.models
+    // 默认选中部署默认模型；词汇表为空时不表达模型偏好。
+    selectedModel.value = vocabulary.models.find(model => model.id === vocabulary.defaultModel)?.id
+      ?? vocabulary.models[0]?.id
+      ?? ''
+    // 初始等级取该模型自己的默认等级：null 表示不带该字段（请求里整个省略）。
+    reasoningEffort.value = vocabulary.models
+      .find(model => model.id === selectedModel.value)
+      ?.defaultReasoningEffort ?? ''
   }
   catch {
-    // 词汇表请求失败：保持空列表，用户仍可用自由文本输入任意等级，页面继续正常工作。
-    reasoningEfforts.value = []
+    // 词汇表请求失败：保持空列表，页面退化为“用部署默认模型 + 不指定推理等级”。
+    modelOptions.value = []
+    selectedModel.value = ''
+    reasoningEffort.value = ''
   }
 }
 
@@ -581,16 +1122,17 @@ async function send(prompt = input.value, appendUserMessage = true) {
   stopApprovalCountdown()
 
   if (appendUserMessage) {
+    // 追加用户消息；跟随滚动由消息区组件按内容变化自己做，页面不再持有滚动容器。
     messages.value.push({ id: nextMessageId++, role: 'user', content: message })
     input.value = ''
-    await scrollToLatest()
+    resetComposerHeight()
   }
 
   isSending.value = true
   isAwaitingFirstToken.value = true
   // 锁定本次请求设置；即使以后允许发送期间操作 UI，也不能改变正在执行的 Run。
-  const requestUsesStreaming = useStreaming.value
   const requestReasoningEffort = reasoningEffort.value.trim()
+  const requestModel = selectedModel.value.trim()
   let assistantMessageId: number | undefined
   let receivedDone = false
 
@@ -607,28 +1149,32 @@ async function send(prompt = input.value, appendUserMessage = true) {
       content: '',
       reasoning: '',
       isReasoningOpen: true,
-      isStreaming: requestUsesStreaming,
+      isStreaming: true,
     }
     messages.value.push(assistantMessage)
     return assistantMessage
   }
 
   try {
-    // 推理等级是单个顶层字符串：'off' 表示显式关闭，其余值原样透传给服务端。
-    // 空串表示页面没有具体选择，此时必须整个省略字段，让服务端使用部署默认。
+    // 页面固定走流式：stream 恒为 true，SSE 是唯一的响应形态。
+    // 推理等级与模型都是单个顶层字符串，且都挂在当前选中的模型上：空串表示这次不表达偏好，
+    // 必须整个省略字段（服务端 schema 是 minLength: 1 + additionalProperties: false）。
     const requestBody: {
       message: string
       conversationId?: string
       stream: boolean
       reasoningEffort?: string
+      model?: string
     } = {
       message,
-      stream: requestUsesStreaming,
+      stream: true,
     }
     if (conversationId.value)
       requestBody.conversationId = conversationId.value
     if (requestReasoningEffort)
       requestBody.reasoningEffort = requestReasoningEffort
+    if (requestModel)
+      requestBody.model = requestModel
 
     const response = await fetch('/api/chat', {
       method: 'POST',
@@ -639,120 +1185,102 @@ async function send(prompt = input.value, appendUserMessage = true) {
     if (!response.ok)
       throw new Error(`请求失败（${response.status}）`)
 
-    if (!requestUsesStreaming) {
-      const payload: unknown = await response.json()
-      if (!isChatJsonResponse(payload))
-        throw new Error('服务端返回了无法识别的非流式结果')
-
-      const result = payload.data
-      conversationId.value = result.sessionId
-      if (result.status !== 'completed')
-        throw new Error(result.error.message)
-
-      receivedDone = true
-      const assistantMessage = ensureAssistantMessage()
-      assistantMessage.content = result.content
-      assistantMessage.reasoning = result.reasoning
-      assistantMessage.isStreaming = false
-      assistantMessage.isReasoningOpen = false
-      isAwaitingFirstToken.value = false
-    }
-    else {
-      await readEventStream(response, (event) => {
-        if (event.type === 'session.started') {
-          conversationId.value = event.sessionId
-          return
-        }
-
-        if (event.type === 'error' || event.type === 'server.error')
-          throw new Error(event.message)
-
-        if (event.type === 'tool.approval.requested') {
-          // Agent Run 仍在原 SSE 中等待；这里只替换 Composer，不能结束 readEventStream。
-          toolInteraction.value = {
-            kind: 'approval',
-            approvalId: event.approvalId,
-            callId: event.callId,
-            toolName: event.toolName,
-            reason: event.reason,
-            ...(event.title ? { title: event.title } : {}),
-            ...(event.details ? { details: event.details } : {}),
-            input: event.input,
-            ...(event.toolMetadata.risk === 'safe'
-              || event.toolMetadata.risk === 'read'
-              || event.toolMetadata.risk === 'write'
-              || event.toolMetadata.risk === 'destructive'
-              ? { risk: event.toolMetadata.risk }
-              : {}),
-            expiresAt: event.expiresAt,
-            status: 'pending',
-          }
-          startApprovalCountdown(event.expiresAt)
-          isAwaitingFirstToken.value = false
-          return
-        }
-
-        if (event.type === 'tool.approval.resolved') {
-          // approvalId 必须匹配当前卡片，迟到的旧事件不能覆盖新审批状态。
-          if (toolInteraction.value?.approvalId === event.approvalId) {
-            toolInteraction.value.status = event.outcome
-            stopApprovalCountdown()
-          }
-          return
-        }
-
-        if (event.type === 'tool.guard.denied') {
-          // deny 没有人工审批和 approvalId，因此卡片只展示原因，不渲染操作按钮。
-          toolInteraction.value = {
-            kind: 'denied',
-            callId: event.callId,
-            toolName: event.toolName,
-            reason: event.reason,
-            status: 'policy-denied',
-          }
-          stopApprovalCountdown()
-          isAwaitingFirstToken.value = false
-          return
-        }
-
-        if (event.type === 'message.delta') {
-          // 两个频道共用一个助手消息，但分别追加到 reasoning 和 content。
-          const assistantMessage = ensureAssistantMessage()
-          if (event.channel === 'reasoning') {
-            assistantMessage.reasoning += event.delta
-            assistantMessage.isReasoningOpen = true
-          }
-          else {
-            assistantMessage.content += event.delta
-          }
-          isAwaitingFirstToken.value = false
-          void scrollToLatest('auto')
-          return
-        }
-
+    await readEventStream(response, (event) => {
+      if (event.type === 'session.started') {
         conversationId.value = event.sessionId
-        receivedDone = true
-        if (assistantMessageId === undefined && (event.content || event.reasoning)) {
-          const assistantMessage = ensureAssistantMessage()
-          assistantMessage.content = event.content
-          assistantMessage.reasoning = event.reasoning ?? ''
-        }
+        return
+      }
 
-        const assistantMessage = messages.value.find(item => item.id === assistantMessageId)
-        if (assistantMessage) {
-          // done 携带完整值作为无增量场景的兜底；正常流式路径不重复追加。
-          assistantMessage.content ||= event.content
-          assistantMessage.reasoning ||= event.reasoning ?? ''
-          assistantMessage.isStreaming = false
-          assistantMessage.isReasoningOpen = false
+      if (event.type === 'error' || event.type === 'server.error')
+        throw new Error(event.message)
+
+      if (event.type === 'tool.approval.requested') {
+        // Agent Run 仍在原 SSE 中等待；这里只替换 Composer，不能结束 readEventStream。
+        toolInteraction.value = {
+          kind: 'approval',
+          approvalId: event.approvalId,
+          callId: event.callId,
+          toolName: event.toolName,
+          reason: event.reason,
+          ...(event.title ? { title: event.title } : {}),
+          ...(event.details ? { details: event.details } : {}),
+          input: event.input,
+          ...(event.toolMetadata.risk === 'safe'
+            || event.toolMetadata.risk === 'read'
+            || event.toolMetadata.risk === 'write'
+            || event.toolMetadata.risk === 'destructive'
+            ? { risk: event.toolMetadata.risk }
+            : {}),
+          expiresAt: event.expiresAt,
+          status: 'pending',
         }
-      })
-    }
+        startApprovalCountdown(event.expiresAt)
+        isAwaitingFirstToken.value = false
+        return
+      }
+
+      if (event.type === 'tool.approval.resolved') {
+        // approvalId 必须匹配当前卡片，迟到的旧事件不能覆盖新审批状态。
+        if (toolInteraction.value?.approvalId === event.approvalId) {
+          toolInteraction.value.status = event.outcome
+          stopApprovalCountdown()
+        }
+        return
+      }
+
+      if (event.type === 'tool.guard.denied') {
+        // deny 没有人工审批和 approvalId，因此卡片只展示原因，不渲染操作按钮。
+        toolInteraction.value = {
+          kind: 'denied',
+          callId: event.callId,
+          toolName: event.toolName,
+          reason: event.reason,
+          status: 'policy-denied',
+        }
+        stopApprovalCountdown()
+        isAwaitingFirstToken.value = false
+        return
+      }
+
+      if (event.type === 'message.delta') {
+        // 两个频道共用一个助手消息，但分别追加到 reasoning 和 content。
+        const assistantMessage = ensureAssistantMessage()
+        if (event.channel === 'reasoning') {
+          assistantMessage.reasoning += event.delta
+          assistantMessage.isReasoningOpen = true
+        }
+        else {
+          assistantMessage.content += event.delta
+        }
+        isAwaitingFirstToken.value = false
+        // 增量是原地追加，消息区组件的深度 watch 会把它跟随到底。
+        return
+      }
+
+      conversationId.value = event.sessionId
+      receivedDone = true
+      if (assistantMessageId === undefined && (event.content || event.reasoning)) {
+        const assistantMessage = ensureAssistantMessage()
+        assistantMessage.content = event.content
+        assistantMessage.reasoning = event.reasoning ?? ''
+      }
+
+      const assistantMessage = messages.value.find(item => item.id === assistantMessageId)
+      if (assistantMessage) {
+        // done 携带完整值作为无增量场景的兜底；正常流式路径不重复追加。
+        assistantMessage.content ||= event.content
+        assistantMessage.reasoning ||= event.reasoning ?? ''
+        assistantMessage.isStreaming = false
+        assistantMessage.isReasoningOpen = false
+      }
+    })
 
     if (!receivedDone)
       throw new Error('流式响应意外中断')
 
     await loadConversations()
+    // 列表刷新后再回填缓存：新会话的 name / createAt 以服务端摘要为准。
+    syncConversationCache()
   }
   catch (error) {
     if (assistantMessageId !== undefined) {
@@ -767,22 +1295,7 @@ async function send(prompt = input.value, appendUserMessage = true) {
     stopApprovalCountdown()
     isSending.value = false
     isAwaitingFirstToken.value = false
-    await scrollToLatest()
   }
-}
-
-/** 只验证页面实际消费的 AgentRunResult 字段，详细协议仍由 CraftAgent 类型定义。 */
-function isChatJsonResponse(value: unknown): value is ChatJsonResponse {
-  if (typeof value !== 'object' || value === null || !('data' in value))
-    return false
-  const data = (value as { data?: unknown }).data
-  if (typeof data !== 'object' || data === null)
-    return false
-  const result = data as Partial<AgentRunResult>
-  return (result.status === 'completed' || result.status === 'stopped' || result.status === 'failed')
-    && typeof result.sessionId === 'string'
-    && typeof result.content === 'string'
-    && typeof result.reasoning === 'string'
 }
 
 /** 使用上一次失败的原始提示词重试，避免聊天区出现重复的用户气泡。 */
@@ -794,19 +1307,25 @@ function retry() {
 onMounted(() => {
   void loadConversations(true)
   void loadModelVocabulary()
+  // 首次测量输入框内容高度，让初始高度就走同一套 clamp 逻辑。
+  resizeComposer()
+  // 关闭 kebab 菜单依赖 document 上的点击监听；常驻一份，卸载时移除。
+  document.addEventListener('click', handleDocumentClick)
+  // 菜单是 fixed 定位，不会跟着列表滚动也不会跟着窗口变化，因此在两处都直接收起。
+  window.addEventListener('resize', closeConversationMenu)
 })
 
 onBeforeUnmount(() => {
   stopApprovalCountdown()
+  document.removeEventListener('click', handleDocumentClick)
+  window.removeEventListener('resize', closeConversationMenu)
 })
 </script>
 
 <template>
   <div class="chat-page">
-    <div class="ambient ambient-left" />
-    <div class="ambient ambient-right" />
-
-    <section class="workspace-shell">
+    <!-- 整页布局：shell 与视口等高，滚动只发生在消息区内部，页面本身不产生滚动条。 -->
+    <section class="workspace-shell" :class="{ 'sidebar-collapsed': isSidebarCollapsed }">
       <button
         v-if="isSidebarOpen"
         class="sidebar-backdrop"
@@ -815,7 +1334,10 @@ onBeforeUnmount(() => {
         @click="isSidebarOpen = false"
       />
 
-      <aside class="conversation-sidebar" :class="{ open: isSidebarOpen }">
+      <aside
+        class="conversation-sidebar"
+        :class="{ open: isSidebarOpen, collapsed: isSidebarCollapsed }"
+      >
         <div class="sidebar-header">
           <div class="flex gap-3 min-w-0 items-center">
             <div class="brand-mark" aria-hidden="true">
@@ -830,6 +1352,15 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </div>
+          <!-- 桌面端收缩：收起侧边栏后对话区仍完整保留，展开按钮在标题栏左侧。 -->
+          <button
+            class="sidebar-collapse-button"
+            type="button"
+            aria-label="收起会话列表"
+            @click="isSidebarCollapsed = true"
+          >
+            <div i-carbon-side-panel-close />
+          </button>
           <button
             class="sidebar-close"
             type="button"
@@ -863,7 +1394,13 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
-        <nav class="conversation-list" aria-label="会话列表">
+        <nav class="conversation-list" aria-label="会话列表" @scroll="closeConversationMenu">
+          <!-- 重命名 / 删除失败不影响已经加载好的列表，因此单独提示而不是替换整个列表。 -->
+          <div v-if="conversationActionError" class="sidebar-notice error" role="alert">
+            <div i-carbon-warning-alt />
+            <span>{{ conversationActionError }}</span>
+          </div>
+
           <template v-if="isLoadingConversations && conversations.length === 0">
             <div v-for="index in 3" :key="index" class="conversation-skeleton">
               <span />
@@ -884,29 +1421,144 @@ onBeforeUnmount(() => {
             <span>还没有历史对话</span>
           </div>
 
-          <button
+          <div
             v-for="conversation in displayedConversations"
             v-else
             :key="conversation.id"
             class="conversation-item"
-            :class="{ active: conversation.id === conversationId }"
-            type="button"
-            :disabled="isSending"
+            :class="{
+              'active': conversation.id === conversationId,
+              'editing': renamingId === conversation.id,
+              'confirming': pendingDeleteId === conversation.id,
+              'menu-open': openMenuId === conversation.id,
+            }"
             :aria-current="conversation.id === conversationId ? 'page' : undefined"
-            @click="selectConversation(conversation)"
+            @keydown.esc.stop.prevent="closeConversationMenu"
           >
-            <div class="conversation-icon" aria-hidden="true">
-              <div i-carbon-chat />
+            <!-- 就地重命名：不再嵌套按钮，避免出现非法的按钮嵌套结构。 -->
+            <div v-if="renamingId === conversation.id" class="conversation-rename">
+              <input
+                v-model="renameDraft"
+                class="conversation-rename-input"
+                type="text"
+                :maxlength="MAX_CONVERSATION_NAME_LENGTH"
+                aria-label="会话名称"
+                @keydown.enter.prevent="submitRename(conversation)"
+                @keydown.esc="cancelRename"
+              >
+              <button
+                class="conversation-rename-confirm"
+                type="button"
+                aria-label="保存名称"
+                @click="submitRename(conversation)"
+              >
+                <div i-carbon-checkmark />
+              </button>
+              <button
+                class="conversation-rename-cancel"
+                type="button"
+                aria-label="取消重命名"
+                @click="cancelRename"
+              >
+                <div i-carbon-close />
+              </button>
             </div>
-            <div class="text-left flex-1 min-w-0">
-              <div class="conversation-name">
-                {{ conversation.name || '未命名对话' }}
+
+            <template v-else>
+              <button
+                class="conversation-select"
+                type="button"
+                :disabled="isSending"
+                @click="selectConversation(conversation)"
+              >
+                <div class="conversation-icon" aria-hidden="true">
+                  <div i-carbon-chat />
+                </div>
+                <div class="text-left flex-1 min-w-0">
+                  <div class="conversation-name">
+                    {{ conversation.name || '未命名对话' }}
+                  </div>
+                  <div class="conversation-date">
+                    {{ formatConversationDate(conversation.createAt) }}
+                  </div>
+                </div>
+              </button>
+
+              <!-- 删除是破坏性操作：先二次确认，再由“删除”按钮发出 DELETE。 -->
+              <div v-if="pendingDeleteId === conversation.id" class="conversation-delete-ask">
+                <span>删除这个会话？</span>
+                <button
+                  class="conversation-delete-confirm"
+                  type="button"
+                  :disabled="isSending"
+                  @click="deleteConversation(conversation)"
+                >
+                  删除
+                </button>
+                <button
+                  class="conversation-delete-cancel"
+                  type="button"
+                  @click="pendingDeleteId = ''"
+                >
+                  取消
+                </button>
               </div>
-              <div class="conversation-date">
-                {{ formatConversationDate(conversation.createAt) }}
-              </div>
+            </template>
+            <!--
+              kebab 入口在列表项右侧，默认透明、hover / 激活 / 聚焦 / 菜单展开时才显形；
+              它与会话按钮是兄弟节点，点击不会连带选中会话（另外也阻止冒泡）。
+            -->
+            <button
+              class="conversation-menu-button"
+              type="button"
+              aria-label="会话操作"
+              aria-haspopup="menu"
+              :aria-expanded="openMenuId === conversation.id ? 'true' : 'false'"
+              @click.stop="toggleConversationMenu(conversation, $event)"
+            >
+              <div i-carbon-overflow-menu-vertical />
+            </button>
+            <!--
+              kebab 下拉菜单：两个入口都复用既有流程（就地重命名 / 二次确认删除）。
+              它是 fixed 定位、坐标由 kebab 的矩形算出，因此不会被 .conversation-list /
+              .conversation-sidebar 的 overflow 裁剪（前提：祖先链上没有 transform / filter /
+              will-change，否则 fixed 会退化成相对那个祖先定位）。
+            -->
+            <div
+              v-if="openMenuId === conversation.id"
+              class="conversation-menu"
+              role="menu"
+              :style="conversationMenuStyle"
+              :aria-label="`${conversation.name || '未命名对话'} 的操作`"
+            >
+              <button
+                class="conversation-menu-rename"
+                type="button"
+                role="menuitem"
+                @click="startRename(conversation)"
+              >
+                <div i-carbon-edit aria-hidden="true" />
+                <span>重命名会话</span>
+              </button>
+              <button
+                class="conversation-menu-delete"
+                type="button"
+                role="menuitem"
+                @click="askDeleteConversation(conversation)"
+              >
+                <div i-carbon-trash-can aria-hidden="true" />
+                <span>删除会话</span>
+              </button>
             </div>
-          </button>
+
+            <div
+              v-if="renamingId === conversation.id && renameError"
+              class="conversation-rename-error"
+              role="alert"
+            >
+              {{ renameError }}
+            </div>
+          </div>
         </nav>
 
         <div class="sidebar-footer">
@@ -925,6 +1577,16 @@ onBeforeUnmount(() => {
           >
             <div i-carbon-menu />
           </button>
+          <!-- 侧边栏收起后，对话区左上角始终保留一个展开入口。 -->
+          <button
+            v-if="isSidebarCollapsed"
+            class="sidebar-expand-button"
+            type="button"
+            aria-label="展开会话列表"
+            @click="isSidebarCollapsed = false"
+          >
+            <div i-carbon-side-panel-open />
+          </button>
           <div class="text-left flex-1 min-w-0">
             <h1 class="text-4.5 text-slate-900 font-700 m-0 truncate dark:text-white">
               {{ pageTitle }}
@@ -939,127 +1601,39 @@ onBeforeUnmount(() => {
           </div>
         </header>
 
-        <main ref="messageList" class="message-list" aria-live="polite">
-          <div v-if="messages.length === 0" class="empty-state">
-            <div class="empty-icon" aria-hidden="true">
-              <div i-carbon-chat-bot text-8 />
-            </div>
-            <h2 class="text-6 text-slate-900 tracking-tight font-700 mb-0 mt-5 dark:text-white">
-              开始一段新对话
-            </h2>
-            <p class="text-3.5 text-slate-500 leading-6 mb-0 mt-2 max-w-110 dark:text-slate-400">
-              第一条消息不会携带 conversationId，服务端返回后会自动关联后续上下文。
-            </p>
-          </div>
+        <main class="message-area" aria-live="polite">
+          <!--
+            消息区交给 ConversationView，并按会话 ID 缓存实例：
+            同一个会话来回切换时实例与 DOM 都被复用，滚动位置和思考面板展开状态自然保留；
+            没有会话（含还没创建出 session 的草稿会话且尚无消息）时，空状态由页面自己渲染。
+          -->
+          <KeepAlive :max="8">
+            <ConversationView
+              v-if="conversationId || messages.length > 0"
+              :key="conversationId || 'draft'"
+              :messages="messages"
+              :is-sending="isSending"
+              :is-awaiting-first-token="isAwaitingFirstToken"
+            />
+          </KeepAlive>
 
-          <div v-else class="message-content">
-            <article
-              v-for="message in messages"
-              :key="message.id"
-              class="message-row"
-              :class="message.role === 'user' ? 'justify-end' : 'justify-start'"
-            >
-              <div v-if="message.role === 'agent'" class="avatar" aria-hidden="true">
-                <div i-carbon-bot />
+          <div v-if="!conversationId && messages.length === 0" class="message-empty">
+            <div class="empty-state">
+              <div class="empty-icon" aria-hidden="true">
+                <div i-carbon-chat-bot text-8 />
               </div>
-              <div
-                class="message-bubble"
-                :class="[
-                  message.role,
-                  { 'has-reasoning': message.role === 'agent' && message.reasoning },
-                ]"
-              >
-                <template v-if="message.role === 'agent'">
-                  <section v-if="message.reasoning" class="reasoning-panel">
-                    <button
-                      type="button"
-                      class="reasoning-toggle"
-                      :aria-expanded="Boolean(message.isReasoningOpen)"
-                      @click="message.isReasoningOpen = !message.isReasoningOpen"
-                    >
-                      <span class="reasoning-title">
-                        <span class="reasoning-status" :class="{ streaming: message.isStreaming }">
-                          <span v-if="message.isStreaming" class="reasoning-pulse" />
-                          <span v-else i-carbon-checkmark-filled aria-hidden="true" />
-                        </span>
-                        {{ message.isStreaming ? '正在思考' : '已思考' }}
-                      </span>
-                      <span
-                        i-carbon-chevron-down
-                        class="reasoning-chevron"
-                        :class="{ open: message.isReasoningOpen }"
-                        aria-hidden="true"
-                      />
-                    </button>
-                    <div v-if="message.isReasoningOpen" class="reasoning-content">
-                      {{ message.reasoning }}
-                    </div>
-                  </section>
-
-                  <!-- markdown-it 已禁用原始 HTML；v-html 只挂载解析器生成的受控标签。 -->
-                  <div
-                    v-if="message.content"
-                    class="answer-content markdown-body"
-                    v-html="renderMarkdown(message.content)"
-                  />
-                  <div v-else-if="message.isStreaming" class="answer-pending">
-                    正在组织回答…
-                  </div>
-                </template>
-                <template v-else>
-                  {{ message.content }}
-                </template>
-              </div>
-            </article>
-
-            <div v-if="isSending && isAwaitingFirstToken" class="message-row justify-start">
-              <div class="avatar" aria-hidden="true">
-                <div i-carbon-bot />
-              </div>
-              <div class="typing-indicator" aria-label="Agent 正在思考">
-                <span />
-                <span />
-                <span />
-              </div>
+              <h2 class="text-6 text-slate-900 tracking-tight font-700 mb-0 mt-5 dark:text-white">
+                开始一段新对话
+              </h2>
+              <p class="text-3.5 text-slate-500 leading-6 mb-0 mt-2 max-w-110 dark:text-slate-400">
+                第一条消息不会携带 conversationId，服务端返回后会自动关联后续上下文。
+              </p>
             </div>
           </div>
         </main>
 
         <footer class="composer-area">
           <div class="composer-content">
-            <div class="model-controls" aria-label="模型运行设置">
-              <label class="model-toggle">
-                <input v-model="useStreaming" type="checkbox" :disabled="isSending">
-                <span>流式输出</span>
-              </label>
-              <label class="reasoning-effort-control">
-                <span>推理等级</span>
-                <!--
-                  等级名来自 GET /api/model：不同部署的词汇表不同，
-                  因此页面不再硬编码任何一家的等级集合。
-                -->
-                <select
-                  v-if="reasoningEfforts.length"
-                  v-model="reasoningEffort"
-                  :disabled="isSending"
-                  aria-label="推理等级"
-                >
-                  <option v-for="level in reasoningEfforts" :key="level" :value="level">
-                    {{ formatReasoningEffort(level) }}
-                  </option>
-                </select>
-                <!-- 词汇表不可用时退化为自由文本，保证任何等级都不会因此无法选择。 -->
-                <input
-                  v-else
-                  v-model="reasoningEffort"
-                  :disabled="isSending"
-                  aria-label="推理等级"
-                >
-              </label>
-              <span v-if="!useStreaming" class="transport-hint">
-                普通 JSON · 不支持交互式审批
-              </span>
-            </div>
             <div v-if="errorMessage" class="error-banner" role="alert">
               <div class="flex gap-2 items-center">
                 <div i-carbon-warning-alt-filled shrink-0 />
@@ -1118,28 +1692,103 @@ onBeforeUnmount(() => {
             </section>
 
             <form v-else class="composer" @submit.prevent="send()">
+              <!--
+                输入框顶部把手：整行可拖，向上拖变高；键盘 ArrowUp / ArrowDown 各 ±24px。
+                用 separator 语义而不是按钮，因为它调整的是相邻区域的高度。
+              -->
+              <div
+                class="composer-resize-handle"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="调整输入框高度"
+                tabindex="0"
+                @pointerdown="beginComposerResize"
+                @pointermove="moveComposerResize"
+                @pointerup="endComposerResize"
+                @pointercancel="endComposerResize"
+                @keydown.up.prevent="stepComposerHeight(COMPOSER_HEIGHT_STEP)"
+                @keydown.down.prevent="stepComposerHeight(-COMPOSER_HEIGHT_STEP)"
+              >
+                <span class="composer-resize-grip" aria-hidden="true" />
+              </div>
+
+              <!--
+                自增高输入框：随内容向上增高，超过上限后由内部滚动接管。
+                高度 = clamp(max(内容高度, 拖动设定的下限), MIN_COMPOSER_HEIGHT, MAX_COMPOSER_HEIGHT)，
+                由 resizeComposer 计算，上限通过内联 max-height 与本组件常量单点声明。
+              -->
               <textarea
+                ref="composerInput"
                 v-model="input"
                 rows="1"
                 maxlength="2000"
                 aria-label="消息内容"
                 placeholder="输入消息，按 Enter 发送…"
+                :style="{ maxHeight: `${MAX_COMPOSER_HEIGHT}px` }"
                 :disabled="isSending"
+                @input="resizeComposer"
                 @keydown.enter.exact.prevent="send()"
               />
-              <button
-                class="send-button"
-                type="submit"
-                :disabled="!input.trim() || isSending"
-                aria-label="发送消息"
-              >
-                <div v-if="isSending" i-carbon-circle-dash class="animate-spin" />
-                <div v-else i-carbon-send-filled />
-              </button>
+
+              <!-- 输入内容下方一行：左侧模型 / 推理等级药丸，右侧圆形发送按钮。 -->
+              <div class="composer-meta">
+                <!--
+                  两个 chip 都没有时整个容器不渲染，避免在控件行里留下一个空盒子；
+                  发送按钮靠 space-between 始终贴右边，chip 数量变化不会让它跳动。
+                -->
+                <div v-if="modelOptions.length || reasoningChoices.length" class="composer-controls">
+                  <label v-if="modelOptions.length" class="model-select-control">
+                    <span class="control-label">模型</span>
+                    <!--
+                      模型列表来自 GET /api/model 的 models：为空时整个 chip 不渲染，
+                      请求体也不携带 model，由部署默认模型决定；展示用 label，发送用 id。
+                    -->
+                    <select
+                      v-model="selectedModel"
+                      class="model-select"
+                      :disabled="isSending"
+                      aria-label="模型"
+                    >
+                      <option v-for="model in modelOptions" :key="model.id" :value="model.id">
+                        {{ model.label }}
+                      </option>
+                    </select>
+                    <!-- 原生箭头被药丸样式去掉，用一个小图标补回可下拉的暗示。 -->
+                    <div i-carbon-chevron-down class="pill-caret" aria-hidden="true" />
+                  </label>
+                  <!--
+                    推理能力挂在模型上：该模型没有可选等级时整个 chip 不渲染，
+                    请求体也不携带 reasoningEffort；切换模型时选项与选中值都跟着重算。
+                  -->
+                  <label v-if="reasoningChoices.length" class="reasoning-effort-control">
+                    <span class="control-label">推理等级</span>
+                    <select
+                      v-model="reasoningEffort"
+                      :disabled="isSending"
+                      aria-label="推理等级"
+                    >
+                      <option
+                        v-for="choice in reasoningChoices"
+                        :key="choice.value"
+                        :value="choice.value"
+                      >
+                        {{ choice.label }}
+                      </option>
+                    </select>
+                    <div i-carbon-chevron-down class="pill-caret" aria-hidden="true" />
+                  </label>
+                </div>
+                <button
+                  class="send-button"
+                  type="submit"
+                  :disabled="!input.trim() || isSending"
+                  aria-label="发送消息"
+                >
+                  <div v-if="isSending" i-carbon-circle-dash class="animate-spin" aria-hidden="true" />
+                  <div v-else i-carbon-arrow-up aria-hidden="true" />
+                </button>
+              </div>
             </form>
-            <p v-if="!isSending || !toolInteraction" class="text-2.75 text-slate-400 m-0 mt-2 text-center dark:text-slate-500">
-              Shift + Enter 换行 · AI 生成内容可能存在错误，请注意核实
-            </p>
           </div>
         </footer>
       </section>
@@ -1148,54 +1797,31 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/*
+  整页布局：html / body / #app 已在 main.css 里撑满高度，这里让页面占满这份高度，
+  并把所有滚动都收进消息区，页面自身不产生滚动条。
+*/
 .chat-page {
   --panel-border: rgb(226 232 240 / 80%);
   position: relative;
-  min-height: 100%;
+  height: 100%;
   overflow: hidden;
-  display: grid;
-  place-items: center;
-  padding: 28px;
-  background:
-    radial-gradient(circle at 50% -10%, rgb(219 234 254 / 75%), transparent 36%),
-    linear-gradient(145deg, #f8fafc 0%, #f1f5f9 100%);
-}
-
-.ambient {
-  position: absolute;
-  width: 320px;
-  height: 320px;
-  border-radius: 9999px;
-  filter: blur(90px);
-  opacity: 0.28;
-  pointer-events: none;
-}
-
-.ambient-left {
-  top: 8%;
-  left: -100px;
-  background: #38bdf8;
-}
-
-.ambient-right {
-  right: -80px;
-  bottom: 4%;
-  background: #818cf8;
+  background: #f8fafc;
 }
 
 .workspace-shell {
   position: relative;
-  width: min(100%, 1180px);
-  height: min(840px, calc(100vh - 56px));
-  min-height: 580px;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   display: grid;
   grid-template-columns: 278px minmax(0, 1fr);
-  border: 1px solid var(--panel-border);
-  border-radius: 24px;
-  background: rgb(255 255 255 / 82%);
-  box-shadow: 0 24px 70px rgb(15 23 42 / 12%);
-  backdrop-filter: blur(22px);
+  background: white;
+}
+
+/* 侧边栏收缩后只让出列宽，对话区仍然占满剩余空间。 */
+.workspace-shell.sidebar-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr);
 }
 
 .conversation-sidebar {
@@ -1206,7 +1832,19 @@ onBeforeUnmount(() => {
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   padding: 18px 14px 14px;
   border-right: 1px solid var(--panel-border);
-  background: rgb(248 250 252 / 76%);
+  background: #f8fafc;
+  transition:
+    opacity 160ms ease,
+    padding 160ms ease;
+}
+
+/* 收缩用状态类表达；内容靠 overflow: hidden 收起，避免撑出整页滚动。 */
+.conversation-sidebar.collapsed {
+  visibility: hidden;
+  padding-inline: 0;
+  border-right-color: transparent;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .sidebar-header {
@@ -1260,7 +1898,7 @@ onBeforeUnmount(() => {
 }
 
 .new-chat-button:disabled,
-.conversation-item:disabled {
+.conversation-select:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
@@ -1279,6 +1917,8 @@ onBeforeUnmount(() => {
 
 .refresh-button,
 .sidebar-close,
+.sidebar-collapse-button,
+.sidebar-expand-button,
 .menu-button {
   display: grid;
   place-items: center;
@@ -1288,14 +1928,19 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-.refresh-button {
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
+.refresh-button,
+.sidebar-collapse-button,
+.sidebar-expand-button {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  font-size: 16px;
 }
 
 .refresh-button:hover,
 .sidebar-close:hover,
+.sidebar-collapse-button:hover,
+.sidebar-expand-button:hover,
 .menu-button:hover {
   color: #2563eb;
   background: #eff6ff;
@@ -1312,25 +1957,41 @@ onBeforeUnmount(() => {
   scrollbar-width: thin;
 }
 
-.conversation-item {
-  width: 100%;
+/* 重命名 / 删除失败的行内提示；不替换列表，避免已加载的会话被错误态顶掉。 */
+.sidebar-notice {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.sidebar-notice.error {
+  color: #b91c1c;
+  background: #fef2f2;
+}
+
+.conversation-item {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-wrap: no-wrap;
+  align-items: center;
+  gap: 4px 6px;
   border: 1px solid transparent;
   border-radius: 12px;
-  padding: 10px;
+  padding: 6px 8px;
   color: #475569;
   background: transparent;
-  cursor: pointer;
-  font: inherit;
   transition:
     border-color 140ms ease,
     color 140ms ease,
     background 140ms ease;
 }
 
-.conversation-item:hover:not(:disabled) {
+.conversation-item:hover {
   color: #1e293b;
   background: rgb(255 255 255 / 75%);
 }
@@ -1339,6 +2000,199 @@ onBeforeUnmount(() => {
   border-color: #bfdbfe;
   color: #1e3a8a;
   background: #eff6ff;
+}
+
+/* 会话本体是一个按钮；“重命名 / 删除”是并列的兄弟节点，不做按钮嵌套。 */
+.conversation-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  padding: 4px 2px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.conversation-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/*
+  kebab 入口：默认隐形，hover / 当前会话 / 键盘聚焦 / 菜单展开时显形。
+  它是列表项里 .conversation-select 之后的操作入口（右侧）。
+*/
+.conversation-menu-button {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  color: #94a3b8;
+  background: transparent;
+  cursor: pointer;
+  font-size: 15px;
+  opacity: 0;
+  transition:
+    opacity 140ms ease,
+    color 140ms ease,
+    background 140ms ease;
+}
+
+.conversation-item:hover .conversation-menu-button,
+.conversation-item.active .conversation-menu-button,
+.conversation-item:focus-within .conversation-menu-button,
+.conversation-item.menu-open .conversation-menu-button {
+  opacity: 1;
+}
+
+.conversation-menu-button:hover {
+  color: #1e293b;
+  background: #e2e8f0;
+}
+
+/*
+  kebab 下拉菜单：坐标由页面算出（内联 position / top / left）。
+  关键在于脱离滚动容器的裁剪：.conversation-list 的 overflow-y 与 .conversation-sidebar
+  的 overflow 都裁不到 fixed 后代，菜单因此不会再被切一半（前提是祖先链上没有
+  transform / filter / will-change —— 移动端抽屉用了 transform，那种情况下 fixed
+  会相对抽屉定位，但抽屉本身就贴在视口左上角，观感一致）。
+*/
+.conversation-menu {
+  z-index: 90;
+  position: fixed;
+  min-width: 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: white;
+  box-shadow: 0 10px 28px rgb(15 23 42 / 14%);
+}
+
+.conversation-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 9px;
+  color: #475569;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.conversation-menu button:hover {
+  background: #f1f5f9;
+}
+
+.conversation-menu-delete {
+  color: #dc2626;
+}
+
+.conversation-menu-delete:hover {
+  background: #fef2f2;
+}
+
+.conversation-rename-confirm,
+.conversation-rename-cancel {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  color: #94a3b8;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+/* 就地编辑占据 kebab 右侧的剩余宽度，与 kebab 同处一行。 */
+.conversation-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.conversation-rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid #bfdbfe;
+  border-radius: 9px;
+  padding: 5px 8px;
+  color: #1e293b;
+  background: white;
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.conversation-rename-confirm {
+  color: #16a34a;
+}
+
+.conversation-rename-confirm:hover {
+  background: #dcfce7;
+}
+
+.conversation-rename-error {
+  flex: 1 1 100%;
+  margin: 0;
+  padding: 0 2px;
+  color: #b91c1c;
+  font-size: 11px;
+}
+
+.conversation-delete-ask {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px;
+  color: #b91c1c;
+  font-size: 11.5px;
+}
+
+.conversation-delete-confirm,
+.conversation-delete-cancel {
+  border: 0;
+  border-radius: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.conversation-delete-confirm {
+  color: white;
+  background: #dc2626;
+}
+
+.conversation-delete-confirm:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.conversation-delete-cancel {
+  color: #475569;
+  background: #e2e8f0;
 }
 
 .conversation-icon {
@@ -1466,10 +2320,20 @@ onBeforeUnmount(() => {
   font-size: 20px;
 }
 
+/* 桌面端的收缩按钮常驻；移动端用遮罩 + 关闭按钮，因此这里隐藏桌面专用的两个入口。 */
 .menu-button,
 .sidebar-close,
 .sidebar-backdrop {
   display: none;
+}
+
+/* 展开按钮只在侧边栏收起时出现，和标题同一条基线。 */
+.sidebar-expand-button {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  border-radius: 11px;
+  font-size: 19px;
 }
 
 .message-count {
@@ -1482,25 +2346,28 @@ onBeforeUnmount(() => {
   font-size: 11px;
 }
 
-.message-list {
+/*
+  消息区的网格行外壳。
+  滚动容器在 ConversationView 里（它需要自己持有 ref 才能只在自己的内容增长时滚到底），
+  这里只负责占位与裁剪；没有会话时空状态直接铺满这一行。
+*/
+.message-area {
   min-height: 0;
-  overflow-y: auto;
-  padding: 28px 32px;
-  scroll-behavior: smooth;
-  scrollbar-color: #cbd5e1 transparent;
-  scrollbar-width: thin;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
-.message-content,
 .composer-content {
   width: min(100%, 840px);
   margin-inline: auto;
 }
 
-.message-content {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
+.message-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 28px 32px;
 }
 
 .empty-state {
@@ -1518,332 +2385,93 @@ onBeforeUnmount(() => {
   border-radius: 22px;
 }
 
-.message-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
+.composer-area {
+  z-index: 1;
+  padding: 14px 24px 16px;
+  border-top: 1px solid var(--panel-border);
+  background: #f8fafc;
 }
 
-.avatar {
-  width: 32px;
-  height: 32px;
+/*
+  输入内容下方的一行：左侧模型 / 推理等级药丸，右侧圆形发送按钮。
+  发送按钮用 margin-left: auto 贴右，而不是 justify-content: space-between：
+  两个 chip 全部隐藏时它会是唯一子节点，只有 auto margin 才能把它留在右边。
+*/
+.composer-meta {
   flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  border: 1px solid #dbeafe;
-  border-radius: 11px;
-  color: #2563eb;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-controls {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+}
+
+/* 药丸式 chip：自带 hover 浅底，内部的原生控件只负责取值，不再画自己的边框。 */
+.model-select-control,
+.reasoning-effort-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #475569;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11.5px;
+  white-space: nowrap;
+  transition:
+    color 140ms ease,
+    border-color 140ms ease,
+    background 140ms ease;
+}
+
+.model-select-control:hover,
+.reasoning-effort-control:hover {
+  background: #f1f5f9;
+}
+
+.model-select-control:focus-within,
+.reasoning-effort-control:focus-within {
+  border-color: #bfdbfe;
   background: #eff6ff;
 }
 
-.message-bubble {
-  max-width: min(76%, 620px);
-  padding: 11px 15px;
-  border-radius: 18px;
-  text-align: left;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 14px;
-  line-height: 1.65;
+.control-label {
+  flex: 0 0 auto;
+  color: #94a3b8;
 }
 
-.message-bubble.user {
-  border-bottom-right-radius: 5px;
-  color: white;
-  background: linear-gradient(135deg, #2563eb, #4f46e5);
-  box-shadow: 0 7px 18px rgb(37 99 235 / 18%);
-}
-
-.message-bubble.agent {
-  border: 1px solid #e2e8f0;
-  border-bottom-left-radius: 5px;
-  color: #334155;
-  background: white;
-  box-shadow: 0 5px 15px rgb(15 23 42 / 5%);
-}
-
-.message-bubble.agent.has-reasoning {
-  min-width: min(100%, 300px);
-  overflow: hidden;
-  padding: 0;
-}
-
-.reasoning-panel {
-  border-bottom: 1px solid #e2e8f0;
-  color: #64748b;
-  background: linear-gradient(135deg, #f8fafc, #f1f5f9);
-}
-
-.reasoning-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+/* 两个 chip 内部只保留文字：原生 select 的边框、底色与箭头都由外层药丸负责。 */
+.model-select-control select,
+.reasoning-effort-control select {
+  appearance: none;
+  max-width: 190px;
   border: 0;
-  padding: 10px 13px;
+  padding: 0;
   color: inherit;
   background: transparent;
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
-  font-weight: 650;
-  text-align: left;
+  font-size: 11.5px;
+  font-weight: 600;
 }
 
-.reasoning-toggle:hover {
-  color: #2563eb;
-  background: rgb(219 234 254 / 45%);
-}
-
-.reasoning-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.reasoning-status {
-  width: 16px;
-  height: 16px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  color: #2563eb;
-  background: #dbeafe;
-  font-size: 11px;
-}
-
-.reasoning-status.streaming {
-  background: #e0e7ff;
-}
-
-.reasoning-pulse {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #6366f1;
-  box-shadow: 0 0 0 0 rgb(99 102 241 / 35%);
-  animation: reasoning-pulse 1.4s ease-out infinite;
-}
-
-.reasoning-chevron {
+.pill-caret {
   flex: 0 0 auto;
-  transition: transform 160ms ease;
-}
-
-.reasoning-chevron.open {
-  transform: rotate(180deg);
-}
-
-.reasoning-content {
-  max-height: 260px;
-  overflow-y: auto;
-  padding: 0 14px 12px 36px;
-  color: #64748b;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 12px;
-  line-height: 1.65;
-  scrollbar-color: #cbd5e1 transparent;
-  scrollbar-width: thin;
-}
-
-.answer-content,
-.answer-pending {
-  padding: 11px 15px;
-}
-
-.markdown-body {
-  white-space: normal;
-}
-
-.markdown-body :deep(> :first-child) {
-  margin-top: 0;
-}
-
-.markdown-body :deep(> :last-child) {
-  margin-bottom: 0;
-}
-
-.markdown-body :deep(p),
-.markdown-body :deep(ul),
-.markdown-body :deep(ol),
-.markdown-body :deep(pre),
-.markdown-body :deep(blockquote),
-.markdown-body :deep(table) {
-  margin: 0.7em 0;
-}
-
-.markdown-body :deep(h1),
-.markdown-body :deep(h2),
-.markdown-body :deep(h3),
-.markdown-body :deep(h4) {
-  margin: 1em 0 0.45em;
-  color: #0f172a;
-  font-weight: 700;
-  line-height: 1.3;
-}
-
-.markdown-body :deep(h1) {
-  font-size: 1.35em;
-}
-
-.markdown-body :deep(h2) {
-  font-size: 1.2em;
-}
-
-.markdown-body :deep(h3),
-.markdown-body :deep(h4) {
-  font-size: 1.05em;
-}
-
-.markdown-body :deep(ul),
-.markdown-body :deep(ol) {
-  padding-left: 1.5em;
-}
-
-.markdown-body :deep(li + li) {
-  margin-top: 0.25em;
-}
-
-.markdown-body :deep(a) {
-  color: #2563eb;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.markdown-body :deep(code) {
-  border-radius: 5px;
-  padding: 0.15em 0.38em;
-  background: #f1f5f9;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 0.9em;
-}
-
-.markdown-body :deep(pre) {
-  max-width: 100%;
-  overflow-x: auto;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  padding: 12px 14px;
-  background: #0f172a;
-  color: #e2e8f0;
-  white-space: pre;
-}
-
-.markdown-body :deep(pre code) {
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font-size: 0.88em;
-}
-
-.markdown-body :deep(blockquote) {
-  border-left: 3px solid #93c5fd;
-  padding-left: 12px;
-  color: #64748b;
-}
-
-.markdown-body :deep(table) {
-  display: block;
-  max-width: 100%;
-  overflow-x: auto;
-  border-collapse: collapse;
-}
-
-.markdown-body :deep(th),
-.markdown-body :deep(td) {
-  border: 1px solid #cbd5e1;
-  padding: 6px 10px;
-  text-align: left;
-}
-
-.markdown-body :deep(th) {
-  background: #f8fafc;
-}
-
-.answer-pending {
   color: #94a3b8;
   font-size: 12px;
 }
 
-.typing-indicator {
-  display: flex;
-  gap: 5px;
-  padding: 14px 16px;
-  border: 1px solid #e2e8f0;
-  border-radius: 18px 18px 18px 5px;
-  background: white;
-}
-
-.typing-indicator span {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #94a3b8;
-  animation: typing 1.2s infinite ease-in-out;
-}
-
-.typing-indicator span:nth-child(2) {
-  animation-delay: 0.15s;
-}
-
-.typing-indicator span:nth-child(3) {
-  animation-delay: 0.3s;
-}
-
-.composer-area {
-  z-index: 1;
-  padding: 16px 24px 18px;
-  border-top: 1px solid var(--panel-border);
-  background: rgb(248 250 252 / 82%);
-}
-
-.model-controls {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  margin-bottom: 9px;
-  color: #64748b;
-  font-size: 11px;
-}
-
-.model-toggle,
-.reasoning-effort-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.model-toggle input {
-  accent-color: #2563eb;
-}
-
-.reasoning-effort-control input,
-.reasoning-effort-control select {
-  width: 82px;
-  border: 1px solid #cbd5e1;
-  border-radius: 7px;
-  padding: 3px 6px;
-  color: #475569;
-  background: white;
-  font: inherit;
-}
-
-/* 等级名长度由部署决定，下拉框按内容自适应，避免“不推理（off）”被截断。 */
-.reasoning-effort-control select {
-  width: auto;
-  min-width: 96px;
-}
-
-.reasoning-effort-control input:disabled,
+.model-select-control select:disabled,
 .reasoning-effort-control select:disabled {
   opacity: 0.5;
-}
-
-.transport-hint {
-  color: #b45309;
 }
 
 .tool-confirm-card {
@@ -1983,13 +2611,18 @@ onBeforeUnmount(() => {
   font-size: 11px;
 }
 
+/*
+  输入框容器：纵向堆叠，子元素顺序固定为
+  .composer-resize-handle（顶部拖拽把手）→ textarea → .composer-meta（药丸控件 + 发送按钮）。
+*/
 .composer {
   display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  padding: 7px 7px 7px 16px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px 10px 8px;
   border: 1px solid #cbd5e1;
-  border-radius: 17px;
+  border-radius: 18px;
   background: white;
   box-shadow: 0 4px 14px rgb(15 23 42 / 5%);
   transition:
@@ -2002,13 +2635,55 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 4px rgb(59 130 246 / 10%);
 }
 
+/*
+  顶部拖拽把手：整行都是命中区域（cursor: ns-resize），中间一条不显眼的短横条；
+  touch-action: none 让触屏拖动不会被页面滚动手势抢走。
+*/
+.composer-resize-handle {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 12px;
+  margin: 0 -6px;
+  border-radius: 999px;
+  cursor: ns-resize;
+  user-select: none;
+  touch-action: none;
+}
+
+.composer-resize-grip {
+  width: 36px;
+  height: 3px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  transition: background 140ms ease;
+}
+
+.composer-resize-handle:hover .composer-resize-grip,
+.composer-resize-handle:focus-visible .composer-resize-grip {
+  background: #94a3b8;
+}
+
+.composer-resize-handle:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: -2px;
+}
+
+/*
+  自增高输入框：高度与 overflow-y 由 resizeComposer 计算，
+  上限来自组件常量 MAX_COMPOSER_HEIGHT（通过内联 max-height 单点声明）；
+  关掉 textarea 自带的拖拽手柄，高度只由顶部把手与内容决定。
+*/
 .composer textarea {
+  flex: 0 0 auto;
   width: 100%;
-  max-height: 150px;
-  resize: vertical;
+  min-width: 0;
+  overflow-y: hidden;
+  resize: none;
   border: 0;
   outline: 0;
-  padding: 8px 0;
+  padding: 6px 0;
   color: #1e293b;
   background: transparent;
   font: inherit;
@@ -2020,18 +2695,20 @@ onBeforeUnmount(() => {
   color: #94a3b8;
 }
 
+/* 圆形图标发送按钮：无文字，只有一颗箭头图标；margin-left: auto 让它始终贴右。 */
 .send-button {
-  width: 42px;
-  height: 42px;
+  margin-left: auto;
+  width: 30px;
+  height: 30px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 13px;
+  border-radius: 50%;
   color: white;
   background: linear-gradient(135deg, #2563eb, #4f46e5);
   cursor: pointer;
-  font-size: 18px;
+  font-size: 16px;
   transition:
     transform 150ms ease,
     box-shadow 150ms ease,
@@ -2072,20 +2749,7 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 
-@keyframes typing {
-  0%,
-  60%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.45;
-  }
-
-  30% {
-    transform: translateY(-4px);
-    opacity: 1;
-  }
-}
-
+/* typing / reasoning-pulse 两条动画随消息区搬到了 ConversationView。 */
 @keyframes pulse {
   0%,
   100% {
@@ -2097,28 +2761,14 @@ onBeforeUnmount(() => {
   }
 }
 
-@keyframes reasoning-pulse {
-  70% {
-    box-shadow: 0 0 0 6px rgb(99 102 241 / 0%);
-  }
-
-  100% {
-    box-shadow: 0 0 0 0 rgb(99 102 241 / 0%);
-  }
-}
-
 @media (max-width: 760px) {
-  .chat-page {
-    padding: 0;
-  }
-
-  .workspace-shell {
+  /* 窄屏改用“抽屉 + 遮罩”，桌面端的收缩状态在这里不生效。 */
+  .workspace-shell,
+  .workspace-shell.sidebar-collapsed {
     width: 100%;
-    height: 100dvh;
-    min-height: 0;
+    height: 100%;
     display: block;
-    border: 0;
-    border-radius: 0;
+    grid-template-columns: none;
   }
 
   .conversation-sidebar {
@@ -2128,6 +2778,14 @@ onBeforeUnmount(() => {
     border-right: 1px solid var(--panel-border);
     transform: translateX(-102%);
     transition: transform 200ms ease;
+  }
+
+  .conversation-sidebar.collapsed {
+    visibility: visible;
+    padding-inline: 14px;
+    border-right-color: var(--panel-border);
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .conversation-sidebar.open {
@@ -2146,6 +2804,11 @@ onBeforeUnmount(() => {
   .sidebar-close,
   .menu-button {
     display: grid;
+  }
+
+  .sidebar-collapse-button,
+  .sidebar-expand-button {
+    display: none;
   }
 
   .sidebar-backdrop {
@@ -2171,12 +2834,9 @@ onBeforeUnmount(() => {
     display: none;
   }
 
-  .message-list {
+  /* 消息区（.message-list / .message-bubble）的窄屏规则已随组件迁移到 ConversationView。 */
+  .message-empty {
     padding: 20px 16px;
-  }
-
-  .message-bubble {
-    max-width: 84%;
   }
 
   .composer-area {
@@ -2185,42 +2845,59 @@ onBeforeUnmount(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .typing-indicator span,
-  .conversation-skeleton span,
-  .reasoning-pulse {
+  /* typing / reasoning-pulse 的动画关闭规则随消息区迁移到 ConversationView。 */
+  .conversation-skeleton span {
     animation: none;
-  }
-
-  .message-list {
-    scroll-behavior: auto;
   }
 }
 
 :global(html.dark) .chat-page {
   --panel-border: rgb(51 65 85 / 70%);
-  background:
-    radial-gradient(circle at 50% -10%, rgb(30 64 175 / 22%), transparent 36%),
-    linear-gradient(145deg, #020617 0%, #0f172a 100%);
+  background: #0f172a;
 }
 
 :global(html.dark) .workspace-shell,
 :global(html.dark) .chat-header {
-  background: rgb(15 23 42 / 82%);
+  background: #0f172a;
 }
 
 :global(html.dark) .conversation-sidebar,
 :global(html.dark) .composer-area {
-  background: rgb(15 23 42 / 92%);
+  background: #020617;
 }
 
-:global(html.dark) .reasoning-effort-control input,
-:global(html.dark) .reasoning-effort-control select {
-  border-color: #475569;
+:global(html.dark) .model-select-control,
+:global(html.dark) .reasoning-effort-control {
   color: #cbd5e1;
+}
+
+:global(html.dark) .model-select-control:hover,
+:global(html.dark) .reasoning-effort-control:hover {
   background: #1e293b;
 }
 
-:global(html.dark) .conversation-item:hover:not(:disabled) {
+:global(html.dark) .model-select-control:focus-within,
+:global(html.dark) .reasoning-effort-control:focus-within {
+  border-color: #1d4ed8;
+  background: #172554;
+}
+
+:global(html.dark) .model-select-control select,
+:global(html.dark) .reasoning-effort-control select {
+  color: #cbd5e1;
+  background: transparent;
+}
+
+:global(html.dark) .composer-resize-grip {
+  background: #334155;
+}
+
+:global(html.dark) .composer-resize-handle:hover .composer-resize-grip,
+:global(html.dark) .composer-resize-handle:focus-visible .composer-resize-grip {
+  background: #64748b;
+}
+
+:global(html.dark) .conversation-item:hover {
   color: #e2e8f0;
   background: #1e293b;
 }
@@ -2236,17 +2913,62 @@ onBeforeUnmount(() => {
   background: #334155;
 }
 
+:global(html.dark) .conversation-menu-button:hover {
+  color: #e2e8f0;
+  background: #334155;
+}
+
+:global(html.dark) .conversation-menu {
+  border-color: #334155;
+  background: #1e293b;
+  box-shadow: 0 10px 28px rgb(2 6 23 / 55%);
+}
+
+:global(html.dark) .conversation-menu button {
+  color: #cbd5e1;
+}
+
+:global(html.dark) .conversation-menu button:hover {
+  background: #334155;
+}
+
+:global(html.dark) .conversation-menu-delete {
+  color: #fca5a5;
+}
+
+:global(html.dark) .conversation-menu-delete:hover {
+  background: #450a0a;
+}
+
+:global(html.dark) .conversation-rename-input {
+  border-color: #1d4ed8;
+  color: #e2e8f0;
+  background: #1e293b;
+}
+
+:global(html.dark) .conversation-delete-cancel {
+  color: #cbd5e1;
+  background: #334155;
+}
+
+:global(html.dark) .conversation-rename-error,
+:global(html.dark) .sidebar-notice.error {
+  color: #fca5a5;
+}
+
+:global(html.dark) .sidebar-notice.error {
+  background: #450a0a;
+}
+
 :global(html.dark) .message-count {
   border-color: #334155;
   color: #94a3b8;
   background: #1e293b;
 }
 
-:global(html.dark) .message-bubble.agent,
-:global(html.dark) .typing-indicator,
+/* 消息气泡 / 思考面板 / markdown 的深色规则已随消息区迁移到 ConversationView。 */
 :global(html.dark) .composer {
   border-color: #334155;
-  color: #e2e8f0;
   background: #1e293b;
 }
 
@@ -2277,62 +2999,7 @@ onBeforeUnmount(() => {
   background: #431407;
 }
 
-:global(html.dark) .reasoning-panel {
-  border-color: #334155;
-  color: #94a3b8;
-  background: linear-gradient(135deg, #172033, #172554);
-}
-
-:global(html.dark) .reasoning-toggle:hover {
-  color: #bfdbfe;
-  background: rgb(30 64 175 / 22%);
-}
-
-:global(html.dark) .reasoning-content {
-  color: #94a3b8;
-}
-
-:global(html.dark) .markdown-body :deep(h1),
-:global(html.dark) .markdown-body :deep(h2),
-:global(html.dark) .markdown-body :deep(h3),
-:global(html.dark) .markdown-body :deep(h4) {
-  color: #f8fafc;
-}
-
-:global(html.dark) .markdown-body :deep(a) {
-  color: #93c5fd;
-}
-
-:global(html.dark) .markdown-body :deep(code) {
-  background: #334155;
-}
-
-:global(html.dark) .markdown-body :deep(pre) {
-  border-color: #475569;
-  background: #020617;
-}
-
-:global(html.dark) .markdown-body :deep(blockquote) {
-  border-color: #3b82f6;
-  color: #94a3b8;
-}
-
-:global(html.dark) .markdown-body :deep(th),
-:global(html.dark) .markdown-body :deep(td) {
-  border-color: #475569;
-}
-
-:global(html.dark) .markdown-body :deep(th) {
-  background: #334155;
-}
-
 :global(html.dark) .composer textarea {
   color: #e2e8f0;
-}
-
-:global(html.dark) .avatar {
-  border-color: #1e40af;
-  color: #93c5fd;
-  background: #172554;
 }
 </style>

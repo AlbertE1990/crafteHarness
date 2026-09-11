@@ -14,6 +14,9 @@ import Fastify from 'fastify'
 /** 当前参考 Runtime 是单用户部署，仍显式组装固定 Session 作用域。 */
 const SINGLE_USER_SCOPE_ID = 'default'
 
+/** 会话名称长度上限；只在 HTTP 边界约束，存储层只要求非空。 */
+const MAX_CONVERSATION_NAME_LENGTH = 80
+
 /** 前端会话列表需要的展示消息；工具和系统消息不会进入该投影。 */
 export interface DisplayMessage {
   readonly role: 'user' | 'assistant'
@@ -50,18 +53,51 @@ export interface ServerChatJsonResponse {
 }
 
 /**
- * 当前部署的模型能力；由 Runtime 从环境配置组装。
+ * 一个模型及其推理能力。
+ *
+ * `reasoningEfforts` 是该模型允许的等级；空数组表示这个模型没有推理控制（例如纯推理模型），
+ * 前端据此隐藏等级控件，请求里也不应带 `reasoningEffort`。等级集合由部署声明，
+ * Adapter 不做校验——它只把开放值翻译成供应商字段。
+ */
+export interface ServerModelCapability {
+  readonly id: string
+  /** 展示名称；缺省时等于 id。 */
+  readonly label: string
+  /** 该模型允许的推理等级；`[]` 表示不允许在请求里表达推理等级。 */
+  readonly reasoningEfforts: readonly string[]
+  /** 请求未指定等级时采用的默认值；null 表示不下发该参数，由供应商决定。 */
+  readonly defaultReasoningEffort: string | null
+}
+
+/**
+ * 当前部署的模型能力目录；由 Runtime 从配置文件（或环境变量回退）组装。
  *
  * 供应商会不断新增模型和推理等级，因此这份词表属于部署而不是库或前端：前端只渲染
- * 这里给出的候选，换模型或增删等级不需要改动前端代码。
+ * 这里给出的候选，换模型或增删等级不需要改动前端代码，也不需要改 Adapter。
  */
 export interface ServerModelInfo {
   readonly provider: string
-  readonly model: string
-  /** 部署默认推理等级；null 表示不覆盖，由供应商或模型自身默认值决定。 */
-  readonly reasoningEffort: string | null
-  /** 允许前端选择的候选等级；非空时始终包含保留值 `off`。只影响候选，不限制请求。 */
-  readonly reasoningEfforts: readonly string[]
+  /** 默认模型 id；必须在 models 中。 */
+  readonly defaultModel: string
+  readonly models: readonly ServerModelCapability[]
+}
+
+/**
+ * 会话目录的可变操作；由 Runtime 注入。
+ *
+ * 库的 `SessionStore` 契约只有 append/read/list，刻意不提供重命名与删除：
+ * 名称是可变的展示投影，删除则会移除已记录的事实。把这两件事留在 Runtime，
+ * 是为了让这个取舍停在应用层，而不是改变库的 append-only 协议。
+ */
+export interface ConversationCatalogMutations {
+  /**
+   * 重命名会话，成功返回更新后的摘要，会话不存在返回 undefined。
+   *
+   * 返回摘要而不是布尔值，是为了让处理器不必再读一次会话就能回出与列表端点一致的形状：
+   * 「改名成功、随后读不到」若回 404，会把一次成功操作报成失败。
+   */
+  rename: (sessionId: string, name: string) => Promise<SessionSummary | undefined>
+  remove: (sessionId: string) => Promise<boolean>
 }
 
 /** 创建 Fastify 应用时注入的 Runtime 和日志配置。 */
@@ -69,6 +105,15 @@ export interface CreateServerAppOptions {
   readonly agent: Agent
   /** 前端用来渲染模型与推理等级候选的部署信息。 */
   readonly model: ServerModelInfo
+  /**
+   * 按模型名取对应 Agent；省略时所有请求都用 `agent`。
+   *
+   * 库把模型名绑定在 Adapter 实例上（不是每次请求的参数），因此多模型部署由 Runtime
+   * 持有多个 Agent 实例并在这里分发，而不是把模型名塞进 AgentRequest。
+   */
+  readonly resolveAgent?: (model: string) => Agent | undefined
+  /** 未注入时，重命名与删除接口返回 501，而不是静默无效。 */
+  readonly conversations?: ConversationCatalogMutations
   readonly logger?: FastifyServerOptions['logger']
 }
 
@@ -100,7 +145,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     })
     if (!result.accepted) {
       // 同一个 approvalId 只能使用一次；已处理、超时和未知 ID 统一视为不存在。
-      await reply.code(404)
+      reply.code(404)
       return {
         error: 'TOOL_APPROVAL_NOT_FOUND',
         message: '审批不存在、已处理或已经超时',
@@ -109,7 +154,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     return result
   })
 
-  // 前端从这里获得模型与推理等级候选，避免把供应商词表写死在页面里。
+  // 前端从这里获得模型与其推理能力，避免把供应商词表写死在页面里。
   fastify.get('/api/model', {
     schema: {
       response: {
@@ -120,11 +165,23 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
               type: 'object',
               properties: {
                 provider: { type: 'string' },
-                model: { type: 'string' },
-                reasoningEffort: { type: ['string', 'null'] },
-                reasoningEfforts: { type: 'array', items: { type: 'string' } },
+                defaultModel: { type: 'string' },
+                models: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string' },
+                      label: { type: 'string' },
+                      reasoningEfforts: { type: 'array', items: { type: 'string' } },
+                      defaultReasoningEffort: { type: ['string', 'null'] },
+                    },
+                    required: ['id', 'label', 'reasoningEfforts', 'defaultReasoningEffort'],
+                    additionalProperties: false,
+                  },
+                },
               },
-              required: ['provider', 'model', 'reasoningEffort', 'reasoningEfforts'],
+              required: ['provider', 'defaultModel', 'models'],
               additionalProperties: false,
             },
           },
@@ -159,7 +216,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
       sessionId: request.params.sessionId,
     })
     if (!session) {
-      await reply.code(404)
+      reply.code(404)
       return {
         error: 'SESSION_NOT_FOUND',
         message: `会话 ${request.params.sessionId} 不存在`,
@@ -169,6 +226,66 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     return { data: createConversationDetail(session) }
   })
 
+  fastify.patch<{
+    Params: { sessionId: string }
+    Body: { name: string }
+  }>('/api/conversation/:sessionId', {
+    schema: {
+      body: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: MAX_CONVERSATION_NAME_LENGTH, pattern: '\\S' },
+        },
+        required: ['name'],
+        additionalProperties: false,
+      },
+    },
+  }, async (request, reply) => {
+    if (!options.conversations) {
+      reply.code(501)
+      return {
+        error: 'CONVERSATION_MUTATION_UNSUPPORTED',
+        message: '当前 Runtime 未注入会话目录写能力',
+      }
+    }
+
+    const name = request.body.name.trim()
+    const renamed = await options.conversations.rename(request.params.sessionId, name)
+    if (!renamed) {
+      reply.code(404)
+      return {
+        error: 'SESSION_NOT_FOUND',
+        message: `会话 ${request.params.sessionId} 不存在`,
+      }
+    }
+
+    // 名称以目录为权威；端口已返回更新后的摘要，不必再读一次会话。
+    return { data: createConversationSummary(renamed) }
+  })
+
+  fastify.delete<{
+    Params: { sessionId: string }
+  }>('/api/conversation/:sessionId', async (request, reply) => {
+    if (!options.conversations) {
+      reply.code(501)
+      return {
+        error: 'CONVERSATION_MUTATION_UNSUPPORTED',
+        message: '当前 Runtime 未注入会话目录写能力',
+      }
+    }
+
+    const removed = await options.conversations.remove(request.params.sessionId)
+    if (!removed) {
+      reply.code(404)
+      return {
+        error: 'SESSION_NOT_FOUND',
+        message: `会话 ${request.params.sessionId} 不存在`,
+      }
+    }
+
+    return { data: { id: request.params.sessionId, deleted: true } }
+  })
+
   fastify.post<{
     Body: {
       conversationId?: string
@@ -176,6 +293,8 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
       stream?: boolean
       /** 单次请求的推理等级；`'off'` 表示关闭推理，省略时使用部署默认值。 */
       reasoningEffort?: string
+      /** 本次请求使用的模型；省略时用部署默认模型。 */
+      model?: string
     }
   }>('/api/chat', {
     schema: {
@@ -188,6 +307,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
           message: { type: 'string', minLength: 1, pattern: '\\S' },
           stream: { type: 'boolean' },
           reasoningEffort: { type: 'string', minLength: 1, pattern: '\\S' },
+          model: { type: 'string', minLength: 1, pattern: '\\S' },
         },
         required: ['message'],
         additionalProperties: false,
@@ -196,6 +316,50 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
   }, async (request, reply) => {
     const abortController = new AbortController()
     const useStream = request.body.stream ?? true
+    // 模型名绑定在 Adapter 实例上，因此按模型选 Agent；未声明的模型直接拒绝，
+    // 而不是静默退回默认模型让用户以为切换生效了。
+    const capability = request.body.model
+      ? options.model.models.find(item => item.id === request.body.model)
+      : options.model.models.find(item => item.id === options.model.defaultModel)
+    if (!capability) {
+      reply.code(400)
+      return {
+        error: 'MODEL_NOT_SUPPORTED',
+        message: `未声明的模型：${request.body.model ?? ''}`,
+      }
+    }
+    /*
+      默认模型直接用门面注入的 `agent`，不要求 Runtime 再注册一次（`createServerApp({ agent })`
+      的语义就是"默认模型的 Agent"）；只有切换到别的模型时才查 `resolveAgent`。
+    */
+    const agent = capability.id === options.model.defaultModel
+      ? options.agent
+      : options.resolveAgent?.(capability.id)
+    if (!agent) {
+      reply.code(400)
+      return {
+        error: 'MODEL_NOT_SUPPORTED',
+        message: `模型 ${capability.id} 没有可用的 Agent 实例`,
+      }
+    }
+
+    /*
+      推理等级按"选中模型的能力"校验，而不是按全局列表：目录是运维自己写的部署事实，
+      在 HTTP 边界拒绝能给出明确原因（这属于部署自查），也避免把明显的非法值送给供应商。
+      请求未提供时用该模型的默认等级；默认值为 null 时不带该参数，由供应商决定。
+    */
+    const requestedEffort = request.body.reasoningEffort?.trim()
+    if (requestedEffort && !capability.reasoningEfforts.includes(requestedEffort)) {
+      reply.code(400)
+      return {
+        error: 'REASONING_EFFORT_NOT_SUPPORTED',
+        message: capability.reasoningEfforts.length
+          ? `模型 ${capability.id} 不支持推理等级 ${requestedEffort}；可用：${capability.reasoningEfforts.join(', ')}`
+          : `模型 ${capability.id} 不支持设置推理等级`,
+      }
+    }
+    const reasoningEffort = requestedEffort || capability.defaultReasoningEffort
+
     const agentRequest = {
       scopeId: SINGLE_USER_SCOPE_ID,
       input: request.body.message,
@@ -210,9 +374,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
             sessionName: createConversationTitle(request.body.message),
           }
         : {}),
-      ...(request.body.reasoningEffort
-        ? { reasoningEffort: request.body.reasoningEffort }
-        : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
     }
 
     // 浏览器断开连接时取消同一个 Agent Run，模型和工具会收到组合后的 AbortSignal。
@@ -224,7 +386,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     if (!useStream) {
       // 普通 JSON 请求没有实时事件通道，因此不会注册交互式工具审批观察器。
       // ToolGuard 的 ask 会得到 unavailable 并作为工具失败交回 AgentLoop，而不会永久等待。
-      const result = await options.agent.invoke(agentRequest, abortController.signal)
+      const result = await agent.invoke(agentRequest, abortController.signal)
       const response: ServerChatJsonResponse = { data: result }
       return response
     }
@@ -239,8 +401,8 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     reply.raw.flushHeaders()
 
     try {
-      for await (const event of options.agent.stream(agentRequest, abortController.signal)) {
-        // AgentOutputEvent 已是 CraftAgent 的标准应用协议，默认原样写出即可。
+      for await (const event of agent.stream(agentRequest, abortController.signal)) {
+        // AgentOutputEvent 已是 craft-harness 的标准应用协议，默认原样写出即可。
         await writeSseEvent(reply.raw, event)
       }
     }
