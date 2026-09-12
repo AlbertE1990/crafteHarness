@@ -42,6 +42,12 @@ import {
 } from './stop-policy'
 import { createAgentToolMap } from './tool-registry'
 
+const FINAL_MODEL_STEP_INSTRUCTION = [
+  '这是本轮允许的最后一次模型调用，且工具已禁用。',
+  '请根据已有工具结果直接回复用户：明确说明已经完成的操作、未完成的操作及其原因。',
+  '不得声称执行了没有成功返回结果的工具，也不要继续请求调用工具。',
+].join('')
+
 /**
  * 供应商、网络框架和数据库实现无关的 Agent 执行循环。
  *
@@ -165,6 +171,7 @@ export class AgentLoop<TContext = undefined> {
 
         let stepResult: ModelStepResult
         try {
+          const finalResponseOnly = state.toolCalls > 0 && step === this.limits.maxModelSteps
           stepResult = await this.runModelStep(
             state,
             step,
@@ -172,6 +179,7 @@ export class AgentLoop<TContext = undefined> {
             signals.signal,
             eventBase,
             options.onEvent,
+            finalResponseOnly,
           )
         }
         catch (error) {
@@ -428,6 +436,7 @@ export class AgentLoop<TContext = undefined> {
     signal: AbortSignal,
     eventBase: () => AgentEventBase,
     listener?: AgentRunOptions['onEvent'],
+    finalResponseOnly: boolean = false,
   ): Promise<ModelStepResult> {
     const snapshot = await readSessionSnapshot(
       { scopeId: state.scopeId, sessionId: state.sessionId },
@@ -450,10 +459,13 @@ export class AgentLoop<TContext = undefined> {
       this.limits.maxCompletionTokensPerStep,
       remainingTokens,
     )
-    const toolModels = [...this.tools.values()].map(tool => tool.model)
+    const toolModels = finalResponseOnly ? [] : [...this.tools.values()].map(tool => tool.model)
+    const messages = deriveModelMessages(snapshot.events)
     const request = {
       model: modelExecution.id,
-      messages: deriveModelMessages(snapshot.events),
+      messages: finalResponseOnly
+        ? [...messages, { role: 'system' as const, content: FINAL_MODEL_STEP_INSTRUCTION }]
+        : messages,
       ...(toolModels.length > 0
         ? { tools: toolModels, parallel_tool_calls: false as const }
         : {}),

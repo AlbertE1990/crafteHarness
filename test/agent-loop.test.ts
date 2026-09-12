@@ -535,6 +535,61 @@ describe('agent loop', () => {
       .map(message => message.role)).toEqual(['user', 'assistant', 'tool'])
   })
 
+  it('reserves the final model Step for a tool-free response after tool execution', async () => {
+    const tool = createAgentTool(defineTool({
+      name: 'noop',
+      description: '返回失败原因',
+      inputSchema: z.strictObject({}),
+      outputSchema: z.string(),
+      execute: () => '参数校验失败：occurredAt 必须包含时区',
+    }))
+    const store = createStore()
+    const adapter = new ScriptedModelAdapter({
+      script: [
+        {
+          method: 'stream',
+          chunks: [chunk({
+            tool_calls: [{
+              index: 0,
+              id: 'call-noop-finalize',
+              type: 'function',
+              function: { name: 'noop', arguments: '{}' },
+            }],
+          }, 'tool_calls')],
+        },
+        {
+          method: 'stream',
+          chunks: [chunk({ content: '同步未完成：沟通时间缺少时区。' }, 'stop')],
+        },
+      ],
+    })
+    const loop = new AgentLoop({
+      adapter,
+      model: { id: 'scripted-model' },
+      store,
+      tools: [tool],
+      limits: { maxModelSteps: 2 },
+    })
+
+    const result = await loop.run({ scopeId: SCOPE_ID, sessionId: 'session-final-step', input: '同步记录' })
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      content: '同步未完成：沟通时间缺少时区。',
+      steps: 2,
+      toolCalls: 1,
+    })
+    expect(adapter.calls).toHaveLength(2)
+    expect(adapter.calls[0]?.request.tools).toHaveLength(1)
+    expect(adapter.calls[1]?.request.tools).toBeUndefined()
+    expect(adapter.calls[1]?.request.messages.at(-1)).toMatchObject({
+      role: 'system',
+      content: expect.stringContaining('最后一次模型调用'),
+    })
+    expect(deriveModelMessages((await readSessionSnapshot({ scopeId: SCOPE_ID, sessionId: 'session-final-step' }, store)).events)
+      .map(message => message.role)).toEqual(['user', 'assistant', 'tool', 'assistant'])
+  })
+
   it('uses reported usage as a total-token guard before starting the next Step', async () => {
     const tool = createAgentTool(defineTool({
       name: 'noop',

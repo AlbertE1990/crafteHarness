@@ -238,10 +238,11 @@ pnpm test -- --run test/agent-loop.test.ts
 1. 写一个 `echo` 工具，让模型调用后再总结结果。
 2. 把工具参数改成非法 JSON，观察工具没有执行但模型得到错误消息。
 3. 把 `maxModelSteps` 设为 1，让第一步返回工具调用，确认结果是 `max_model_steps`。
-4. 一次返回两个 Tool Call，把 `maxToolCalls` 设为 1，确认两个都没有执行。
-5. 在 `agent.step.started` 时模拟另一个 Writer 追加事件，观察 Session 版本冲突。
-6. 让 `onEvent` 抛错，确认最终回答仍正常完成。
-7. 使用 AbortController 在工具执行中取消，确认剩余 Tool Call 得到 `TOOL_ABORTED` 消息。
+4. 把 `maxModelSteps` 设为 2，让第一步返回工具调用；最后一步应禁用工具并要求模型直接说明完成情况，避免因持续纠错而留下没有用户回复的失败 Turn。
+5. 一次返回两个 Tool Call，把 `maxToolCalls` 设为 1，确认两个都没有执行。
+6. 在 `agent.step.started` 时模拟另一个 Writer 追加事件，观察 Session 版本冲突。
+7. 让 `onEvent` 抛错，确认最终回答仍正常完成。
+8. 使用 AbortController 在工具执行中取消，确认剩余 Tool Call 得到 `TOOL_ABORTED` 消息。
 
 ## 13. 当前边界
 

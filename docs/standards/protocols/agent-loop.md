@@ -179,6 +179,8 @@ toolCall.arguments
 | `maxTotalTokens`             | 无     | 基于模型已上报 usage，在下一 Step 前检查的总预算 |
 | `maxDurationMs`              | 无     | 通过组合 AbortSignal 实现的协作式 Run 时限       |
 
+如果本轮已经执行过工具，`maxModelSteps` 的最后一个 Step 会以无工具模式调用模型，并追加仅对本次请求可见的收尾指令。模型必须根据已经持久化的工具结果说明完成项、未完成项和失败原因，不能继续产生 Tool Call。这样预算仍是硬上限，同时避免连续工具纠错把 Turn 结束为只有 `turn.failed`、没有用户可见说明的状态。`maxModelSteps=1` 无法同时容纳工具调用和收尾调用，因此工具型 Agent 应至少配置为 2。
+
 `AgentRunResult.status` 与 `stopReason` 分离：
 
 - `completed`：模型给出正常最终回答并成功写入 `turn.completed`。
