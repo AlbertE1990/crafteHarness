@@ -1,6 +1,7 @@
 # ADR-0012：仓库根成为发布的库，应用下移为 sample，包名改为 craft-harness
 
-> 状态：Accepted；日期：2026-09-11；实现：2026-09-11。
+> 状态：Accepted；日期：2026-09-11；实现：2026-09-11。依赖安装决策由
+> [ADR-0016](./adr-0016-one-command-installation.md) 局部取代。
 
 ## 背景
 

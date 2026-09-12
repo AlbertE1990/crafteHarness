@@ -3,8 +3,8 @@ import { defineConfig } from 'tsup'
 /**
  * 库构建配置：只打包 src 下的 harness 源码，案例应用（sample/）不参与发布。
  *
- * `openai` 与 `zod` 声明为 peerDependency，因此必须保持 external——把供应商 SDK
- * 打进产物会让使用者同时存在两份副本，也会让 peer 版本约束失去意义。
+ * `openai` 与 `zod` 是随包安装的运行依赖，但仍保持 external，避免把第三方 SDK 与 Schema 实现复制进
+ * bundle。Node 会从 craft-harness 自己的依赖树解析它们。
  */
 export default defineConfig({
   entry: {

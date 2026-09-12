@@ -22,6 +22,7 @@ import Agent, {
   defineAgentConfig,
   defineTool,
   MemorySessionStore,
+  z,
 } from '../src'
 import * as publicApi from '../src'
 import {
@@ -67,6 +68,7 @@ describe('craft-harness public API', () => {
     expect(new Agent(config).stream).toBeTypeOf('function')
     expect('run' in new Agent(config)).toBe(false)
     expect(defineTool).toBeTypeOf('function')
+    expect(z.strictObject).toBeTypeOf('function')
     expect(DEFAULT_TOOL_APPROVAL_TIMEOUT_MS).toBeGreaterThan(0)
     expect('normalizeAgentToolDefinitions' in publicApi).toBe(false)
     expect('ToolApprovalManager' in publicApi).toBe(false)

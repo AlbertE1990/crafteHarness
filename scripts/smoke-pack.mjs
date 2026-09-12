@@ -5,10 +5,10 @@
  * 真实执行 `pnpm pack`，把 tarball 装进一个临时项目的 node_modules，再用 `import('craft-harness')`
  * 按**包名**导入——只有按包名导入才会真的走 package.json 的 exports 映射。
  *
- * 能抓到的问题：exports 映射写错或漏项、files 白名单漏掉产物、d.ts 未生成、peer 依赖被
+ * 能抓到的问题：exports 映射写错或漏项、files 白名单漏掉产物、d.ts 未生成、运行依赖被
  * 误打进 bundle、根入口意外泄漏内部实现。
  *
- * 为了不依赖网络，peer 依赖从本仓库的 node_modules 链接过去，而不是重新安装。
+ * 为了不依赖网络，运行依赖从本仓库的 node_modules 链接过去，而不是重新安装。
  */
 import { execFileSync, execSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -31,6 +31,7 @@ assert.equal(typeof runtime.Agent, 'function', '根入口缺少 Agent')
 assert.equal(typeof runtime.defineAgentConfig, 'function', '根入口缺少 defineAgentConfig')
 assert.equal(typeof runtime.MemorySessionStore, 'function', '根入口缺少 MemorySessionStore')
 assert.equal(typeof runtime.createWorkspaceTools, 'function', '根入口缺少 createWorkspaceTools')
+assert.equal(typeof runtime.z.strictObject, 'function', '根入口缺少 z')
 assert.equal(typeof adapters.DeepSeekAdapter, 'function', 'adapters 子入口缺少 DeepSeekAdapter')
 assert.equal(typeof adapters.OpenAICompatibleAdapter, 'function', 'adapters 子入口缺少 OpenAICompatibleAdapter')
 
@@ -48,7 +49,7 @@ console.log('probe ok')
  */
 const CONSUMER_SOURCE = `
 import type { AgentConfigInput, AgentRunResult } from ${JSON.stringify(packageName)}
-import Agent, { defineAgentConfig, MemorySessionStore } from ${JSON.stringify(packageName)}
+import Agent, { defineAgentConfig, defineTool, MemorySessionStore, z } from ${JSON.stringify(packageName)}
 import { DeepSeekAdapter } from ${JSON.stringify(`${packageName}/adapters`)}
 
 const adapter = new DeepSeekAdapter({ apiKey: 'test-key' })
@@ -58,6 +59,13 @@ const config: AgentConfigInput = {
 }
 
 const agent = new Agent(config)
+export const tool = defineTool({
+  name: 'echo',
+  description: 'echo',
+  inputSchema: z.strictObject({ text: z.string() }),
+  outputSchema: z.strictObject({ text: z.string() }),
+  execute: input => input,
+})
 export const run = (): Promise<AgentRunResult> =>
   agent.invoke({
     scopeId: 'smoke',
@@ -84,12 +92,12 @@ const CONSUMER_TSCONFIG = JSON.stringify({
   include: ['consumer.ts'],
 }, null, 2)
 
-/** 把 peer 依赖接入临时项目，避免冒烟测试需要联网。 */
-function linkPeerDependency(appDir, peer) {
-  const source = join(repoRoot, 'node_modules', peer)
+/** 把依赖接入临时项目，避免冒烟测试需要联网。 */
+function linkDependency(appDir, dependency) {
+  const source = join(repoRoot, 'node_modules', dependency)
   if (!existsSync(source))
-    throw new Error(`peer 依赖 ${peer} 未安装，无法进行冒烟测试`)
-  const destination = join(appDir, 'node_modules', peer)
+    throw new Error(`依赖 ${dependency} 未安装，无法进行冒烟测试`)
+  const destination = join(appDir, 'node_modules', dependency)
   mkdirSync(dirname(destination), { recursive: true })
   try {
     symlinkSync(source, destination, process.platform === 'win32' ? 'junction' : 'dir')
@@ -127,14 +135,20 @@ function main() {
         assertPublishableSpecifier(section, name, specifier)
       }
     }
+    for (const requiredDependency of ['openai', 'zod']) {
+      if (!packedManifest.dependencies?.[requiredDependency])
+        throw new Error(`发布清单缺少运行依赖 ${requiredDependency}`)
+      if (packedManifest.peerDependencies?.[requiredDependency])
+        throw new Error(`发布清单不能把 ${requiredDependency} 保留为 peer 依赖`)
+    }
 
     for (const peer of Object.keys(manifest.peerDependencies ?? {}))
-      linkPeerDependency(appDir, peer)
+      linkDependency(appDir, peer)
     // 冒烟测试离线手工展开 tarball，因此也要模拟包管理器安装普通依赖。
     for (const dependency of Object.keys(manifest.dependencies ?? {}))
-      linkPeerDependency(appDir, dependency)
+      linkDependency(appDir, dependency)
     if (manifest.dependencies?.['@vscode/ripgrep']) {
-      linkPeerDependency(
+      linkDependency(
         appDir,
         `@vscode/ripgrep-${process.platform}-${process.arch}`,
       )
@@ -149,8 +163,8 @@ function main() {
     // 类型解析：只有走 exports 的 types 条件，消费者才拿得到 d.ts。
     writeFileSync(join(appDir, 'consumer.ts'), CONSUMER_SOURCE, 'utf8')
     writeFileSync(join(appDir, 'tsconfig.json'), CONSUMER_TSCONFIG, 'utf8')
-    linkPeerDependency(appDir, 'typescript')
-    linkPeerDependency(appDir, '@types/node')
+    linkDependency(appDir, 'typescript')
+    linkDependency(appDir, '@types/node')
     execFileSync(
       process.execPath,
       [join(appDir, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit', '-p', 'tsconfig.json'],

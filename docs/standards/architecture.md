@@ -67,8 +67,8 @@ test/                           # 库测试
 ### 2.1 发布边界
 
 - 根目录的包清单、`tsup.config.ts` 和根 `tsconfig.json` 只服务 `src/**`；`dist/` 是唯一发布产物。
-- `zod` 是必需 peerDependency；`openai` 是可选 peerDependency，只有使用 `./adapters` 官方实现时才需要。
-  `@vscode/ripgrep` 是工作区搜索的运行期依赖。
+- `openai`、`zod` 与 `@vscode/ripgrep` 是运行期依赖，执行 `pnpm add craft-harness` 会一起安装；`z` 从根入口
+  导出供 `defineTool()` 使用。三者在构建时保持 external，由 Node 从包依赖树解析，不复制进 bundle。
 - `scripts/smoke-pack.mjs`（`pnpm smoke:pack`）用 `npm pack` 产出真实 tarball，装进临时项目后按包名导入，
   验证 `exports` 映射、`files` 白名单和 `.d.ts` 是否完整；案例应用走相对路径导入，测不到这一段，所以必须
   单独冒烟。

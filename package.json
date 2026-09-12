@@ -69,17 +69,10 @@
     "hooks:install": "simple-git-hooks",
     "up": "taze major -I"
   },
-  "peerDependencies": {
-    "openai": "^7.0.0",
-    "zod": "^4.0.0"
-  },
-  "peerDependenciesMeta": {
-    "openai": {
-      "optional": true
-    }
-  },
   "dependencies": {
-    "@vscode/ripgrep": "catalog:"
+    "@vscode/ripgrep": "catalog:",
+    "openai": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:dev",
@@ -98,7 +91,6 @@
     "jsdom": "catalog:build",
     "lint-staged": "catalog:dev",
     "markdown-it": "catalog:",
-    "openai": "catalog:",
     "pg": "catalog:",
     "simple-git-hooks": "catalog:dev",
     "taze": "catalog:dev",
@@ -113,8 +105,7 @@
     "vitest": "catalog:dev",
     "vue": "catalog:frontend",
     "vue-router": "catalog:frontend",
-    "vue-tsc": "catalog:dev",
-    "zod": "catalog:"
+    "vue-tsc": "catalog:dev"
   },
   "resolutions": {
     "unplugin": "catalog:build",

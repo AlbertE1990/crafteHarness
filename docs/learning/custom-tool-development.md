@@ -19,8 +19,7 @@
 下面的 `echo` 工具没有外部能力，适合验证完整接入链路：
 
 ```ts
-import { defineTool } from 'craft-harness'
-import { z } from 'zod'
+import { defineTool, z } from 'craft-harness'
 
 export const echoTool = defineTool({
   name: 'echo',

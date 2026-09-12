@@ -45,8 +45,8 @@ import {
   createAgentTool,
   defineTool,
   MemorySessionStore,
+  z,
 } from 'craft-harness'
-import { z } from 'zod'
 
 const weather = defineTool({
   name: 'weather',

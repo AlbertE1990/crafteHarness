@@ -109,7 +109,6 @@ export type {
   AgentTool,
   DefinedAgentLoopModelExecutionOptions,
 } from './core'
-
 export {
   deriveModelMessages,
   loadModelMessages,
@@ -176,3 +175,6 @@ export type {
 
 /** 可安全跨网络、日志和持久层传递的 JSON 类型。 */
 export type { JsonObject, JsonPrimitive, JsonSchema, JsonValue } from './types/json'
+
+/** 与 defineTool 配套的 Schema 入口，使用者无需单独安装或导入 Zod。 */
+export { z } from 'zod'

@@ -18,8 +18,7 @@ Guard 合并、审批、重试和结果归一化都由 craft-harness 内部完�
 ## 2. 定义工具
 
 ```ts
-import { defineTool, ToolError } from 'craft-harness'
-import { z } from 'zod'
+import { defineTool, ToolError, z } from 'craft-harness'
 
 export const getWeatherTool = defineTool({
   name: 'get_weather',

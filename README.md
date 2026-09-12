@@ -6,11 +6,11 @@
 与 HTTP、数据库和前端解耦：库本身不读环境变量、不依赖 Fastify/pg/Vue，也不替调用方决定密钥和模型名。
 
 ```bash
-pnpm add craft-harness openai zod
+pnpm add craft-harness
 ```
 
-`zod` 是必需 peer dependency，用于工具 Schema。`openai` 是可选 peer dependency：只有导入
-`craft-harness/adapters` 的官方 OpenAI Compatible 或 DeepSeek Adapter 时才需要安装。
+`openai` 与 `zod` 是随包安装的运行依赖。自定义工具可以直接从 `craft-harness` 导入 `z`，无需再安装或导入
+`zod`；只有应用要直接使用原始 OpenAI/Zod 包 API 时，才应把对应包声明为自己的直接依赖。
 
 ## 最短可用路径
 
