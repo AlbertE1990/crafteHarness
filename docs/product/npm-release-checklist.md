@@ -14,13 +14,54 @@
 
 ## 首次发布前人工完成
 
-1. 确认 npm 账号已启用双因素认证，并有权发布 `craft-harness`。当前 registry 查询结果为 404，说明尚无公开版本；
-   最终所有权仍以实际 `npm publish` 结果为准。
-2. 确认工作树只包含本次发布内容，创建版本提交和 Git tag（首版建议保持 `0.1.0`）。
-3. 执行 `pnpm release:check`，再执行 `pnpm publish`。不要改用 `npm publish`，也不要使用 `--force` 或跳过脚本。
-4. 发布后在空目录执行 `pnpm add craft-harness`，确认依赖树包含 `openai` 与 `zod`，并验证根入口的 `z`、
-   `defineTool` 和 `craft-harness/adapters`；再用 npm 重复一次安装验证。
-5. 推送版本提交与 tag，并记录该版本的变更摘要。
+1. 在 npmjs.com 注册并验证邮箱，启用 2FA；本机登录后确认账号：
+
+   ```bash
+   npm login
+   npm whoami
+   ```
+
+2. 确认包名尚未被占用，并检查当前 registry 确实是 npm 官方源：
+
+   ```bash
+   npm config get registry
+   npm view craft-harness
+   ```
+
+   registry 应为 `https://registry.npmjs.org/`。首次查询返回 404 表示包名尚无公开版本；若已经存在且不属于当前
+   账号，必须更换包名或改为自己账号下的 scoped 包，不能覆盖他人的包。
+
+3. 确认 `package.json` 中的版本、作者、许可证、仓库地址和 `files/exports` 正确，并确保工作树只包含准备发布的
+   内容。npm 上已经发布过的 `name + version` 不能再次使用，后续版本使用 `pnpm version patch|minor|major` 更新。
+
+4. 执行发布前检查，并预览最终 tarball 内容：
+
+   ```bash
+   pnpm release:check
+   pnpm pack --dry-run
+   ```
+
+5. 当前 `craft-harness` 是无 scope 公共包，`publishConfig.access` 已设为 `public`。首次发布执行：
+
+   ```bash
+   pnpm publish --access public
+   ```
+
+   `prepublishOnly` 会再次执行 `pnpm release:check`；启用 2FA 后按终端提示完成验证。不要使用 `--force`、
+   `--no-git-checks` 或跳过脚本来绕过失败。
+
+6. 发布后从 registry 和空项目验证：
+
+   ```bash
+   npm view craft-harness version dist-tags repository
+   pnpm view craft-harness version dist-tags repository
+   ```
+
+   再在仓库外的空目录执行 `pnpm add craft-harness`，确认依赖树包含 `openai` 与 `zod`，并验证根入口的 `z`、
+   `defineTool` 和 `craft-harness/adapters`。
+
+7. 推送版本提交与 tag，并记录该版本的变更摘要。首次手工发布跑通后，后续优先使用 GitHub Actions trusted
+   publishing，不保存长期 npm token。
 
 ## 后续增强
 
