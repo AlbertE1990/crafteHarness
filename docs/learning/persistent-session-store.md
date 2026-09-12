@@ -523,6 +523,7 @@ sample/database/migrations/001-create-session-log.sql
 sample/database/migrations/002-add-session-scope-and-name.sql
 sample/database/migrations/003-use-composite-session-identity.sql
 sample/src/server/database/postgres.ts
+sample/src/server/database/migrations.ts
 sample/src/server/database/migrate.ts
 sample/src/server/database/check.ts
 sample/src/server/stores/postgres-session-store.ts
@@ -530,7 +531,7 @@ sample/test/postgres-session-store.contract.ts
 ```
 
 先将 `sample/.env.example` 中的数据库配置复制到被 Git 忽略的 `sample/.env.local`，并填写本地真实密码。
-随后可以运行：
+首次启动 sample Server 会自动执行迁移；也可以在部署或调试时显式运行：
 
 ```bash
 pnpm db:migrate
@@ -539,7 +540,8 @@ pnpm db:test-store
 ```
 
 迁移器按文件名执行尚未记录的迁移，并写入 `craft_agent_schema_migrations`；连接检查只输出数据库名、PostgreSQL
-版本和表是否存在，不输出连接字符串或密码。
+版本和表是否存在，不输出连接字符串或密码。完整字段、索引、外键和迁移规则见
+[sample 数据库文档](../../sample/database/README.md)。
 契约命令会创建独立临时 schema，验证完成后自动删除，不会把测试 Session 写进开发目录。
 
 ### 13.1 当前实现的阅读顺序

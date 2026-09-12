@@ -1,13 +1,13 @@
 import type { ModelStreamChunk } from '../../src'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { readdir, readFile } from 'node:fs/promises'
 import process, { loadEnvFile } from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { Pool } from 'pg'
 import Agent, { SessionStoreError } from '../../src'
 import { ScriptedModelAdapter } from '../../test/support/scripted-model-adapter'
 import { assertSessionStoreContract } from '../../test/support/session-store-contract'
+import { runPostgresMigrations } from '../src/server/database/migrations'
 import {
   createPostgresPool,
   readPostgresRuntimeConfig,
@@ -28,7 +28,6 @@ async function main(): Promise<void> {
   const config = readPostgresRuntimeConfig()
   const administrationPool = createPostgresPool(config)
   const schema = `craft_agent_contract_${randomUUID().replaceAll('-', '')}`
-  const migrationsUrl = new URL('../database/migrations/', import.meta.url)
   let pool: Pool | undefined
 
   try {
@@ -41,11 +40,7 @@ async function main(): Promise<void> {
       options: `-c search_path=${schema},public`,
       ...(config.ssl ? { ssl: { rejectUnauthorized: true } } : {}),
     })
-    const filenames = (await readdir(migrationsUrl))
-      .filter(filename => /^\d+-[a-z0-9-]+\.sql$/i.test(filename))
-      .sort((left, right) => left.localeCompare(right))
-    for (const filename of filenames)
-      await pool.query(await readFile(new URL(filename, migrationsUrl), 'utf8'))
+    await runPostgresMigrations(pool)
     const store = new PostgresSessionStore(pool)
     const result = await assertSessionStoreContract(store, {
       sessionIdPrefix: 'postgres-contract',

@@ -21,7 +21,7 @@ HTTP 路由与展示字段也不属于 craft-harness 公共协议，不需要复
 | `sample/src/server/model-config.ts` | 校验并归一化 DeepSeek 部署配置（模型名、推理等级） |
 | `sample/src/server/agent-tools.ts`  | 定义并静态注册当前应用的第一方工具                 |
 | `sample/src/server/app.ts`          | Fastify 路由、SSE/JSON 传输、断开取消和展示投影    |
-| `sample/src/server/database/*`      | PostgreSQL Runtime 配置、迁移和连通性检查          |
+| `sample/src/server/database/*`      | PostgreSQL Runtime 配置、启动迁移和连通性检查      |
 | `sample/src/server/stores/*`        | 应用 Store；当前 Runtime 使用 PostgreSQL 实现      |
 
 库一侧（`src/`，案例通过相对路径导入）：
@@ -55,6 +55,9 @@ const app = createServerApp({ agent })
 - 环境变量只在 Runtime 启动边界读取，craft-harness 不读取 `process.env`。
 - 一个进程复用一个 Agent；当前 Server 显式注入 PostgreSQL Store，进程重启后由数据库恢复 Session。
 - 连接池由 Runtime 创建和关闭，不能进入 craft-harness Core，也不能由 Store 模块在 import 时隐式创建。
+- Server 在监听端口前调用 `runPostgresMigrations()`；空数据库自动建表，已有数据库只执行未登记的版本。多个实例
+  通过 PostgreSQL advisory lock 串行迁移。手动 `pnpm db:migrate` 复用同一函数，当前结构见
+  [sample 数据库文档](../../../sample/database/README.md)。
 - 时间和计算由 Agent 自动装载，不进入 Server 工具注册表。只有具备真实工作区的 Runtime 才设置
   `tools.workspaceRoot` 并启用文件、搜索和终端；该设置只适合 Agent 生命周期内根目录固定的部署，普通网页
   对话省略它。多工作区 Runtime 的数据、权限和运行时绑定见[规划中的 Workspace 阶段](../../product/plans/workspace-lifecycle.md)。

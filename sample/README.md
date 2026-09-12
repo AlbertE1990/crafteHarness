@@ -15,12 +15,15 @@
 # 1. 配置：复制后填写真实密钥
 cp .env.example .env.local
 
-# 2. 建表（需要本地 PostgreSQL）
-pnpm db:migrate        # 在仓库根执行
+# 2. 预先创建 PostgreSQL 数据库，并把连接串写入 .env.local
 
-# 3. 同时启动后端 :3000 与前端 :3333
+# 3. 同时启动后端 :3000 与前端 :3333（首次启动自动建表）
 pnpm dev               # 在仓库根执行
 ```
+
+Server 在监听端口前自动执行尚未应用的数据库迁移，因此新数据库不需要手工建表。部署流水线仍可使用
+`pnpm db:migrate` 提前迁移，`pnpm db:check` 只做连通性和表存在性检查。当前结构、权限要求和新增迁移规则见
+[数据库文档](./database/README.md)。
 
 `.env.local` **相对模块定位**（`sample/src/server/index.ts` 用 `import.meta.url` 解析），不依赖当前工作目录；
 文件不存在时会跳过加载并直接使用宿主环境变量，便于容器与 CI 注入。
@@ -120,7 +123,7 @@ sample/
 │   ├── pages/index.vue    聊天界面
 │   ├── composables/ styles/ App.vue main.ts
 ├── test/                  HTTP/SSE 协议、工具、聊天页面与 Store 契约测试
-├── database/migrations/   建表脚本
+├── database/              数据库结构说明与版本化迁移
 ├── vite.config.ts         Vite + vitest project 配置（root 指向 sample/）
 └── tsconfig.json          vue-tsc 使用；DOM 环境，可引用库源码
 ```

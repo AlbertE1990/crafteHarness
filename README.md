@@ -89,9 +89,10 @@ harness 组装成一个真实 Runtime。
 
 ```bash
 cp sample/.env.example sample/.env.local   # 填 DEEPSEEK_API_KEY 等
-pnpm db:migrate                            # 需要本地 PostgreSQL
-pnpm dev                                   # 后端 :3000 + 前端 :3333
+pnpm dev                                   # 需要已有 PostgreSQL 数据库；首次启动自动建表
 ```
+
+数据库结构和手动迁移方式见 [sample 数据库文档](./sample/database/README.md)。
 
 ## 开发
 

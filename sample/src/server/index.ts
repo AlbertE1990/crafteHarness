@@ -5,6 +5,7 @@ import Agent from '../../../src'
 import { DeepSeekAdapter } from '../../../src/adapters'
 import { serverToolGuard, serverTools } from './agent-tools'
 import { createServerApp } from './app'
+import { runPostgresMigrations } from './database/migrations'
 import {
   createPostgresPool,
   inspectPostgresConnection,
@@ -80,12 +81,22 @@ fastify.addHook('onClose', async () => {
   await databasePool.end()
 })
 
-/** 启动本地 HTTP 服务；启动失败会由运行时记录为未处理异常并终止进程。 */
+/** 启动本地 HTTP 服务；失败时由下方入口记录错误、关闭连接池并设置退出码。 */
 async function start(): Promise<void> {
+  const migration = await runPostgresMigrations(databasePool)
   const database = await inspectPostgresConnection(databasePool)
   if (!database.sessionsTableExists || !database.eventsTableExists)
-    throw new Error('PostgreSQL Session Log 表不存在，请先运行 pnpm db:migrate')
+    throw new Error('PostgreSQL 自动迁移后仍缺少 Session Log 表')
+  if (migration.appliedMigrations.length > 0) {
+    process.stdout.write(
+      `PostgreSQL 已应用迁移：${migration.appliedMigrations.join(', ')}\n`,
+    )
+  }
   await fastify.listen({ port: PORT, host: '127.0.0.1' })
 }
 
-void start()
+void start().catch(async (error: unknown) => {
+  console.error('sample Server 启动失败：', error)
+  await databasePool.end().catch(() => undefined)
+  process.exitCode = 1
+})
