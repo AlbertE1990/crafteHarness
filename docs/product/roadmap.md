@@ -37,7 +37,9 @@ flowchart LR
   P413 --> P414[阶段 4.14<br/>推理强度单轴化与配置外置<br/>已完成]
   P414 --> P415[阶段 4.15<br/>拆分为可发布 npm 包<br/>已完成]
   P415 --> P416[阶段 4.16<br/>工作区工具与案例契约<br/>已完成]
-  P416 --> P5[阶段 5<br/>轨迹持久化与查询<br/>下一阶段]
+  P416 --> P417[阶段 4.17<br/>模型选择与工具边界<br/>已完成]
+  P417 --> P418[阶段 4.18<br/>Workspace 生命周期<br/>下一阶段]
+  P418 --> P5[阶段 5<br/>轨迹持久化与查询]
   P5 --> P6[阶段 6<br/>异常诊断]
   P6 --> P7[阶段 7<br/>长期安全与扩展]
 ```
@@ -413,7 +415,23 @@ flowchart LR
 [ADR-0014](./decisions/adr-0014-explicit-adapter-and-model-selection.md)与
 [ADR-0015](./decisions/adr-0015-opt-in-workspace-tools.md)。
 
-## 26. 阶段 5：轨迹持久化与查询（下一阶段）
+## 26. 阶段 4.18：Workspace 生命周期与运行时绑定（下一阶段）
+
+目标是让同一个 Agent 安全服务有工作区和无工作区会话，并让工作区随 Session 绑定，而不是随 Agent 单例固定。
+
+计划范围：
+
+- 公共请求增加由可信 Runtime 组装的可选 Workspace Binding；不把工作区放入执行预算配置。
+- 未绑定工作区时不装载文件、搜索或终端工具，保持普通网页对话兼容。
+- Session 持久化可空 `workspaceId`，创建后禁止同一 Session 静默切换工作区。
+- 案例新增 Workspace 目录、权限关系和 Session 外键迁移；浏览器只提交 ID，Server 校验权限后解析绝对路径。
+- 每个 Run 独立构造工作区工具，验证并发会话之间不会共享目录或文件观察状态。
+- craft-harness 只定义绑定和一致性协议，不拥有应用 Workspace CRUD、数据库连接或用户权限模型。
+
+完整拆分、迁移顺序和验收项见
+[Workspace 生命周期与运行时绑定计划](./plans/workspace-lifecycle.md)。
+
+## 27. 阶段 5：轨迹持久化与查询
 
 计划范围：
 
@@ -423,7 +441,7 @@ flowchart LR
 - Runtime 将 Agent `onTrace` 接入轨迹存储和调试查询。
 - 保持前端展示数据不进入 craft-harness 核心协议。
 
-## 27. 阶段 6：异常诊断
+## 28. 阶段 6：异常诊断
 
 主链稳定后补充服务端诊断，不阻塞 ModelAdapter、Session 和 Loop 开发。
 
@@ -436,7 +454,7 @@ flowchart LR
 - Runtime 负责接入具体日志库、日志级别和输出位置。
 - 日志 Sink 故障不能改变 Agent 业务结果。
 
-## 28. 阶段 7：长期安全与扩展（最低优先级）
+## 29. 阶段 7：长期安全与扩展（最低优先级）
 
 只有项目需要加载不可信第三方工具时，才评估以下能力：
 

@@ -10,8 +10,13 @@ Agent 默认只装载不依赖工作区的 `get_current_time` 与 `calculator`�
 高级组合可使用 `createWorkspaceTools(options)`。
 
 `tools.workspaceRoot` 是文件路径与终端初始工作目录的边界。Agent 不用 `process.cwd()` 猜测工作区；普通网页
-对话省略该字段便不会获得文件和终端能力。需要工作区的 Server 应显式传稳定绝对目录。replace 模式不创建
+对话省略该字段便不会获得文件和终端能力。该配置在 Agent 的完整生命周期内保持不变，只适用于 CLI、仓库
+Agent 或固定根目录的单工作区服务，不适合把多个用户选择的工作区映射到同一个 Agent。replace 模式不创建
 内置工具，因此不接受 workspaceRoot。直接调用 `createWorkspaceTools()` 的高级入口仍默认使用当前工作目录。
+
+多工作区产品不能接受浏览器传入的绝对路径，也不能在全局 Agent 配置中切换目录。后续运行时工作区绑定按
+[Workspace 生命周期计划](../../product/plans/workspace-lifecycle.md)实施；在该阶段交付前，普通网页 Runtime
+必须保持不配置 `tools.workspaceRoot`。
 
 ## 文件与搜索
 

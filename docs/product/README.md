@@ -6,6 +6,7 @@
 ## 内容
 
 - [分阶段开发路线图](./roadmap.md)
+- [进行中的产品计划](./plans/README.md)
 - [架构决策记录](./decisions/README.md)
 - [阶段交付记录](./deliveries/README.md)
 - [npm 首次发布清单](./npm-release-checklist.md)

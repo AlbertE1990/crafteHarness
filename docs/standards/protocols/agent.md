@@ -12,7 +12,7 @@ AgentLoop 和标准应用事件，但不读取环境变量，也不依赖 HTTP �
 ## 2. 最小创建方式
 
 ```ts
-import Agent, { defineTool } from 'craft-harness'
+import Agent from 'craft-harness'
 import { DeepSeekAdapter } from 'craft-harness/adapters'
 
 const agent = new Agent({
@@ -23,17 +23,15 @@ const agent = new Agent({
     id: process.env.DEEPSEEK_MODEL!,
     reasoningEffort: 'high',
   },
-  tools: {
-    workspaceRoot: process.cwd(),
-    additional: [myTool],
-  },
   systemPrompt: '你是一个可靠的助手。',
 })
 ```
 
-未提供 `tools` 时，Agent 自动注册不依赖工作区的 `get_current_time` 和 `calculator`。只有显式配置
-`tools.workspaceRoot` 才加入 `read`、`write`、`edit`、`glob`、`grep` 和 `terminal`；边界见
-[内置工作区工具规范](./builtin-workspace-tools.md)。
+未提供 `tools` 时，Agent 自动注册不依赖工作区的 `get_current_time` 和 `calculator`。最小示例不应使用
+`process.cwd()` 猜测工作区。只有生命周期内工作目录固定的 CLI 或单工作区服务，才应显式配置
+`tools.workspaceRoot` 以加入 `read`、`write`、`edit`、`glob`、`grep` 和 `terminal`；边界见
+[内置工作区工具规范](./builtin-workspace-tools.md)。多工作区服务的运行时绑定仍在规划中，不能用浏览器提交的
+路径直接填充该配置。
 
 根字段 `adapter` 只承载供应商连接、鉴权与线协议；`model` 只承载一次 Run 可切换的模型选择：
 `{ id, reasoningEffort? }`。两者形状固定，不接受字符串判别器、全局注册表或“配置对象/Adapter 实例”的联合类型。

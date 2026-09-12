@@ -56,7 +56,8 @@ const app = createServerApp({ agent })
 - 一个进程复用一个 Agent；当前 Server 显式注入 PostgreSQL Store，进程重启后由数据库恢复 Session。
 - 连接池由 Runtime 创建和关闭，不能进入 craft-harness Core，也不能由 Store 模块在 import 时隐式创建。
 - 时间和计算由 Agent 自动装载，不进入 Server 工具注册表。只有具备真实工作区的 Runtime 才设置
-  `tools.workspaceRoot` 并启用文件、搜索和终端；普通网页对话省略它。
+  `tools.workspaceRoot` 并启用文件、搜索和终端；该设置只适合 Agent 生命周期内根目录固定的部署，普通网页
+  对话省略它。多工作区 Runtime 的数据、权限和运行时绑定见[规划中的 Workspace 阶段](../../product/plans/workspace-lifecycle.md)。
 - 应用工具使用 `defineTool()`，可直接组成普通只读数组并通过 `tools.additional` 追加；Agent 负责归一化。
 - Runtime 只实现 `tools.guard(request)` 的业务风险规则；pending 审批、超时和重复提交由 Agent 管理。
 - 当前风险规则只适用于代码仓库内受信第一方工具，不代表第三方插件安全边界。
@@ -132,7 +133,7 @@ fail-closed 为本次工具失败并交回 AgentLoop；需要审批卡片时必�
 `agent.getSession({ scopeId, sessionId })` 读取详情。标题在创建 Session 时写入标准 `sessionName`，`displayHistory` 只在详情路由中
 从通用 ModelMessage 投影，不写入 craft-harness Session 协议，也不维护第二份会话 ID Map。
 
-完整调试轨迹可立即通过 `onTrace` 观察；轨迹的持久化、脱敏和分页 HTTP 查询仍属于下一阶段。
+完整调试轨迹可立即通过 `onTrace` 观察；轨迹的持久化、脱敏和分页 HTTP 查询属于后续阶段。
 
 ## 6. 模型目录端点
 

@@ -39,6 +39,7 @@
 从[产品与项目记录](./product/README.md)开始：
 
 - [分阶段开发路线图](./product/roadmap.md)
+- [进行中的产品计划](./product/plans/README.md)
 - [架构决策记录](./product/decisions/README.md)
 - [阶段交付记录](./product/deliveries/README.md)
 
@@ -71,7 +72,7 @@
 - 公共配置不要求 ID 工厂，Agent 内部统一生成带语义前缀的 UUID。
 - Agent 内置一次性审批、超时、取消和重复提交控制。
 - 真实 DeepSeek 冒烟仍需在配置 API Key 后执行。
-- 官方案例的 Fastify Runtime 已迁移到 Agent 门面；持久化轨迹查询接口是下一阶段。
+- 官方案例的 Fastify Runtime 已迁移到 Agent 门面；Workspace 生命周期与运行时绑定是下一阶段。
 
 ## 权威顺序
 

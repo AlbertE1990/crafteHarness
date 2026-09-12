@@ -27,9 +27,6 @@ const agent = new Agent({
     reasoningEffort: 'high', // 'off' 关闭推理；省略则用供应商默认
   },
   systemPrompt: '你是一个可靠的助手。',
-  tools: {
-    workspaceRoot: process.cwd(),
-  },
 })
 
 const result = await agent.invoke({
@@ -54,7 +51,7 @@ for await (const event of agent.stream({ scopeId: 'tenant-42', input: '讲个笑
 | ------------------ | ----------------------------------------------------------------------------------------------- |
 | 确定性 Agent Loop  | 显式预算（模型步数、工具调用数、耗时、Token）、协作式取消、封闭停止原因，不把预算耗尽伪装成异常 |
 | 工具 harness       | `defineTool()` 用 Zod 声明输入输出与执行函数；参数级 Guard + Agent 级 Guard + 交互式审批        |
-| 工作区内置工具     | 配置 `workspaceRoot` 后提供文件读写、glob/grep 与一次性终端；高风险操作默认审批                 |
+| 工作区内置工具     | 固定工作区部署显式配置 `workspaceRoot` 后提供文件读写、glob/grep 与一次性终端；普通对话不启用   |
 | 追加式 Session Log | 事件只追加不覆盖，消息从固定快照推导；`SessionStore` 是可替换的持久化 Port（内置内存实现）      |
 | 供应商无关模型契约 | `ModelAdapter` 是 Core 唯一依赖；官方提供 OpenAI 兼容与 DeepSeek 两个差异层                     |
 | 标准应用事件       | `AgentOutputEvent` 可被 Runtime 直接输出，不需要为前端再裁剪一套协议                            |
