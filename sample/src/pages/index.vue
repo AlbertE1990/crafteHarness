@@ -141,8 +141,8 @@ const starterPrompts = [
   },
   {
     kind: 'weather',
-    title: '查询实时天气',
-    prompt: '查询当前天气，并告诉我体感温度、湿度和风力。',
+    title: '查询 7 天天气',
+    prompt: '查询未来 7 天天气，并告诉我每天的气温、降水概率和风力。',
   },
   {
     kind: 'write',

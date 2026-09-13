@@ -56,15 +56,21 @@ export const getUserLocationTool = defineTool({
   },
 })
 
-/** 查询指定城市或服务器近似所在地的当前天气。 */
+/** 查询指定城市或服务器近似所在地的当前天气及未来预报。 */
 export const getWeatherTool = defineTool({
   name: 'get_weather',
-  description: '查询当前天气。用户指定城市时传入 city；未指定时传 null，工具会在内部通过 IP 近似定位，无需先调用 get_user_location。',
+  description: '查询当前天气及未来 1 至 7 天预报。用户指定城市时传入 city；未指定时传 null。days 按用户要求填写，未指定时为 1。',
   inputSchema: z.strictObject({
     city: z.string()
       .min(1)
       .nullable()
       .describe('要查询的城市；用户未指定城市时传 null。'),
+    days: z.number()
+      .int()
+      .min(1)
+      .max(7)
+      .default(1)
+      .describe('要返回的预报天数，范围 1 至 7；用户未指定时为 1。'),
   }),
   outputSchema: z.strictObject({
     city: z.string(),
@@ -82,6 +88,23 @@ export const getWeatherTool = defineTool({
     wind_speed_kmh: z.number().finite(),
     wind_scale: z.number().finite(),
     observed_at: z.string(),
+    forecast_days: z.number().int().min(1).max(7),
+    forecast: z.array(z.strictObject({
+      date: z.string(),
+      weather: z.string(),
+      weather_code: z.number().finite(),
+      temperature_max_c: z.number().finite(),
+      temperature_min_c: z.number().finite(),
+      feels_like_max_c: z.number().finite(),
+      feels_like_min_c: z.number().finite(),
+      precipitation_probability_percent: z.number().finite(),
+      precipitation_mm: z.number().finite(),
+      wind_direction: z.string(),
+      wind_speed_max_kmh: z.number().finite(),
+      wind_scale: z.number().finite(),
+      sunrise: z.string(),
+      sunset: z.string(),
+    })).min(1).max(7),
   }),
   execution: {
     timeoutMs: 20_000,

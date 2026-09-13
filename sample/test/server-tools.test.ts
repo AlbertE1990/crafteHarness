@@ -25,6 +25,23 @@ function jsonResponse(body: unknown): Response {
   } as Response
 }
 
+function dailyForecast(days: number) {
+  return {
+    time: Array.from({ length: days }, (_, index) => `2026-09-${String(index + 6).padStart(2, '0')}`),
+    weather_code: Array.from({ length: days }, (_, index) => index === 0 ? 51 : 3),
+    temperature_2m_max: Array.from({ length: days }, (_, index) => 30 - index),
+    temperature_2m_min: Array.from({ length: days }, (_, index) => 22 - index),
+    apparent_temperature_max: Array.from({ length: days }, (_, index) => 33 - index),
+    apparent_temperature_min: Array.from({ length: days }, (_, index) => 24 - index),
+    precipitation_probability_max: Array.from({ length: days }, (_, index) => 60 - index * 5),
+    precipitation_sum: Array.from({ length: days }, (_, index) => 2.5 + index),
+    wind_speed_10m_max: Array.from({ length: days }, (_, index) => 12 + index),
+    wind_direction_10m_dominant: Array.from({ length: days }, (_, index) => index * 45),
+    sunrise: Array.from({ length: days }, (_, index) => `2026-09-${String(index + 6).padStart(2, '0')}T05:40`),
+    sunset: Array.from({ length: days }, (_, index) => `2026-09-${String(index + 6).padStart(2, '0')}T18:10`),
+  }
+}
+
 /** 通过服务端注册表调用工具，验证真实 Agent 使用的 CraftAgent 执行链。 */
 async function invokeServerTool(
   name: string,
@@ -119,7 +136,7 @@ describe('server tools through CraftAgent', () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain('https://ipwho.is/')
   })
 
-  it('geocodes a city and returns validated current weather', async () => {
+  it('geocodes a city and defaults to one day of validated weather', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({
         results: [{
@@ -142,6 +159,7 @@ describe('server tools through CraftAgent', () => {
           wind_speed_10m: 8.5,
           wind_direction_10m: 5,
         },
+        daily: dailyForecast(1),
       }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -156,10 +174,67 @@ describe('server tools through CraftAgent', () => {
         humidity_percent: 81,
         wind_direction: '北风',
         wind_scale: 2,
+        forecast_days: 1,
+        forecast: [{
+          date: '2026-09-06',
+          weather: '毛毛雨',
+          temperature_max_c: 30,
+          temperature_min_c: 22,
+          precipitation_probability_percent: 60,
+        }],
       },
     })
     expect(String(fetchMock.mock.calls[0][0])).toContain('geocoding-api.open-meteo.com')
     expect(String(fetchMock.mock.calls[1][0])).toContain('api.open-meteo.com')
+    expect(new URL(String(fetchMock.mock.calls[1][0])).searchParams.get('forecast_days')).toBe('1')
+  })
+
+  it('requests and returns the user-selected seven-day forecast', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        results: [{
+          name: '杭州',
+          admin1: '浙江',
+          country: '中国',
+          latitude: 30.29365,
+          longitude: 120.16142,
+          timezone: 'Asia/Shanghai',
+        }],
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        timezone: 'Asia/Shanghai',
+        current: {
+          time: '2026-09-06T20:30',
+          temperature_2m: 25,
+          apparent_temperature: 28.4,
+          relative_humidity_2m: 81,
+          weather_code: 51,
+          wind_speed_10m: 8.5,
+          wind_direction_10m: 5,
+        },
+        daily: dailyForecast(7),
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await invokeServerTool('get_weather', { city: '杭州', days: 7 })
+    const weatherUrl = new URL(String(fetchMock.mock.calls[1][0]))
+
+    expect(weatherUrl.searchParams.get('forecast_days')).toBe('7')
+    expect(weatherUrl.searchParams.get('daily')).toContain('temperature_2m_max')
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        forecast_days: 7,
+      },
+    })
+    if (!result.ok)
+      throw new Error('天气工具调用失败')
+    const { forecast } = result.value as { forecast: Array<{ date: string, weather: string }> }
+    expect(forecast).toHaveLength(7)
+    expect(forecast.slice(0, 2)).toMatchObject([
+      { date: '2026-09-06', weather: '毛毛雨' },
+      { date: '2026-09-07', weather: '阴' },
+    ])
   })
 
   it('rejects invalid model arguments before starting a tool attempt', async () => {
@@ -167,6 +242,20 @@ describe('server tools through CraftAgent', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const result = await invokeServerTool('get_weather', { city: 123 })
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'INVALID_TOOL_ARGUMENTS' },
+      attempts: 0,
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects forecast days outside the supported range', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await invokeServerTool('get_weather', { city: '杭州', days: 8 })
 
     expect(result).toMatchObject({
       ok: false,

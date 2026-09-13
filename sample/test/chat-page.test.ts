@@ -378,20 +378,20 @@ describe('chat page conversations', () => {
     await flushPromises()
 
     expect(wrapper.findAll('.starter-prompt')).toHaveLength(5)
-    expect(wrapper.text()).toContain('查询实时天气')
+    expect(wrapper.text()).toContain('查询 7 天天气')
     expect(wrapper.text()).toContain('测试资源写入')
     expect(wrapper.text()).toContain('读取演示资源')
     expect(wrapper.text()).toContain('计算与时间')
     expect(wrapper.text()).toContain('了解 Craft Harness')
 
     const weatherStarter = wrapper.findAll('.starter-prompt')
-      .find(button => button.text().includes('查询实时天气'))
+      .find(button => button.text().includes('查询 7 天天气'))
     expect(weatherStarter).toBeDefined()
     await weatherStarter!.trigger('click')
     await flushPromises()
 
     expect(chatRequestBody(fetchMock, 0).message).toBe(
-      '查询当前天气，并告诉我体感温度、湿度和风力。',
+      '查询未来 7 天天气，并告诉我每天的气温、降水概率和风力。',
     )
     const privateCalls = fetchMock.mock.calls.filter(([input]) => String(input) !== '/api/model')
     const scopeIds = privateCalls.map(([, init]) => new Headers(init?.headers).get('X-Craft-Scope-Id'))

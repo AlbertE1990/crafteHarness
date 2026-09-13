@@ -1,7 +1,7 @@
 {
   "name": "craft-harness",
   "type": "module",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "packageManager": "pnpm@10.30.3",
   "description": "A deterministic, provider-neutral agent harness for Node.js: agent loop, tool harness, append-only session log and model adapters.",
   "author": {

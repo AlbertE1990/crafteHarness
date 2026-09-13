@@ -57,6 +57,23 @@ interface WeatherLocation {
   timezone: string | null
 }
 
+interface WeatherForecastDay {
+  date: string
+  weather: string
+  weather_code: number
+  temperature_max_c: number
+  temperature_min_c: number
+  feels_like_max_c: number
+  feels_like_min_c: number
+  precipitation_probability_percent: number
+  precipitation_mm: number
+  wind_direction: string
+  wind_speed_max_kmh: number
+  wind_scale: number
+  sunrise: string
+  sunset: string
+}
+
 interface WeatherResult extends WeatherLocation {
   weather: string
   weather_code: number
@@ -67,6 +84,8 @@ interface WeatherResult extends WeatherLocation {
   wind_speed_kmh: number
   wind_scale: number
   observed_at: string
+  forecast_days: number
+  forecast: WeatherForecastDay[]
 }
 
 interface IpWhoIsResponse {
@@ -103,6 +122,20 @@ interface ForecastResponse {
     weather_code?: number
     wind_speed_10m?: number
     wind_direction_10m?: number
+  }
+  daily?: {
+    time?: unknown
+    weather_code?: unknown
+    temperature_2m_max?: unknown
+    temperature_2m_min?: unknown
+    apparent_temperature_max?: unknown
+    apparent_temperature_min?: unknown
+    precipitation_probability_max?: unknown
+    precipitation_sum?: unknown
+    wind_speed_10m_max?: unknown
+    wind_direction_10m_dominant?: unknown
+    sunrise?: unknown
+    sunset?: unknown
   }
   reason?: string
 }
@@ -159,6 +192,17 @@ function requireString(value: unknown, field: string): string {
 
 function requireNumber(value: unknown, field: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new ToolError({
+      code: 'UPSTREAM_INVALID_RESPONSE',
+      message: `外部服务缺少有效字段：${field}`,
+      retryable: true,
+    })
+  }
+  return value
+}
+
+function requireArray(value: unknown, field: string): unknown[] {
+  if (!Array.isArray(value)) {
     throw new ToolError({
       code: 'UPSTREAM_INVALID_RESPONSE',
       message: `外部服务缺少有效字段：${field}`,
@@ -610,9 +654,10 @@ function getWindScale(speedKmh: number): number {
   return scale === -1 ? 12 : scale
 }
 
-/** 查询给定坐标的当前天气模型数据。 */
+/** 查询给定坐标的当前天气和未来逐日天气模型数据。 */
 async function lookupWeather(
   location: WeatherLocation,
+  days: number,
   context: ServerToolContext,
 ): Promise<WeatherResult> {
   const url = new URL('https://api.open-meteo.com/v1/forecast')
@@ -622,8 +667,12 @@ async function lookupWeather(
     'current',
     'temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m',
   )
+  url.searchParams.set(
+    'daily',
+    'weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_probability_max,precipitation_sum,wind_speed_10m_max,wind_direction_10m_dominant,sunrise,sunset',
+  )
   url.searchParams.set('timezone', 'auto')
-  url.searchParams.set('forecast_days', '1')
+  url.searchParams.set('forecast_days', String(days))
 
   const response = await requestJson<ForecastResponse>(url, '天气服务', context.signal)
   const current = response.current
@@ -638,6 +687,50 @@ async function lookupWeather(
   const weatherCode = requireNumber(current.weather_code, 'current.weather_code')
   const windSpeed = requireNumber(current.wind_speed_10m, 'current.wind_speed_10m')
   const windDegrees = requireNumber(current.wind_direction_10m, 'current.wind_direction_10m')
+  const daily = response.daily
+  if (!daily) {
+    throw new ToolError({
+      code: 'WEATHER_DATA_UNAVAILABLE',
+      message: response.reason || '天气服务未返回逐日预报',
+      retryable: true,
+    })
+  }
+
+  const dailyFields = {
+    time: requireArray(daily.time, 'daily.time'),
+    weatherCode: requireArray(daily.weather_code, 'daily.weather_code'),
+    temperatureMax: requireArray(daily.temperature_2m_max, 'daily.temperature_2m_max'),
+    temperatureMin: requireArray(daily.temperature_2m_min, 'daily.temperature_2m_min'),
+    feelsLikeMax: requireArray(daily.apparent_temperature_max, 'daily.apparent_temperature_max'),
+    feelsLikeMin: requireArray(daily.apparent_temperature_min, 'daily.apparent_temperature_min'),
+    precipitationProbability: requireArray(daily.precipitation_probability_max, 'daily.precipitation_probability_max'),
+    precipitation: requireArray(daily.precipitation_sum, 'daily.precipitation_sum'),
+    windSpeed: requireArray(daily.wind_speed_10m_max, 'daily.wind_speed_10m_max'),
+    windDirection: requireArray(daily.wind_direction_10m_dominant, 'daily.wind_direction_10m_dominant'),
+    sunrise: requireArray(daily.sunrise, 'daily.sunrise'),
+    sunset: requireArray(daily.sunset, 'daily.sunset'),
+  }
+  const forecast = Array.from({ length: days }, (_, index): WeatherForecastDay => {
+    const dailyWeatherCode = requireNumber(dailyFields.weatherCode[index], `daily.weather_code[${index}]`)
+    const dailyWindSpeed = requireNumber(dailyFields.windSpeed[index], `daily.wind_speed_10m_max[${index}]`)
+    const dailyWindDegrees = requireNumber(dailyFields.windDirection[index], `daily.wind_direction_10m_dominant[${index}]`)
+    return {
+      date: requireString(dailyFields.time[index], `daily.time[${index}]`),
+      weather: getWeatherDescription(dailyWeatherCode),
+      weather_code: dailyWeatherCode,
+      temperature_max_c: requireNumber(dailyFields.temperatureMax[index], `daily.temperature_2m_max[${index}]`),
+      temperature_min_c: requireNumber(dailyFields.temperatureMin[index], `daily.temperature_2m_min[${index}]`),
+      feels_like_max_c: requireNumber(dailyFields.feelsLikeMax[index], `daily.apparent_temperature_max[${index}]`),
+      feels_like_min_c: requireNumber(dailyFields.feelsLikeMin[index], `daily.apparent_temperature_min[${index}]`),
+      precipitation_probability_percent: requireNumber(dailyFields.precipitationProbability[index], `daily.precipitation_probability_max[${index}]`),
+      precipitation_mm: requireNumber(dailyFields.precipitation[index], `daily.precipitation_sum[${index}]`),
+      wind_direction: getWindDirection(dailyWindDegrees),
+      wind_speed_max_kmh: dailyWindSpeed,
+      wind_scale: getWindScale(dailyWindSpeed),
+      sunrise: requireString(dailyFields.sunrise[index], `daily.sunrise[${index}]`),
+      sunset: requireString(dailyFields.sunset[index], `daily.sunset[${index}]`),
+    }
+  })
 
   return {
     ...location,
@@ -651,11 +744,13 @@ async function lookupWeather(
     wind_speed_kmh: windSpeed,
     wind_scale: getWindScale(windSpeed),
     observed_at: requireString(current.time, 'current.time'),
+    forecast_days: days,
+    forecast,
   }
 }
 
 /**
- * 查询当前天气。city 为空时在工具内部完成 IP 定位，避免模型固定调用两个工具。
+ * 查询当前天气和未来 1 至 7 天预报。city 为空时在工具内部完成 IP 定位，避免模型固定调用两个工具。
  */
 export async function getWeather(
   args: unknown = {},
@@ -665,6 +760,9 @@ export async function getWeather(
   const rawCity = input.city
   if (rawCity !== undefined && rawCity !== null && typeof rawCity !== 'string')
     throw new TypeError('city 必须是字符串或 null')
+  const days = input.days === undefined ? 1 : input.days
+  if (typeof days !== 'number' || !Number.isInteger(days) || days < 1 || days > 7)
+    throw new TypeError('days 必须是 1 至 7 的整数')
 
   const city = typeof rawCity === 'string' ? rawCity.trim() : ''
   const location = city
@@ -678,5 +776,5 @@ export async function getWeather(
     longitude: location.longitude,
     timezone: location.timezone,
   }
-  return await lookupWeather(weatherLocation, context)
+  return await lookupWeather(weatherLocation, days, context)
 }
