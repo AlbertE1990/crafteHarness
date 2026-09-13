@@ -1,14 +1,16 @@
-import type { FastifyInstance, FastifyReply, FastifyServerOptions } from 'fastify'
-import type { ServerResponse } from 'node:http'
 import type {
   Agent,
   AgentOutputEvent,
   AgentRunResult,
   AgentSessionDetail,
   AgentSessionMessage,
+  JsonObject,
   ModelMessage,
   SessionSummary,
-} from '../../../src'
+} from 'craft-harness'
+import type { FastifyInstance, FastifyReply, FastifyServerOptions } from 'fastify'
+import type { ServerResponse } from 'node:http'
+import type { TrajectoryStore } from './trajectory-store'
 import Fastify from 'fastify'
 import { z } from 'zod'
 
@@ -59,6 +61,14 @@ const chatBodySchema = z.strictObject({
   model: z.string().min(1).regex(/\S/).optional(),
 })
 
+const trajectoryQuerySchema = z.strictObject({
+  beforeSequence: z.string().regex(/^\d+$/).optional(),
+  limit: z.string().regex(/^\d+$/).optional(),
+})
+
+const DEFAULT_TRAJECTORY_PAGE_SIZE = 240
+const MAX_TRAJECTORY_PAGE_SIZE = 500
+
 /** 前端会话列表需要的展示消息；工具和系统消息不会进入该投影。 */
 export interface DisplayMessage {
   readonly role: 'user' | 'assistant'
@@ -77,6 +87,17 @@ export interface ConversationSummary {
 export interface ConversationDetail extends ConversationSummary {
   readonly history: readonly ModelMessage[]
   readonly displayHistory: readonly DisplayMessage[]
+}
+
+interface TrajectoryToolDefinition extends JsonObject {
+  readonly name: string
+  readonly description: string
+  readonly inputSchema: JsonObject
+}
+
+interface TrajectoryBootstrap extends JsonObject {
+  readonly systemPrompt: string
+  readonly tools: Readonly<Record<string, TrajectoryToolDefinition>>
 }
 
 /** Server 自身在 Agent 外部失败时使用的传输错误，不伪装成 AgentOutputEvent。 */
@@ -149,6 +170,8 @@ export interface CreateServerAppOptions {
   readonly model: ServerModelInfo
   /** 未注入时，重命名与删除接口返回 501，而不是静默无效。 */
   readonly conversations?: ConversationCatalogMutations
+  /** Sample Runtime 的旁路轨迹存储；省略时轨迹查询明确返回 501。 */
+  readonly trajectory?: TrajectoryStore
   /** 仅供旧客户端迁移或测试使用；生产部署省略时会拒绝缺少 scope 请求头的私有接口。 */
   readonly fallbackScopeId?: string
   readonly logger?: FastifyServerOptions['logger']
@@ -228,6 +251,83 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
       return
     const page = await options.agent.listSessions({ scopeId })
     return { data: page.sessions.map(createConversationSummary) }
+  })
+
+  fastify.get<{
+    Params: { sessionId: string }
+    Querystring: z.output<typeof trajectoryQuerySchema>
+  }>('/api/conversation/:sessionId/trajectory', {
+    schema: {
+      querystring: toFastifySchema(trajectoryQuerySchema, 'input'),
+    },
+  }, async (request, reply) => {
+    const scopeId = readScopeId(request.headers[SCOPE_ID_HEADER], reply, options.fallbackScopeId)
+    if (!scopeId)
+      return
+    if (!options.trajectory) {
+      reply.code(501)
+      return {
+        error: 'TRAJECTORY_STORE_UNAVAILABLE',
+        message: '当前 Runtime 未配置轨迹存储',
+      }
+    }
+
+    const session = await options.agent.getSession({
+      scopeId,
+      sessionId: request.params.sessionId,
+      pageSize: 1,
+    })
+    if (!session) {
+      reply.code(404)
+      return {
+        error: 'SESSION_NOT_FOUND',
+        message: `会话 ${request.params.sessionId} 不存在`,
+      }
+    }
+
+    const requestedLimit = request.query.limit === undefined
+      ? DEFAULT_TRAJECTORY_PAGE_SIZE
+      : Number.parseInt(request.query.limit, 10)
+    if (!Number.isSafeInteger(requestedLimit)
+      || requestedLimit <= 0
+      || requestedLimit > MAX_TRAJECTORY_PAGE_SIZE) {
+      reply.code(400)
+      return {
+        error: 'INVALID_TRAJECTORY_LIMIT',
+        message: `limit 必须是 1 至 ${MAX_TRAJECTORY_PAGE_SIZE} 的整数`,
+      }
+    }
+    const limit = requestedLimit
+    const beforeSequence = request.query.beforeSequence === undefined
+      ? undefined
+      : Number.parseInt(request.query.beforeSequence, 10)
+    if (beforeSequence !== undefined
+      && (!Number.isSafeInteger(beforeSequence) || beforeSequence <= 0)) {
+      reply.code(400)
+      return {
+        error: 'INVALID_TRAJECTORY_CURSOR',
+        message: 'beforeSequence 必须是正整数',
+      }
+    }
+
+    const page = await options.trajectory.read({
+      scopeId,
+      sessionId: request.params.sessionId,
+      limit,
+      ...(beforeSequence === undefined ? {} : { beforeSequence }),
+    })
+    const bootstrap = readTrajectoryBootstrap(session.metadata)
+      ?? createTrajectoryBootstrap(options.agent)
+    return {
+      data: {
+        sessionId: request.params.sessionId,
+        ...page,
+        systemPrompt: bootstrap.systemPrompt,
+        tools: bootstrap.tools,
+        userInputs: createTrajectoryUserInputs(session.messages),
+        sessionMessages: createTrajectorySessionMessages(session.messages),
+      },
+    }
   })
 
   fastify.get<{
@@ -360,6 +460,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
         ? {
             sessionMetadata: {
               source: 'server-runtime',
+              trajectory: createTrajectoryBootstrap(options.agent),
             },
             sessionName: createConversationTitle(request.body.message),
           }
@@ -380,6 +481,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
       // 普通 JSON 请求没有实时事件通道，因此不会注册交互式工具审批观察器。
       // ToolGuard 的 ask 会得到 unavailable 并作为工具失败交回 AgentLoop，而不会永久等待。
       const result = await options.agent.invoke(agentRequest, abortController.signal)
+      await options.trajectory?.bindSession(scopeId, result.sessionId)
       const response: ServerChatJsonResponse = { data: result }
       return response
     }
@@ -396,6 +498,8 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     const runApprovalIds = new Set<string>()
     try {
       for await (const event of options.agent.stream(agentRequest, abortController.signal)) {
+        if (event.type === 'session.started')
+          await options.trajectory?.bindSession(scopeId, event.sessionId)
         if (event.type === 'tool.approval.requested') {
           approvalScopes.set(event.approvalId, scopeId)
           runApprovalIds.add(event.approvalId)
@@ -485,6 +589,82 @@ function createConversationDetail(session: AgentSessionDetail): ConversationDeta
     history,
     displayHistory: createDisplayHistory(session.messages),
   })
+}
+
+/** 新会话保存启动时的提示词与工具定义，历史轨迹不受后续 Runtime 配置变化影响。 */
+function createTrajectoryBootstrap(agent: Agent): TrajectoryBootstrap {
+  const tools = Object.fromEntries(agent.config.tools.registered.map((tool) => {
+    const model: TrajectoryToolDefinition = {
+      name: tool.model.name,
+      description: tool.model.description,
+      inputSchema: tool.model.inputSchema as JsonObject,
+    }
+    return [tool.name, model]
+  }))
+  return {
+    systemPrompt: agent.config.systemPrompt ?? '',
+    tools,
+  }
+}
+
+/** 旧会话没有启动快照时返回 undefined，由接口回退到当前 Agent 配置。 */
+function readTrajectoryBootstrap(metadata?: JsonObject): TrajectoryBootstrap | undefined {
+  const value = metadata?.trajectory
+  if (!isRecord(value)
+    || typeof value.systemPrompt !== 'string'
+    || !isRecord(value.tools)) {
+    return undefined
+  }
+
+  const tools: Record<string, TrajectoryToolDefinition> = {}
+  for (const [name, candidate] of Object.entries(value.tools)) {
+    if (!isRecord(candidate)
+      || typeof candidate.name !== 'string'
+      || typeof candidate.description !== 'string'
+      || !isRecord(candidate.inputSchema)) {
+      return undefined
+    }
+    tools[name] = {
+      name: candidate.name,
+      description: candidate.description,
+      inputSchema: candidate.inputSchema as JsonObject,
+    }
+  }
+  return { systemPrompt: value.systemPrompt, tools }
+}
+
+/** 用户输入已经存在 Session Log 中；轨迹接口只投影，不再重复持久化。 */
+function createTrajectoryUserInputs(history: readonly AgentSessionMessage[]) {
+  return history.flatMap(item => item.message.role === 'user'
+    ? [{
+        eventId: item.eventId,
+        sequence: item.sequence,
+        timestamp: item.timestamp,
+        ...(item.runId ? { runId: item.runId } : {}),
+        ...(item.turnId ? { turnId: item.turnId } : {}),
+        content: item.message.content,
+      }]
+    : [])
+}
+
+/** 模型的逐步输出以 Session Log 为准，避免流式运行缺少 model.completed 时丢失 LLM 节点。 */
+function createTrajectorySessionMessages(history: readonly AgentSessionMessage[]) {
+  return history.flatMap(item => (
+    item.message.role === 'user' || item.message.role === 'assistant'
+      ? [{
+          eventId: item.eventId,
+          sequence: item.sequence,
+          timestamp: item.timestamp,
+          ...(item.runId ? { runId: item.runId } : {}),
+          ...(item.turnId ? { turnId: item.turnId } : {}),
+          message: item.message,
+        }]
+      : []
+  ))
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /** 从第一条用户输入生成稳定短标题，不额外调用模型。 */

@@ -26,10 +26,10 @@ Fastify / CLI / Worker
 `dist`），官方案例应用整体位于 `sample/`。两者是“库”和“库的使用者”的关系，不是同一个发布单元。
 
 ```text
-package.json                    # 发布清单：name=craft-harness、exports、files、peerDependencies
+package.json                    # 发布清单：name=craft-harness、exports、files 与库依赖
 tsup.config.ts                  # 库构建：src/index.ts 与 src/adapters/index.ts -> dist/
 tsconfig.json                   # 只覆盖 src/**（node only，无 DOM）
-vitest.config.ts                # harness（node）与 sample（jsdom）两个 vitest project
+vitest.config.ts                # 只运行 harness 的 Node 测试
 
 src/                            # 库源码：发布出去的全部内容
   index.ts                      # 默认导出 Agent，并重导出公共协议
@@ -53,10 +53,11 @@ src/                            # 库源码：发布出去的全部内容
   types/                        # JSON 基础类型
 
 sample/                         # 官方案例应用：库的使用者，不参与发布
+  package.json                  # 独立私有 workspace 包；维护案例依赖和脚本
   src/server/                   # Fastify Runtime：环境变量、Agent 组装、SSE 与展示投影
   src/pages/index.vue           # 前端页面
   database/migrations/          # PostgreSQL Session Log 迁移
-  vite.config.ts                # 案例的 Vite 配置，同时作为 vitest 的 sample project
+  vite.config.ts                # 案例的 Vite 与 vitest 配置
   test/                         # 案例测试：Runtime、工具、页面与 PostgreSQL 契约
 
 test/                           # 库测试
@@ -70,14 +71,14 @@ test/                           # 库测试
 - `openai`、`zod` 与 `@vscode/ripgrep` 是运行期依赖，执行 `pnpm add craft-harness` 会一起安装；`z` 从根入口
   导出供 `defineTool()` 使用。三者在构建时保持 external，由 Node 从包依赖树解析，不复制进 bundle。
 - `scripts/smoke-pack.mjs`（`pnpm smoke:pack`）用 `npm pack` 产出真实 tarball，装进临时项目后按包名导入，
-  验证 `exports` 映射、`files` 白名单和 `.d.ts` 是否完整；案例应用走相对路径导入，测不到这一段，所以必须
-  单独冒烟。
+  验证 `exports` 映射、`files` 白名单和 `.d.ts` 是否完整。
 
 ### 2.2 案例应用不是库的一部分
 
-`sample/` 通过相对路径导入库源码（`sample/src/**` 下写作 `../../../src`），因此它是普通使用者，只是恰好与库
-同仓库。HTTP 路由、SSE 传输、环境变量、数据库连接池、Vue 页面和展示投影都只存在于 `sample/`，不进入库的
-公共协议，也不随 npm 包分发。
+`sample/` 是独立的私有 pnpm workspace 包，通过 `workspace:*` 依赖 `craft-harness`，并从
+`craft-harness` 或 `craft-harness/adapters` 公共入口导入。案例脚本在运行前构建库，因此日常开发也会验证
+`exports` 与声明文件边界。HTTP 路由、SSE 传输、环境变量、数据库连接池、Vue 页面和展示投影都只存在于
+`sample/`，不进入库的公共协议，也不随 npm 包分发。
 
 ### 2.3 “库不得反向依赖 sample”是硬边界
 

@@ -6,7 +6,8 @@ trustPolicy: no-downgrade
 # are still protected.
 trustPolicyIgnoreAfter: 525600
 
-packages: []
+packages:
+  - sample
 catalog:
   '@types/pg': ^8.23.1
   '@vscode/ripgrep': ^1.18.0
@@ -24,7 +25,6 @@ catalogs:
     jsdom: ^28.1.0
     tsup: ^8.5.0
     unocss: ^66.6.2
-    unplugin: ^3.0.0
     unplugin-auto-import: ^21.0.0
     unplugin-vue-components: ^31.0.0
     unplugin-vue-macros: ^2.14.5

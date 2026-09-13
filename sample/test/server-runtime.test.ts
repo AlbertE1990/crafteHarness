@@ -3,10 +3,11 @@
 import type {
   ModelCompletion,
   ModelStreamChunk,
-} from '../../src'
+} from 'craft-harness'
 import type { ServerModelInfo, ServerStreamEvent } from '../src/server/app'
+import type { TrajectoryStore } from '../src/server/trajectory-store'
+import Agent, { MemorySessionStore } from 'craft-harness'
 import { describe, expect, it } from 'vitest'
-import Agent, { MemorySessionStore } from '../../src'
 import { ScriptedModelAdapter } from '../../test/support/scripted-model-adapter'
 import {
   manageRuntimeResourceTool,
@@ -286,6 +287,157 @@ describe('server runtime HTTP boundary', () => {
     }
   })
 
+  it('serves scoped paginated trajectory events and the active tool schemas', async () => {
+    const sessionStore = new MemorySessionStore({
+      now: () => new Date('2026-09-13T04:00:00.000Z'),
+    })
+    await sessionStore.append({
+      scopeId: 'default',
+      sessionId: 'session-trace',
+      expectedVersion: 0,
+      events: [
+        {
+          type: 'session.created',
+          sessionName: '轨迹会话',
+          metadata: {
+            trajectory: {
+              systemPrompt: '创建会话时的系统提示词',
+              tools: {
+                archived_lookup: {
+                  name: 'archived_lookup',
+                  description: '创建会话时可用的工具',
+                  inputSchema: { type: 'object' },
+                },
+              },
+            },
+          },
+        },
+        {
+          type: 'message.appended',
+          runId: 'run-trace',
+          turnId: 'turn-trace',
+          message: { role: 'user', content: '读取轨迹数据' },
+        },
+        {
+          type: 'message.appended',
+          runId: 'run-trace',
+          turnId: 'turn-trace',
+          message: {
+            role: 'assistant',
+            content: null,
+            reasoning_content: '需要调用查询工具',
+            tool_calls: [{
+              id: 'call-trace',
+              type: 'function',
+              function: { name: 'archived_lookup', arguments: '{"query":"轨迹"}' },
+            }],
+          },
+        },
+        {
+          type: 'message.appended',
+          runId: 'run-trace',
+          turnId: 'turn-trace',
+          message: { role: 'tool', tool_call_id: 'call-trace', content: '已找到' },
+        },
+        {
+          type: 'message.appended',
+          runId: 'run-trace',
+          turnId: 'turn-trace',
+          message: { role: 'assistant', content: '查询完成' },
+        },
+      ],
+    })
+    const reads: Parameters<TrajectoryStore['read']>[0][] = []
+    const trajectory: TrajectoryStore = {
+      record: async () => undefined,
+      bindSession: async () => undefined,
+      read: async (request) => {
+        reads.push(request)
+        return {
+          events: [{
+            sequence: 9,
+            event: {
+              type: 'agent.turn.started',
+              runId: 'run-trace',
+              turnId: 'turn-trace',
+              sessionId: request.sessionId,
+              timestamp: '2026-09-13T04:00:00.000Z',
+            },
+          }],
+          hasEarlier: true,
+          nextBeforeSequence: 9,
+        }
+      },
+    }
+    const agent = new Agent({
+      adapter: new ScriptedModelAdapter({ script: [] }),
+      model: { id: 'scripted-model' },
+      sessionStore,
+    })
+    const app = createServerApp({ agent, model: MODEL_INFO, trajectory, logger: false })
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/conversation/session-trace/trajectory?beforeSequence=20&limit=12',
+      })
+      const invalid = await app.inject({
+        method: 'GET',
+        url: '/api/conversation/session-trace/trajectory?limit=0',
+      })
+      const missing = await app.inject({
+        method: 'GET',
+        url: '/api/conversation/session-missing/trajectory',
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(reads).toEqual([{
+        scopeId: 'default',
+        sessionId: 'session-trace',
+        beforeSequence: 20,
+        limit: 12,
+      }])
+      expect(response.json()).toMatchObject({
+        data: {
+          sessionId: 'session-trace',
+          hasEarlier: true,
+          nextBeforeSequence: 9,
+          events: [{ sequence: 9, event: { type: 'agent.turn.started' } }],
+          systemPrompt: '创建会话时的系统提示词',
+          tools: {
+            archived_lookup: {
+              name: 'archived_lookup',
+              inputSchema: { type: 'object' },
+            },
+          },
+          userInputs: [{
+            runId: 'run-trace',
+            turnId: 'turn-trace',
+            content: '读取轨迹数据',
+          }],
+          sessionMessages: [
+            { message: { role: 'user', content: '读取轨迹数据' } },
+            {
+              message: {
+                role: 'assistant',
+                reasoning_content: '需要调用查询工具',
+                tool_calls: [{ id: 'call-trace' }],
+              },
+            },
+            { message: { role: 'assistant', content: '查询完成' } },
+          ],
+        },
+      })
+      expect(invalid.statusCode).toBe(400)
+      expect(invalid.json().error).toBe('INVALID_TRAJECTORY_LIMIT')
+      expect(missing.statusCode).toBe(404)
+      expect(missing.json().error).toBe('SESSION_NOT_FOUND')
+    }
+    finally {
+      await app.close()
+    }
+  })
+
   it('isolates conversation history by the browser scope header', async () => {
     const adapter = new ScriptedModelAdapter({
       script: [
@@ -297,6 +449,7 @@ describe('server runtime HTTP boundary', () => {
     const agent = new Agent({
       adapter,
       model: { id: 'scripted-model' },
+      systemPrompt: '创建会话时的提示词',
       sessionStore: store,
     })
     const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
@@ -320,6 +473,16 @@ describe('server runtime HTTP boundary', () => {
       expect(second.statusCode).toBe(200)
 
       const firstSessionId = first.json().data.sessionId as string
+      const firstSession = await agent.getSession({ scopeId: scopeA, sessionId: firstSessionId })
+      expect(firstSession?.metadata).toMatchObject({
+        source: 'server-runtime',
+        trajectory: {
+          systemPrompt: '创建会话时的提示词',
+          tools: {
+            calculator: { name: 'calculator' },
+          },
+        },
+      })
       const listA = await app.inject({
         method: 'GET',
         url: '/api/conversation/list',

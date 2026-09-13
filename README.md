@@ -4,6 +4,7 @@
 
 Craft Harness 将模型调用、工具执行、权限审批、预算控制、取消和会话记录组合成一个可嵌入的运行内核。
 它不提供 HTTP Server 或 UI，你可以把它接入 Fastify、Express、Worker、CLI 或已有后端。
+现有后端可以把登录用户或租户 ID 映射为 `scopeId`，并将角色、权限等可信鉴权结果作为运行上下文传给工具。
 
 > OpenAI SDK 负责与模型服务通信；Craft Harness 负责模型返回工具调用之后的完整执行过程。
 
@@ -133,6 +134,67 @@ for await (const event of agent.stream({
 
 事件中还包括 `session.started`、工具审批请求、审批结果和策略拒绝。
 
+## 集成 Node.js 后端与用户鉴权
+
+Craft Harness 可以嵌入现有 Fastify、Express、NestJS 或其他 Node.js 服务。推荐由后端先使用 JWT、Session、
+OAuth 等机制完成认证，再把认证结果交给 Agent：
+
+```ts
+import Agent from 'craft-harness'
+import { DeepSeekAdapter } from 'craft-harness/adapters'
+
+interface AuthenticatedUser {
+  id: string
+  tenantId: string
+  permissions: readonly string[]
+}
+
+interface AgentContext {
+  userId: string
+  tenantId: string
+  permissions: readonly string[]
+}
+
+const agent = new Agent<AgentContext>({
+  adapter: new DeepSeekAdapter({
+    apiKey: process.env.DEEPSEEK_API_KEY!,
+  }),
+  model: { id: process.env.DEEPSEEK_MODEL! },
+})
+
+export async function runAuthenticatedChat(
+  user: AuthenticatedUser,
+  body: { message: string, sessionId?: string },
+) {
+  return await agent.invoke({
+    // 只能使用认证中间件确认过的身份，不能信任浏览器自行提交的 userId。
+    scopeId: `tenant:${user.tenantId}:user:${user.id}`,
+    ...(body.sessionId ? { sessionId: body.sessionId } : {}),
+    input: body.message,
+    context: {
+      userId: user.id,
+      tenantId: user.tenantId,
+      permissions: user.permissions,
+    },
+  })
+}
+```
+
+接入时各字段的职责如下：
+
+| 后端已有信息           | Craft Harness 接入方式                                           |
+| ---------------------- | ---------------------------------------------------------------- |
+| 登录用户 ID            | 作为 `scopeId`，隔离该用户的会话、历史和资源                     |
+| 租户 ID + 用户 ID      | 组合成稳定 `scopeId`，实现多租户隔离                             |
+| 角色、权限、套餐或组织 | 放入请求级 `context`，供 Guard 和工具执行函数判断                |
+| 已有会话 ID            | 作为 `sessionId` 继续对话；Store 使用 `scopeId + sessionId` 查询 |
+| HTTP 断开信号          | 转换为 `AbortSignal`，同时取消模型调用、工具执行和审批等待       |
+| SSE 或 WebSocket       | 将 `agent.stream()` 的 `AgentOutputEvent` 转发给客户端           |
+
+工具 Guard 可以读取 `context`，在执行前检查权限并返回 `allow`、`deny` 或 `ask`。`context` 不会发送给模型，
+也不会写入 Session Log。Craft Harness 负责消费可信身份和执行授权策略，但不负责签发 Token、校验密码或实现
+登录接口；这些仍由 Node.js 后端的认证层负责。
+
 ## 开发并注册一个工具
 
 工具使用同一份 Zod Schema 完成 TypeScript 推导、模型参数描述和运行时校验：
@@ -199,6 +261,8 @@ const result = await agent.invoke({
 | 默认工具      | 当前时间与计算器                                               |
 | 工作区工具    | 显式配置 `workspaceRoot` 后启用文件、搜索和一次性终端工具      |
 | 取消          | 模型流、工具执行、重试等待和审批共享取消信号                   |
+| Node 后端集成 | 可嵌入 Fastify、Express、NestJS、Worker 或已有服务             |
+| 用户权限接入  | 使用 `scopeId` 隔离数据，使用请求级 `context` 承载可信权限     |
 
 ### 会话与多租户
 
@@ -274,7 +338,7 @@ Craft Harness 刻意保持为可嵌入的 Node.js 库，因此：
 ```bash
 cp sample/.env.example sample/.env.local
 pnpm install
-pnpm dev
+pnpm --dir sample dev
 ```
 
 案例需要 PostgreSQL，首次启动会自动执行尚未应用的数据库迁移。完整配置见
@@ -305,6 +369,8 @@ pnpm dev
 
 ## 本仓库开发
 
+根目录命令只检查和构建 `craft-harness` 包：
+
 ```bash
 pnpm install
 pnpm test
@@ -314,8 +380,17 @@ pnpm build
 pnpm smoke:pack
 ```
 
-发布前使用 `pnpm release:check` 运行完整检查。`sample/` 通过相对路径引用源码，因此只有
-`pnpm smoke:pack` 会从真实 tarball 验证 `exports`、发布文件白名单和类型声明。
+`sample/` 是独立的私有 workspace 包，自行维护依赖和开发命令：
+
+```bash
+pnpm --dir sample test
+pnpm --dir sample typecheck
+pnpm --dir sample lint
+pnpm --dir sample build
+```
+
+发布前使用 `pnpm release:check` 运行库的完整检查。案例通过 `workspace:*` 依赖公开的 `craft-harness`
+包；案例脚本会先构建库。`pnpm smoke:pack` 则从真实 tarball 验证 `exports`、发布文件白名单和类型声明。
 
 ## License
 

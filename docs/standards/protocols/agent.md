@@ -309,4 +309,5 @@ Agent 实例只在当前进程中保存 pending 审批。`invoke()` 没有交互
 不能通过根入口反向导入。
 
 Fastify、SSE、环境变量、数据库连接和前端展示投影只能存在于 Runtime。本仓库的参考 Runtime 是官方案例
-`sample/src/server`；它通过相对路径导入 `src/`，方向只能是案例依赖库，库不得反向依赖案例。
+`sample/src/server`；它作为独立私有 workspace 包，通过 `craft-harness` 和 `craft-harness/adapters` 公共入口
+依赖库，库不得反向依赖案例。

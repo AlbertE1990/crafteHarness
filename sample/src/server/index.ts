@@ -1,8 +1,8 @@
 import { existsSync } from 'node:fs'
 import process, { loadEnvFile } from 'node:process'
 import { fileURLToPath } from 'node:url'
-import Agent from '../../../src'
-import { DeepSeekAdapter } from '../../../src/adapters'
+import Agent from 'craft-harness'
+import { DeepSeekAdapter } from 'craft-harness/adapters'
 import { serverToolGuard, serverTools } from './agent-tools'
 import { createServerApp } from './app'
 import { runPostgresMigrations } from './database/migrations'
@@ -13,6 +13,7 @@ import {
 } from './database/postgres'
 import { readDeepSeekRuntimeConfig } from './model-config'
 import { PostgresSessionStore } from './stores/postgres-session-store'
+import { PostgresTrajectoryStore } from './stores/postgres-trajectory-store'
 
 // 相对模块定位 .env.local，而不是相对当前工作目录：脚本从仓库根执行，配置文件在 sample/。
 // 文件缺失时继续使用宿主环境变量，便于容器和 CI 直接注入。
@@ -28,6 +29,7 @@ const { apiKey, baseURL, defaultModel, models, ...providerInfo } = readDeepSeekR
 // Runtime 持有连接池生命周期；craft-harness 只接收 SessionStore 协议。
 const databasePool = createPostgresPool(readPostgresRuntimeConfig())
 const postgresSessionStore = new PostgresSessionStore(databasePool)
+const postgresTrajectoryStore = new PostgresTrajectoryStore(databasePool)
 
 const defaultCapability = models.find(model => model.id === defaultModel)
 if (!defaultCapability)
@@ -58,6 +60,9 @@ const agent = new Agent({
   },
   // 应用只注入持久化 Port；Session ID 由 Agent 使用固定前缀和 UUID 生成。
   sessionStore: postgresSessionStore,
+  observability: {
+    onTrace: postgresTrajectoryStore.record,
+  },
 })
 
 const fastify = createServerApp({
@@ -74,6 +79,7 @@ const fastify = createServerApp({
       sessionId,
     }),
   },
+  trajectory: postgresTrajectoryStore,
 })
 fastify.addHook('onClose', async () => {
   await databasePool.end()

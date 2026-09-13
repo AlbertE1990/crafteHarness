@@ -6,23 +6,26 @@
 - **PostgreSQL** 作为 `SessionStore` 实现，配合可搜索的多用户会话目录
 - **Vue 3 + Vite** 聊天界面：流式思考展示、工具审批卡片、会话列表与历史恢复
 
-它**不参与发布**（根 `package.json` 的 `files` 只包含 `dist`），通过相对路径 `../../../src` 直接导入库源码，
-因此在开发时不需要先构建库。
+它是独立的私有 pnpm workspace 包，自行维护运行依赖、开发依赖和脚本。案例通过 `workspace:*` 依赖
+`craft-harness` 并只使用公开导出，不会被根 npm 包发布；相关脚本会在启动、构建和测试前先构建库。
 
 ## 运行
 
 ```bash
-# 1. 配置：复制后填写真实密钥
-cp .env.example .env.local
+# 1. 在仓库根配置案例环境变量，复制后填写真实密钥
+cp sample/.env.example sample/.env.local
 
 # 2. 预先创建 PostgreSQL 数据库，并把连接串写入 .env.local
 
-# 3. 同时启动后端 :3000 与前端 :3333（首次启动自动建表）
-pnpm dev               # 在仓库根执行
+# 3. 在仓库根安装全部 workspace 依赖
+pnpm install
+
+# 4. 同时启动后端 :3000 与前端 :3333（首次启动自动建表）
+pnpm --dir sample dev
 ```
 
 Server 在监听端口前自动执行尚未应用的数据库迁移，因此新数据库不需要手工建表。部署流水线仍可使用
-`pnpm db:migrate` 提前迁移，`pnpm db:check` 只做连通性和表存在性检查。当前结构、权限要求和新增迁移规则见
+`pnpm --dir sample db:migrate` 提前迁移，`pnpm --dir sample db:check` 只做连通性和表存在性检查。当前结构、权限要求和新增迁移规则见
 [数据库文档](./database/README.md)。
 
 `.env.local` **相对模块定位**（`sample/src/server/index.ts` 用 `import.meta.url` 解析），不依赖当前工作目录；
@@ -133,18 +136,21 @@ Server 再把它作为 SessionStore 的 `scopeId`，因此不同浏览器的会�
 
 ## 测试
 
-案例测试在 `sample/test/`，从仓库根执行 `pnpm test` 时会和库测试一起跑（vitest 的两个 project）：
+案例测试在 `sample/test/`，由案例包自己的脚本运行；根包测试只覆盖 `craft-harness`：
 
 ```bash
-pnpm test                  # 库（node 环境）+ 案例（jsdom）
-pnpm db:test-store         # PostgreSQL SessionStore 的真实契约测试（需要数据库）
-pnpm build:sample          # 构建案例前端
+pnpm --dir sample test           # 案例单元测试与界面测试
+pnpm --dir sample typecheck      # 案例 TypeScript/Vue 类型检查
+pnpm --dir sample lint           # 案例代码规范检查
+pnpm --dir sample build          # 构建案例前端
+pnpm --dir sample db:test-store  # PostgreSQL Store 契约测试（需要数据库）
 ```
 
 ## 目录
 
 ```text
 sample/
+├── package.json           案例自身的依赖与开发命令
 ├── src/
 │   ├── server/            Fastify 应用、PostgreSQL Store、工具与 Guard、部署配置
 │   ├── pages/index.vue    聊天界面

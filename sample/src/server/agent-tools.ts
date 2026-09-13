@@ -2,9 +2,9 @@ import type {
   ToolGuardDecision,
   ToolGuardEvaluator,
   ToolGuardRequest,
-} from '../../../src'
+} from 'craft-harness'
+import { defineTool, ToolError } from 'craft-harness'
 import { z } from 'zod'
-import { defineTool, ToolError } from '../../../src'
 import { searchCraftHarnessDocumentation } from './craft-harness-docs'
 import { getUserLocation, getWeather } from './func'
 

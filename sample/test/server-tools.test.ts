@@ -1,7 +1,7 @@
-import type { ExecuteToolOptions } from '../../src'
+import type { ExecuteToolOptions } from 'craft-harness'
+import { defineAgentConfig, defineTool } from 'craft-harness'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { defineAgentConfig, defineTool } from '../../src'
 import { ScriptedModelAdapter } from '../../test/support/scripted-model-adapter'
 import {
   manageRuntimeResourceTool,

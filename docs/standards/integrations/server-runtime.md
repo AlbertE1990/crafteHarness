@@ -24,12 +24,13 @@ HTTP 路由与展示字段也不属于 craft-harness 公共协议，不需要复
 | `sample/src/server/database/*`      | PostgreSQL Runtime 配置、启动迁移和连通性检查      |
 | `sample/src/server/stores/*`        | 应用 Store；当前 Runtime 使用 PostgreSQL 实现      |
 
-库一侧（`src/`，案例通过相对路径导入）：
+库一侧（`src/`，案例通过 workspace 依赖的公开入口导入）：
 
-| 文件           | 职责                                                                    |
-| -------------- | ----------------------------------------------------------------------- |
-| `src/agent/*`  | 与传输无关的 Agent 门面、配置、事件和 Session API                       |
-| `src/index.ts` | 库的根入口；案例用相对路径导入（`sample/src/**` 下写作 `../../../src`） |
+| 文件                    | 职责                                                               |
+| ----------------------- | ------------------------------------------------------------------ |
+| `src/agent/*`           | 与传输无关的 Agent 门面、配置、事件和 Session API                  |
+| `src/index.ts`          | `craft-harness` 根入口                                             |
+| `src/adapters/index.ts` | `craft-harness/adapters` 子入口；案例不跨过 `exports` 读取内部源码 |
 
 过渡的 `sample/src/server/agent.ts` 与 `sample/src/server/agent-config.ts` 已删除。模型循环、会话目录和通用
 输出不应再次在 Server 中实现。
@@ -56,7 +57,7 @@ const app = createServerApp({ agent })
 - 一个进程复用一个 Agent；当前 Server 显式注入 PostgreSQL Store，进程重启后由数据库恢复 Session。
 - 连接池由 Runtime 创建和关闭，不能进入 craft-harness Core，也不能由 Store 模块在 import 时隐式创建。
 - Server 在监听端口前调用 `runPostgresMigrations()`；空数据库自动建表，已有数据库只执行未登记的版本。多个实例
-  通过 PostgreSQL advisory lock 串行迁移。手动 `pnpm db:migrate` 复用同一函数，当前结构见
+  通过 PostgreSQL advisory lock 串行迁移。手动 `pnpm --dir sample db:migrate` 复用同一函数，当前结构见
   [sample 数据库文档](../../../sample/database/README.md)。
 - 时间和计算由 Agent 自动装载，不进入 Server 工具注册表。只有具备真实工作区的 Runtime 才设置
   `tools.workspaceRoot` 并启用文件、搜索和终端；该设置只适合 Agent 生命周期内根目录固定的部署，普通网页
@@ -65,7 +66,8 @@ const app = createServerApp({ agent })
 - Runtime 只实现 `tools.guard(request)` 的业务风险规则；pending 审批、超时和重复提交由 Agent 管理。
 - 当前风险规则只适用于代码仓库内受信第一方工具，不代表第三方插件安全边界。
 
-Runtime 环境变量集中在 `sample/.env.local`（模板见 `sample/.env.example`，从仓库根执行 `pnpm dev:server`
+Runtime 环境变量集中在 `sample/.env.local`（模板见 `sample/.env.example`，从仓库根执行
+`pnpm --dir sample dev:server`
 时由案例自己加载）：
 
 | 变量                            | 必填 | 含义                                |
@@ -81,8 +83,8 @@ Runtime 环境变量集中在 `sample/.env.local`（模板见 `sample/.env.examp
 不放进环境变量，也不在库或 Adapter 里。
 
 配置文件的位置由**相对模块定位**决定，而不是当前工作目录：`sample/src/server/index.ts` 用
-`new URL('../../.env.local', import.meta.url)` 解析出 `sample/.env.local`，因此无论从仓库根执行 `pnpm dev`
-还是直接运行 `tsx sample/src/server/index.ts`，读到的都是同一份配置。文件不存在时跳过加载，继续使用宿主
+`new URL('../../.env.local', import.meta.url)` 解析出 `sample/.env.local`，因此无论执行
+`pnpm --dir sample dev` 还是 `pnpm --dir sample exec tsx src/server/index.ts`，读到的都是同一份配置。文件不存在时跳过加载，继续使用宿主
 环境变量，方便容器和 CI 直接注入；`sample/.env.local` 被 Git 忽略，仓库里只提交不含真实密码的
 `sample/.env.example`。
 库本身仍然不读取 `process.env`。

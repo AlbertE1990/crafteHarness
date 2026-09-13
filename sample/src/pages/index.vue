@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import type { AgentOutputEvent } from '../../../src'
+import type { AgentOutputEvent } from 'craft-harness'
 import type { ConversationMessage } from '../components/ConversationView.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import ConversationView from '../components/ConversationView.vue'
+import TrajectoryView from '../components/TrajectoryView.vue'
 
 defineOptions({ name: 'IndexPage' })
 
@@ -190,6 +191,7 @@ const isLoadingConversations = ref(false)
 const isSidebarOpen = ref(false)
 // 桌面端侧边栏收缩状态；收缩后仍保留展开按钮，不隐藏对话区。
 const isSidebarCollapsed = ref(false)
+const activeView = ref<'conversation' | 'trajectory'>('conversation')
 const errorMessage = ref('')
 const conversationError = ref('')
 // 重命名 / 删除的失败提示；与首次加载失败分开展示，避免把列表整体替换成错误态。
@@ -866,6 +868,7 @@ function startNewConversation() {
     return
 
   sessionId.value = ''
+  activeView.value = 'conversation'
   // 换一个全新的数组：草稿会话的消息随后会作为新会话的缓存内容被接管，
   // 直接复用同一个数组会让两个会话共享状态。
   messages.value = []
@@ -1528,7 +1531,7 @@ onBeforeUnmount(() => {
           <div class="flex gap-3 min-w-0 items-center">
             <img class="brand-mark" :src="brandLogoPath" alt="Hand-crafted Agent">
             <div class="min-w-0">
-              <div class="text-3.75 text-slate-900 font-700 truncate dark:text-white">
+              <div class="brand-title text-3.75 text-slate-900 font-700 truncate dark:text-white">
                 Craft Harness
               </div>
               <div class="text-2.75 text-slate-500 mt-0.5 dark:text-slate-400">
@@ -1779,51 +1782,74 @@ onBeforeUnmount(() => {
 
       <section class="chat-panel">
         <header class="chat-header">
-          <button
-            class="menu-button"
-            type="button"
-            aria-label="打开会话列表"
-            @click="isSidebarOpen = true"
-          >
-            <div i-carbon-menu />
-          </button>
-          <!-- 侧边栏收起后，对话区左上角始终保留一个展开入口。 -->
-          <button
-            v-if="isSidebarCollapsed"
-            class="sidebar-expand-button"
-            type="button"
-            aria-label="展开会话列表"
-            @click="isSidebarCollapsed = false"
-          >
-            <div i-carbon-side-panel-open />
-          </button>
-          <div class="text-left flex-1 min-w-0">
-            <h1 class="text-4.5 text-slate-900 font-700 m-0 truncate dark:text-white">
-              {{ pageTitle }}
-            </h1>
-            <!-- <div class="text-3 text-slate-500 mt-1 flex gap-1.5 items-center dark:text-slate-400">
-              <span class="status-dot" />
-              <span>{{ sessionId ? '对话上下文已连接' : '发送第一条消息以创建对话' }}</span>
-            </div> -->
-          </div>
-          <div v-if="sessionId" class="conversation-header-actions">
-            <div v-if="messages.length" class="message-count">
-              {{ messages.length }} 条消息
-            </div>
+          <div class="chat-title-row">
             <button
-              class="conversation-refresh-button"
+              class="menu-button"
               type="button"
-              :disabled="isSending || isRefreshingConversation"
-              title="刷新当前会话"
-              aria-label="刷新当前会话内容"
-              @click="refreshCurrentConversation"
+              aria-label="打开会话列表"
+              @click="isSidebarOpen = true"
             >
-              <div i-carbon-renew :class="{ 'animate-spin': isRefreshingConversation }" />
+              <div i-carbon-menu />
+            </button>
+            <!-- 侧边栏收起后，对话区左上角始终保留一个展开入口。 -->
+            <button
+              v-if="isSidebarCollapsed"
+              class="sidebar-expand-button"
+              type="button"
+              aria-label="展开会话列表"
+              @click="isSidebarCollapsed = false"
+            >
+              <div i-carbon-side-panel-open />
+            </button>
+            <div class="text-left flex-1 min-w-0">
+              <h1 class="chat-title text-4.5 text-slate-900 font-700 m-0 truncate dark:text-white">
+                {{ pageTitle }}
+              </h1>
+            </div>
+            <div v-if="sessionId && activeView === 'conversation'" class="conversation-header-actions">
+              <div v-if="messages.length" class="message-count">
+                {{ messages.length }} 条消息
+              </div>
+              <button
+                class="conversation-refresh-button"
+                type="button"
+                :disabled="isSending || isRefreshingConversation"
+                title="刷新当前会话"
+                aria-label="刷新当前会话内容"
+                @click="refreshCurrentConversation"
+              >
+                <div i-carbon-renew :class="{ 'animate-spin': isRefreshingConversation }" />
+              </button>
+            </div>
+          </div>
+          <div v-if="sessionId" class="conversation-view-tabs" role="tablist" aria-label="会话视图">
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="activeView === 'conversation'"
+              :class="{ active: activeView === 'conversation' }"
+              @click="activeView = 'conversation'"
+            >
+              对话
+            </button>
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="activeView === 'trajectory'"
+              :class="{ active: activeView === 'trajectory' }"
+              @click="activeView = 'trajectory'"
+            >
+              轨迹
             </button>
           </div>
         </header>
 
         <main class="message-area" aria-live="polite">
+          <TrajectoryView
+            v-if="sessionId && activeView === 'trajectory'"
+            :session-id="sessionId"
+            :scope-id="browserScopeId"
+          />
           <!--
             消息区交给 ConversationView，并按会话 ID 缓存实例：
             同一个会话来回切换时实例与 DOM 都被复用，滚动位置和思考面板展开状态自然保留；
@@ -1831,7 +1857,7 @@ onBeforeUnmount(() => {
           -->
           <KeepAlive :max="8">
             <ConversationView
-              v-if="sessionId || messages.length > 0"
+              v-if="activeView === 'conversation' && (sessionId || messages.length > 0)"
               :key="sessionId || 'draft'"
               :messages="messages"
               :is-sending="isSending"
@@ -1839,7 +1865,7 @@ onBeforeUnmount(() => {
             />
           </KeepAlive>
 
-          <div v-if="!sessionId && messages.length === 0" class="message-empty">
+          <div v-if="activeView === 'conversation' && !sessionId && messages.length === 0" class="message-empty">
             <div class="empty-state">
               <div class="empty-icon" aria-hidden="true">
                 <div i-carbon-chat-bot text-8 />
@@ -2622,12 +2648,54 @@ onBeforeUnmount(() => {
 
 .chat-header {
   z-index: 1;
+  min-height: 68px;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 24px 0;
+  border-bottom: 1px solid var(--panel-border);
+  background: rgb(255 255 255 / 72%);
+}
+
+.chat-title-row {
+  min-height: 34px;
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 18px 24px;
-  border-bottom: 1px solid var(--panel-border);
-  background: rgb(255 255 255 / 72%);
+}
+
+.brand-title,
+.chat-title {
+  color: #0f172a !important;
+}
+
+.conversation-view-tabs {
+  height: 34px;
+  display: flex;
+  align-items: end;
+  gap: 22px;
+  padding-left: 0;
+}
+
+.conversation-view-tabs button {
+  height: 34px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 0 1px;
+  color: #64748b;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.conversation-view-tabs button:hover {
+  color: #334155;
+}
+
+.conversation-view-tabs button.active {
+  border-bottom-color: #2563eb;
+  color: #1d4ed8;
+  font-weight: 700;
 }
 
 .menu-button,
@@ -3286,7 +3354,8 @@ onBeforeUnmount(() => {
   }
 
   .chat-header {
-    padding: 14px 16px;
+    min-height: 64px;
+    padding: 10px 16px 0;
   }
 
   .message-count {
@@ -3349,6 +3418,19 @@ onBeforeUnmount(() => {
 :global(html.dark) .workspace-shell,
 :global(html.dark) .chat-header {
   background: #0f172a;
+}
+
+:global(html.dark) .conversation-view-tabs button {
+  color: #94a3b8;
+}
+
+:global(html.dark) .conversation-view-tabs button:hover {
+  color: #e2e8f0;
+}
+
+:global(html.dark) .conversation-view-tabs button.active {
+  color: #93c5fd;
+  border-bottom-color: #60a5fa;
 }
 
 :global(html.dark) .conversation-sidebar,
