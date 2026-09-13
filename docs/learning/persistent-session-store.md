@@ -534,9 +534,9 @@ sample/test/postgres-session-store.contract.ts
 首次启动 sample Server 会自动执行迁移；也可以在部署或调试时显式运行：
 
 ```bash
-pnpm db:migrate
-pnpm db:check
-pnpm db:test-store
+pnpm --dir sample db:migrate
+pnpm --dir sample db:check
+pnpm --dir sample db:test-store
 ```
 
 迁移器按文件名执行尚未记录的迁移，并写入 `craft_agent_schema_migrations`；连接检查只输出数据库名、PostgreSQL

@@ -272,13 +272,22 @@ describe('agent loop', () => {
   })
 
   it('assembles fragmented calls, executes the Tool Harness and reloads Session history', async () => {
-    const execute = vi.fn((input: { text: string }) => ({ text: input.text.toUpperCase() }))
+    const execute = vi.fn((
+      input: { text: string },
+      context: { scopeId?: string, sessionId?: string },
+    ) => ({
+      text: input.text.toUpperCase(),
+      context,
+    }))
     const echo = createAgentTool(defineTool({
       name: 'echo',
       description: '把文本转换成大写',
       inputSchema: z.strictObject({ text: z.string() }),
       outputSchema: z.strictObject({ text: z.string() }),
-      execute,
+      execute: (input, context) => {
+        execute(input, context)
+        return { text: input.text.toUpperCase() }
+      },
     }))
     const store = createStore()
     const adapter = new ScriptedModelAdapter({
@@ -326,6 +335,10 @@ describe('agent loop', () => {
       toolCalls: 1,
     })
     expect(execute).toHaveBeenCalledOnce()
+    expect(execute.mock.calls[0]?.[1]).toMatchObject({
+      scopeId: SCOPE_ID,
+      sessionId: 'session-tool',
+    })
     expect(adapter.calls[0]?.request).toMatchObject({
       parallel_tool_calls: false,
       tools: [expect.objectContaining({ name: 'echo' })],

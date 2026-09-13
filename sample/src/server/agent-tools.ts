@@ -2,12 +2,13 @@ import type {
   ToolGuardDecision,
   ToolGuardEvaluator,
   ToolGuardRequest,
-} from '../../../src'
+} from 'craft-harness'
+import { defineTool, ToolError } from 'craft-harness'
 import { z } from 'zod'
-import { defineTool, ToolError } from '../../../src'
+import { searchCraftHarnessDocumentation } from './craft-harness-docs'
 import { getUserLocation, getWeather } from './func'
 
-/** 审批演示工具可操作的进程内资源；不会触碰文件、数据库或操作系统。 */
+/** 审批演示工具可操作的进程内资源；按用户作用域隔离，不会触碰文件、数据库或操作系统。 */
 const runtimeResources = new Map<string, string>()
 
 /** 参数本身决定本次调用是只读、写入还是删除。 */
@@ -95,6 +96,35 @@ export const getWeatherTool = defineTool({
   },
 })
 
+/** 用受限的本地文档集合回答 Craft Harness 自身能力、使用和开发问题。 */
+export const searchCraftHarnessDocsTool = defineTool({
+  name: 'search_craft_harness_docs',
+  description: '检索 Craft Harness 官方项目文档。用户询问 Craft Harness 的功能、安装使用、API、架构、工具开发、模型适配器、会话存储或安全机制时，应先调用此工具并依据结果回答。',
+  inputSchema: z.strictObject({
+    query: z.string().min(2).max(200).describe('从用户问题提炼出的文档检索词。'),
+    limit: z.number().int().min(1).max(6).default(4).describe('返回的相关文档片段数量。'),
+  }),
+  outputSchema: z.strictObject({
+    query: z.string(),
+    matches: z.array(z.strictObject({
+      source: z.string(),
+      heading: z.string(),
+      excerpt: z.string(),
+      score: z.number().int().nonnegative(),
+    })),
+  }),
+  metadata: {
+    risk: 'read',
+    capabilities: ['documentation:read'],
+  },
+  async execute(input) {
+    return {
+      query: input.query,
+      matches: [...await searchCraftHarnessDocumentation(input.query, input.limit)],
+    }
+  },
+})
+
 /**
  * 一个真实产生进程内副作用、但影响范围受控的审批演示工具。
  *
@@ -103,7 +133,7 @@ export const getWeatherTool = defineTool({
  */
 export const manageRuntimeResourceTool = defineTool({
   name: 'manage_runtime_resource',
-  description: '管理服务进程内的演示资源。read 用于读取；write 会修改内容；delete 会删除内容。仅在用户明确要求操作演示资源时调用。',
+  description: '管理当前用户作用域内的进程内演示资源。read 用于读取；write 会修改内容；delete 会删除内容；同一用户可跨会话访问。仅在用户明确要求操作演示资源时调用。',
   inputSchema: runtimeResourceInputSchema,
   outputSchema: z.strictObject({
     operation: z.enum(['read', 'write', 'delete']),
@@ -117,9 +147,10 @@ export const manageRuntimeResourceTool = defineTool({
   },
   // 工具级 Guard 只负责该工具固有、且依赖实际参数的规则。
   guard: request => evaluateRuntimeResourcePolicy(request.input),
-  execute(input) {
+  execute(input, context) {
     // 能进入此函数，说明 Harness 已经得到 allow 或本 callId 的 allowed-once。
-    const previous = runtimeResources.get(input.resource)
+    const resourceKey = `${context.scopeId ?? 'standalone'}\0${input.resource}`
+    const previous = runtimeResources.get(resourceKey)
     if (input.operation === 'read') {
       return {
         operation: input.operation,
@@ -137,7 +168,7 @@ export const manageRuntimeResourceTool = defineTool({
         })
       }
       // 这是实际副作用点；审批逻辑不能写在这里，否则无法在执行前统一观察和拒绝。
-      runtimeResources.set(input.resource, input.content)
+      runtimeResources.set(resourceKey, input.content)
       return {
         operation: input.operation,
         resource: input.resource,
@@ -147,7 +178,7 @@ export const manageRuntimeResourceTool = defineTool({
     }
 
     // protected/* 会在工具级 Guard 中提前 deny，因此正常运行时无法到达这条删除语句。
-    runtimeResources.delete(input.resource)
+    runtimeResources.delete(resourceKey)
     return {
       operation: input.operation,
       resource: input.resource,
@@ -166,6 +197,7 @@ export const manageRuntimeResourceTool = defineTool({
 export const serverTools = [
   getUserLocationTool,
   getWeatherTool,
+  searchCraftHarnessDocsTool,
   manageRuntimeResourceTool,
 ] as const
 
@@ -182,7 +214,8 @@ export const serverToolGuard: ToolGuardEvaluator = (
     || request.tool.name === 'get_current_time'
     || request.tool.name === manageRuntimeResourceTool.name
     || request.tool.name === getUserLocationTool.name
-    || request.tool.name === getWeatherTool.name) {
+    || request.tool.name === getWeatherTool.name
+    || request.tool.name === searchCraftHarnessDocsTool.name) {
     return { decision: 'allow' }
   }
 

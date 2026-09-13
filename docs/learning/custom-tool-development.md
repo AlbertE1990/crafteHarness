@@ -94,7 +94,7 @@ ModelAdapter，并在收到同名 Tool Call 时通过 Tool Harness 执行。
 开发密钥只写在被 Git 忽略的 `sample/.env.local`（模板见 `sample/.env.example`）中，然后启动案例：
 
 ```powershell
-pnpm dev
+pnpm --dir sample dev
 ```
 
 该文件缺失时案例会退回宿主环境变量，因此 CI 或容器可以直接注入同名变量，不必提交任何密钥文件。

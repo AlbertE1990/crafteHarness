@@ -1,4 +1,3 @@
-import type { Pool, PoolClient } from 'pg'
 import type {
   AppendSessionEventsRequest,
   AppendSessionEventsResult,
@@ -16,9 +15,10 @@ import type {
   SessionListPage,
   SessionStoreOperation,
   SessionSummary,
-} from '../../../../src'
+} from 'craft-harness'
+import type { Pool, PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
-import { SessionStoreError } from '../../../../src'
+import { SessionStoreError } from 'craft-harness'
 
 const DEFAULT_PAGE_SIZE = 100
 const MAX_PAGE_SIZE = 1_000

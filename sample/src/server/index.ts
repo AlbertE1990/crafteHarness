@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs'
+import path from 'node:path'
 import process, { loadEnvFile } from 'node:process'
 import { fileURLToPath } from 'node:url'
-import Agent from '../../../src'
-import { DeepSeekAdapter } from '../../../src/adapters'
+import Agent from 'craft-harness'
+import { DeepSeekAdapter } from 'craft-harness/adapters'
 import { serverToolGuard, serverTools } from './agent-tools'
 import { createServerApp } from './app'
 import { runPostgresMigrations } from './database/migrations'
@@ -13,17 +14,24 @@ import {
 } from './database/postgres'
 import { readDeepSeekRuntimeConfig } from './model-config'
 import { PostgresSessionStore } from './stores/postgres-session-store'
-
-/** 当前参考 Runtime 是单用户部署，仍显式组装固定 Session 作用域。 */
-const SINGLE_USER_SCOPE_ID = 'default'
+import { PostgresTrajectoryStore } from './stores/postgres-trajectory-store'
 
 // 相对模块定位 .env.local，而不是相对当前工作目录：脚本从仓库根执行，配置文件在 sample/。
 // 文件缺失时继续使用宿主环境变量，便于容器和 CI 直接注入。
-const envFile = fileURLToPath(new URL('../../.env.local', import.meta.url))
+const envFile = process.env.CRAFT_SAMPLE_ENV_FILE?.trim()
+  ? path.resolve(process.env.CRAFT_SAMPLE_ENV_FILE)
+  : fileURLToPath(new URL('../../.env.local', import.meta.url))
 if (existsSync(envFile))
   loadEnvFile(envFile)
 
 const PORT = Number(process.env.PORT ?? 3000)
+const staticRoot = path.resolve(
+  process.env.CRAFT_SAMPLE_STATIC_ROOT?.trim()
+  || fileURLToPath(new URL('../../dist/', import.meta.url)),
+)
+const staticIndex = path.join(staticRoot, 'index.html')
+if (process.env.NODE_ENV === 'production' && !existsSync(staticIndex))
+  throw new Error(`生产模式缺少前端构建产物：${staticIndex}`)
 
 // 模型连接、可切换模型以及各自的推理能力都是会变化的部署事实，统一在启动期校验一次。
 const { apiKey, baseURL, defaultModel, models, ...providerInfo } = readDeepSeekRuntimeConfig(process.env)
@@ -31,6 +39,7 @@ const { apiKey, baseURL, defaultModel, models, ...providerInfo } = readDeepSeekR
 // Runtime 持有连接池生命周期；craft-harness 只接收 SessionStore 协议。
 const databasePool = createPostgresPool(readPostgresRuntimeConfig())
 const postgresSessionStore = new PostgresSessionStore(databasePool)
+const postgresTrajectoryStore = new PostgresTrajectoryStore(databasePool)
 
 const defaultCapability = models.find(model => model.id === defaultModel)
 if (!defaultCapability)
@@ -45,7 +54,8 @@ const agent = new Agent({
       ? { reasoningEffort: defaultCapability.defaultReasoningEffort }
       : {}),
   },
-  systemPrompt: '你是一个AI助手',
+  systemPrompt: `你是一个 AI 助手。
+当用户询问 Craft Harness 自身的功能、使用方式、API、架构或开发方式时，必须先调用 search_craft_harness_docs 检索官方项目文档，再依据检索结果回答并列出来源文件；文档没有明确说明的内容要如实说明。`,
   execution: {
     limits: {
       maxModelSteps: 5,
@@ -60,6 +70,9 @@ const agent = new Agent({
   },
   // 应用只注入持久化 Port；Session ID 由 Agent 使用固定前缀和 UUID 生成。
   sessionStore: postgresSessionStore,
+  observability: {
+    onTrace: postgresTrajectoryStore.record,
+  },
 })
 
 const fastify = createServerApp({
@@ -67,15 +80,17 @@ const fastify = createServerApp({
   model: { ...providerInfo, defaultModel, models },
   // 名称是可变展示属性，删除会移除事实；两者都是应用层能力，不进库的 append-only 契约。
   conversations: {
-    rename: (sessionId, name) => postgresSessionStore.rename(
-      { scopeId: SINGLE_USER_SCOPE_ID, sessionId },
+    rename: (scopeId, sessionId, name) => postgresSessionStore.rename(
+      { scopeId, sessionId },
       name,
     ),
-    remove: sessionId => postgresSessionStore.remove({
-      scopeId: SINGLE_USER_SCOPE_ID,
+    remove: (scopeId, sessionId) => postgresSessionStore.remove({
+      scopeId,
       sessionId,
     }),
   },
+  trajectory: postgresTrajectoryStore,
+  ...(existsSync(staticIndex) ? { staticRoot } : {}),
 })
 fastify.addHook('onClose', async () => {
   await databasePool.end()

@@ -1,7 +1,7 @@
-import type { ExecuteToolOptions } from '../../src'
+import type { ExecuteToolOptions } from 'craft-harness'
+import { defineAgentConfig, defineTool } from 'craft-harness'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { defineAgentConfig, defineTool } from '../../src'
 import { ScriptedModelAdapter } from '../../test/support/scripted-model-adapter'
 import {
   manageRuntimeResourceTool,
@@ -52,6 +52,7 @@ describe('server tools through CraftAgent', () => {
     expect(registeredServerTools.map(tool => tool.model.name)).toEqual([
       'get_user_location',
       'get_weather',
+      'search_craft_harness_docs',
       'manage_runtime_resource',
     ])
 
@@ -259,6 +260,60 @@ describe('server tools through CraftAgent', () => {
       context: undefined,
       signal: new AbortController().signal,
     })).toEqual({ decision: 'allow' })
+  })
+
+  it('retrieves official Craft Harness development documentation without arbitrary paths', async () => {
+    const result = await invokeServerTool('search_craft_harness_docs', {
+      query: '如何使用 defineTool 开发自定义工具',
+      limit: 4,
+    })
+
+    expect(result).toMatchObject({ ok: true })
+    if (!result.ok)
+      throw new Error(result.error.message)
+    const value = result.value as { matches: Array<{ source: string }> }
+    expect(value.matches).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'docs/learning/custom-tool-development.md',
+      }),
+    ]))
+    expect(value.matches.every(match => (
+      match.source === 'README.md'
+      || match.source.startsWith('docs/learning/')
+      || match.source.startsWith('docs/standards/')
+    ))).toBe(true)
+  })
+
+  it('shares runtime resources across sessions in one scope but isolates other scopes', async () => {
+    const resource = 'demo/scope-isolation-test'
+    const createContext = (scopeId: string, sessionId: string) => ({
+      callId: `call-${scopeId}-${sessionId}`,
+      scopeId,
+      sessionId,
+      attempt: 1,
+      context: undefined,
+      signal: new AbortController().signal,
+    })
+
+    await manageRuntimeResourceTool.execute({
+      operation: 'write',
+      resource,
+      content: 'session A value',
+    }, createContext('scope-a', 'session-a'))
+
+    expect(manageRuntimeResourceTool.execute({
+      operation: 'read',
+      resource,
+      content: null,
+    }, createContext('scope-b', 'session-b'))).toMatchObject({ existed: false, value: null })
+    expect(manageRuntimeResourceTool.execute({
+      operation: 'read',
+      resource,
+      content: null,
+    }, createContext('scope-a', 'session-c'))).toMatchObject({
+      existed: true,
+      value: 'session A value',
+    })
   })
 
   it('keeps raw business functions available for focused unit tests', async () => {

@@ -52,11 +52,13 @@ describe('postgres migrations', () => {
         '001-create-session-log.sql',
         '002-add-session-scope-and-name.sql',
         '003-use-composite-session-identity.sql',
+        '004-create-agent-trace.sql',
       ],
       appliedMigrations: [
         '001-create-session-log.sql',
         '002-add-session-scope-and-name.sql',
         '003-use-composite-session-identity.sql',
+        '004-create-agent-trace.sql',
       ],
     })
 
@@ -64,8 +66,8 @@ describe('postgres migrations', () => {
     const registryIndex = database.statements.findIndex(statement => statement.sql.includes('CREATE TABLE IF NOT EXISTS craft_agent_schema_migrations'))
     expect(lockIndex).toBeGreaterThanOrEqual(0)
     expect(registryIndex).toBeGreaterThan(lockIndex)
-    expect(database.statements.filter(statement => statement.sql === 'BEGIN')).toHaveLength(3)
-    expect(database.statements.filter(statement => statement.sql === 'COMMIT')).toHaveLength(3)
+    expect(database.statements.filter(statement => statement.sql === 'BEGIN')).toHaveLength(4)
+    expect(database.statements.filter(statement => statement.sql === 'COMMIT')).toHaveLength(4)
     expect(database.statements.at(-1)?.sql).toContain('pg_advisory_unlock')
     expect(database.release).toHaveBeenCalledOnce()
   })

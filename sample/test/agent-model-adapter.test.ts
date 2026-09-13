@@ -1,6 +1,6 @@
-import type { AgentOutputEvent, ModelStreamChunk } from '../../src'
+import type { AgentOutputEvent, ModelStreamChunk } from 'craft-harness'
+import Agent from 'craft-harness'
 import { describe, expect, it } from 'vitest'
-import Agent from '../../src'
 import { ScriptedModelAdapter } from '../../test/support/scripted-model-adapter'
 import { serverToolGuard, serverTools } from '../src/server/agent-tools'
 
@@ -73,6 +73,7 @@ describe('agent runtime model adapter boundary', () => {
       'calculator',
       'get_user_location',
       'get_weather',
+      'search_craft_harness_docs',
       'manage_runtime_resource',
     ])
     expect(events).toContainEqual({

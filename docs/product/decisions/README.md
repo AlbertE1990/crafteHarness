@@ -18,6 +18,7 @@ ADR 记录重要技术选择及其背景、备选方案和后果。
 - [ADR-0014：显式注入 Adapter，并统一模型选择对象](./adr-0014-explicit-adapter-and-model-selection.md)
 - [ADR-0015：工作区工具按显式能力边界启用](./adr-0015-opt-in-workspace-tools.md)
 - [ADR-0016：安装 craft-harness 时提供完整运行依赖](./adr-0016-one-command-installation.md)
+- [ADR-0017：sample 作为独立 workspace 包消费公开 API](./adr-0017-sample-workspace-package.md)
 
 状态使用：
 

@@ -11,8 +11,7 @@ import { VueRouterAutoImports } from 'vue-router/unplugin'
 import VueRouter from 'vue-router/vite'
 
 export default defineConfig({
-  // 案例应用位于 sample/，而命令从仓库根执行；显式声明 root 才能让 index.html、
-  // public/ 与构建输出都落在 sample/ 下，避免生成物跑到库的 src/ 里。
+  // 固定案例应用根目录，确保从 workspace 根或 sample/ 执行命令时行为一致。
   root: __dirname,
   resolve: {
     alias: {
@@ -21,8 +20,7 @@ export default defineConfig({
   },
   plugins: [
     // https://github.com/vuejs/router/pull/2603
-    // routesFolder 的默认值 "src/pages" 相对**当前工作目录**解析（仓库根），不是相对 vite root；
-    // 不写绝对路径就会扫不到任何页面，生成空的路由表。
+    // 使用绝对路径，避免调用命令的工作目录影响路由扫描和声明文件位置。
     VueRouter({
       routesFolder: path.resolve(__dirname, 'src/pages'),
       dts: path.resolve(__dirname, 'src/typed-router.d.ts'),
@@ -65,7 +63,7 @@ export default defineConfig({
     }),
 
     // https://github.com/antfu/unocss
-    // 命令从仓库根执行，因此显式指定 sample/uno.config.ts，避免退化成默认配置。
+    // 显式指定案例自己的 UnoCSS 配置，避免工作目录影响配置发现。
     UnoCSS({ configFile: path.resolve(__dirname, 'uno.config.ts') }),
   ],
 

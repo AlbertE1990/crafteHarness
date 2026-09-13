@@ -109,6 +109,8 @@ interface FetchRoutes {
   conversations?: unknown[]
   /** GET /api/conversation/:id 返回的会话详情，按会话 ID 索引。 */
   conversationDetails?: Record<string, unknown>
+  /** GET /api/conversation/:id/trajectory 返回的轨迹页，按会话 ID 索引。 */
+  trajectories?: Record<string, unknown>
   /** GET /api/model 返回的 data；显式传 null 表示该请求失败。 */
   model?: unknown
   /** 依次取给 POST /api/chat 的响应，流式与非流式都放在这里。 */
@@ -148,6 +150,15 @@ function createFetchMock(routes: FetchRoutes = {}): FetchMock {
 
     if (method === 'GET' && url === '/api/conversation/list')
       return jsonResponse({ data: routes.conversations ?? [] })
+
+    if (method === 'GET' && /\/api\/conversation\/[^/]+\/trajectory(?:\?|$)/.test(url)) {
+      const match = url.match(/^\/api\/conversation\/([^/]+)\/trajectory(?:\?|$)/)
+      const trajectorySessionId = match ? decodeURIComponent(match[1]!) : ''
+      const trajectory = routes.trajectories?.[trajectorySessionId]
+      if (!trajectory)
+        throw new Error(`测试未提供会话轨迹：${trajectorySessionId}`)
+      return jsonResponse({ data: trajectory })
+    }
 
     if (method === 'GET' && url.startsWith('/api/conversation/')) {
       const detail = routes.conversationDetails?.[sessionId]
@@ -337,6 +348,7 @@ const twoTurnDetail = {
 
 describe('chat page conversations', () => {
   beforeEach(() => {
+    window.localStorage.clear()
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
       configurable: true,
       value: vi.fn(),
@@ -347,6 +359,54 @@ describe('chat page conversations', () => {
     restoreTextareaScrollHeight()
     restoreScrollIntoView()
     vi.unstubAllGlobals()
+  })
+
+  it('shows runnable examples and reuses one anonymous browser scope for private requests', async () => {
+    const fetchMock = createFetchMock({
+      chat: [streamResponse([
+        { type: 'session.started', sessionId: 'chat-starter-weather' },
+        {
+          type: 'message.completed',
+          sessionId: 'chat-starter-weather',
+          content: '上海当前天气晴朗。',
+          reasoning: '',
+        },
+      ])],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(ChatPage)
+    await flushPromises()
+
+    expect(wrapper.findAll('.starter-prompt')).toHaveLength(5)
+    expect(wrapper.text()).toContain('查询实时天气')
+    expect(wrapper.text()).toContain('测试资源写入')
+    expect(wrapper.text()).toContain('读取演示资源')
+    expect(wrapper.text()).toContain('计算与时间')
+    expect(wrapper.text()).toContain('了解 Craft Harness')
+
+    const weatherStarter = wrapper.findAll('.starter-prompt')
+      .find(button => button.text().includes('查询实时天气'))
+    expect(weatherStarter).toBeDefined()
+    await weatherStarter!.trigger('click')
+    await flushPromises()
+
+    expect(chatRequestBody(fetchMock, 0).message).toBe(
+      '查询当前天气，并告诉我体感温度、湿度和风力。',
+    )
+    const privateCalls = fetchMock.mock.calls.filter(([input]) => String(input) !== '/api/model')
+    const scopeIds = privateCalls.map(([, init]) => new Headers(init?.headers).get('X-Craft-Scope-Id'))
+    expect(scopeIds.length).toBeGreaterThan(0)
+    expect(new Set(scopeIds).size).toBe(1)
+    expect(scopeIds[0]).toMatch(
+      /^browser-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    )
+
+    wrapper.unmount()
+    const reloaded = mount(ChatPage)
+    await flushPromises()
+    const latestListCall = callsFor(fetchMock, '/api/conversation/list').at(-1)
+    expect(new Headers(latestListCall?.[1]?.headers).get('X-Craft-Scope-Id')).toBe(scopeIds[0])
+    reloaded.unmount()
   })
 
   it('restores history and only sends sessionId for an existing conversation', async () => {
@@ -1080,6 +1140,240 @@ describe('chat page conversations', () => {
     expect(callsFor(fetchMock, '/api/conversation/list')).toHaveLength(1)
   })
 
+  it('switches to a DSH-style trajectory view and opens tool details', async () => {
+    const timestamp = '2026-09-13T04:00:00.000Z'
+    const fetchMock = createFetchMock({
+      conversations: [{ id: 'chat-trace', name: '轨迹会话', createAt: timestamp }],
+      conversationDetails: {
+        'chat-trace': {
+          id: 'chat-trace',
+          name: '轨迹会话',
+          createAt: timestamp,
+          history: [{ role: 'user', content: '读取数据' }],
+        },
+      },
+      trajectories: {
+        'chat-trace': {
+          sessionId: 'chat-trace',
+          hasEarlier: false,
+          systemPrompt: '你是测试轨迹助手。',
+          userInputs: [{
+            eventId: 'event-user',
+            sequence: 2,
+            timestamp,
+            runId: 'run-trace',
+            turnId: 'turn-trace',
+            content: '读取数据',
+          }],
+          sessionMessages: [
+            {
+              eventId: 'event-user',
+              sequence: 2,
+              timestamp,
+              runId: 'run-trace',
+              turnId: 'turn-trace',
+              message: { role: 'user', content: '读取数据' },
+            },
+            {
+              eventId: 'event-assistant-tool',
+              sequence: 3,
+              timestamp: '2026-09-13T04:00:00.800Z',
+              runId: 'run-trace',
+              turnId: 'turn-trace',
+              message: {
+                role: 'assistant',
+                content: null,
+                reasoning_content: '先读取测试数据',
+                tool_calls: [{
+                  id: 'call-trace',
+                  type: 'function',
+                  function: { name: 'lookup', arguments: '{"query":"Craft Harness"}' },
+                }],
+              },
+            },
+            {
+              eventId: 'event-assistant-final',
+              sequence: 5,
+              timestamp: '2026-09-13T04:00:01.800Z',
+              runId: 'run-trace',
+              turnId: 'turn-trace',
+              message: { role: 'assistant', content: '完成' },
+            },
+          ],
+          events: [
+            {
+              sequence: 1,
+              event: {
+                type: 'agent.run.started',
+                runId: 'run-trace',
+                turnId: 'turn-trace',
+                sessionId: 'chat-trace',
+                timestamp,
+                provider: 'scripted',
+                model: 'scripted-model',
+                modelExecution: { id: 'scripted-model', stream: true },
+                limits: { maxModelSteps: 5, maxToolCalls: 16 },
+              },
+            },
+            {
+              sequence: 2,
+              event: {
+                type: 'agent.tool.call.started',
+                runId: 'run-trace',
+                turnId: 'turn-trace',
+                sessionId: 'chat-trace',
+                timestamp: '2026-09-13T04:00:01.000Z',
+                step: 1,
+                callId: 'call-trace',
+                toolName: 'lookup',
+                arguments: '{"query":"Craft Harness"}',
+              },
+            },
+            {
+              sequence: 3,
+              event: {
+                type: 'agent.tool.call.completed',
+                runId: 'run-trace',
+                turnId: 'turn-trace',
+                sessionId: 'chat-trace',
+                timestamp: '2026-09-13T04:00:01.250Z',
+                step: 1,
+                callId: 'call-trace',
+                toolName: 'lookup',
+                result: {
+                  ok: true,
+                  value: { answer: 'found' },
+                  content: '{"answer":"found"}',
+                  attempts: 1,
+                  durationMs: 250,
+                },
+              },
+            },
+            {
+              sequence: 4,
+              event: {
+                type: 'agent.run.completed',
+                runId: 'run-trace',
+                turnId: 'turn-trace',
+                sessionId: 'chat-trace',
+                timestamp: '2026-09-13T04:00:02.000Z',
+                result: {
+                  status: 'completed',
+                  stopReason: 'completed',
+                  runId: 'run-trace',
+                  turnId: 'turn-trace',
+                  sessionId: 'chat-trace',
+                  content: '完成',
+                  reasoning: '',
+                  steps: 2,
+                  toolCalls: 1,
+                  usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 },
+                  sessionVersion: 4,
+                },
+              },
+            },
+          ],
+          tools: {
+            lookup: {
+              name: 'lookup',
+              description: '读取测试数据',
+              inputSchema: {
+                type: 'object',
+                properties: { query: { type: 'string' } },
+                required: ['query'],
+              },
+            },
+          },
+        },
+      },
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(ChatPage)
+    await flushPromises()
+
+    await findConversationItem(wrapper, '轨迹会话').find('.conversation-select').trigger('click')
+    await flushPromises()
+    const trajectoryTab = wrapper.findAll('.conversation-view-tabs button')
+      .find(button => button.text() === '轨迹')
+    expect(trajectoryTab).toBeDefined()
+    await trajectoryTab!.trigger('click')
+    await flushPromises()
+
+    expect(callsFor(fetchMock, '/api/conversation/chat-trace/trajectory', { prefix: true })).toHaveLength(1)
+    expect(wrapper.find('.trajectory-toolbar').exists()).toBe(true)
+    expect(wrapper.find('.timeline-overview').exists()).toBe(true)
+    expect(wrapper.find('.trajectory-metrics').text()).toContain('1 轮 · 2 步 · 1 次工具调用')
+    expect(wrapper.find('.system-row').text()).toContain('初始系统提示词')
+    expect(wrapper.find('.event-row.kind-user').text()).toContain('读取数据')
+    expect(wrapper.find('.event-row.kind-tool').text()).toContain('lookup')
+    expect(wrapper.findAll('.event-list .event-row').map(row => row.classes().find(name => name.startsWith('kind-')))).toEqual([
+      'kind-user',
+      'kind-assistant',
+      'kind-tool',
+      'kind-assistant',
+    ])
+    expect(wrapper.findAll('.event-row.kind-assistant').map(row => row.text())).toEqual([
+      expect.stringContaining('LLM #1'),
+      expect.stringContaining('LLM #2'),
+    ])
+    expect(wrapper.find('.event-row.kind-request').exists()).toBe(false)
+
+    await wrapper.find('.system-row').trigger('click')
+    expect(wrapper.findAll('.detail-tabs button').map(button => button.text())).toEqual([
+      '系统提示词',
+      '工具',
+    ])
+    expect(wrapper.find('.detail-pane').text()).toContain('你是测试轨迹助手。')
+    await wrapper.findAll('.detail-tabs button')[1]!.trigger('click')
+    expect(wrapper.find('.detail-pane').text()).toContain('读取测试数据')
+
+    await wrapper.find('.event-row.kind-tool').trigger('click')
+    expect(wrapper.find('.detail-pane').exists()).toBe(true)
+    expect(wrapper.findAll('.detail-tabs button').map(button => button.text())).toEqual([
+      '概述',
+      '参数',
+      '结果',
+      'Schema',
+      '计时',
+    ])
+    expect(wrapper.find('.detail-pane').text()).toContain('Craft Harness')
+  })
+
+  it('refreshes the active conversation from the server without reloading the catalog', async () => {
+    const conversation = { id: 'chat-refresh', name: '可刷新会话', createAt: String(Date.now()) }
+    const conversationDetails: Record<string, unknown> = {
+      'chat-refresh': {
+        ...conversation,
+        history: [{ role: 'user', content: '刷新前内容' }],
+      },
+    }
+    const fetchMock = createFetchMock({ conversations: [conversation], conversationDetails })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(ChatPage)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('刷新前内容')
+    expect(conversationDetailCalls(fetchMock, conversation.id)).toBe(1)
+    expect(wrapper.get('.conversation-refresh-button').attributes('aria-label'))
+      .toBe('刷新当前会话内容')
+
+    conversationDetails[conversation.id] = {
+      ...conversation,
+      history: [
+        { role: 'user', content: '刷新前内容' },
+        { role: 'assistant', content: '服务端新增内容' },
+      ],
+    }
+    await wrapper.get('.conversation-refresh-button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('服务端新增内容')
+    expect(wrapper.get('.message-count').text()).toBe('2 条消息')
+    expect(conversationDetailCalls(fetchMock, conversation.id)).toBe(2)
+    // 只刷新当前详情，不额外重载侧栏目录。
+    expect(callsFor(fetchMock, '/api/conversation/list')).toHaveLength(1)
+  })
+
   it('renames a conversation through PATCH and blocks invalid names locally', async () => {
     const conversation = { id: 'chat-rename', name: '待重命名', createAt: String(Date.now()) }
     const fetchMock = createFetchMock({
@@ -1158,9 +1452,22 @@ describe('chat page conversations', () => {
     await findConversationItem(wrapper, '待删除会话').get('.conversation-menu-button').trigger('click')
     await wrapper.get('.conversation-menu-delete').trigger('click')
     expect(callsFor(fetchMock, '/api/conversation/chat-delete', { method: 'DELETE' })).toHaveLength(0)
-    expect(wrapper.get('.conversation-delete-ask').text()).toContain('删除这个会话？')
-    // 选中“删除会话”后菜单收起，避免菜单压在确认行上。
+    const popconfirm = wrapper.get('.conversation-delete-popconfirm')
+    expect(popconfirm.attributes('role')).toBe('alertdialog')
+    expect(popconfirm.text()).toContain('删除这个会话？')
+    expect(popconfirm.text()).toContain('此操作无法撤销')
+    expect(popconfirm.get('.conversation-delete-confirm').text()).toBe('确认删除')
+    // 选中“删除会话”后菜单收起，确认浮层锚定显示，不再挤压列表项。
     expect(wrapper.find('.conversation-menu').exists()).toBe(false)
+    expect(findConversationItem(wrapper, '待删除会话').find('.conversation-delete-popconfirm').exists())
+      .toBe(false)
+
+    // 取消只关闭 Popconfirm，不产生破坏性请求；随后仍可再次打开并确认。
+    await popconfirm.get('.conversation-delete-cancel').trigger('click')
+    expect(wrapper.find('.conversation-delete-popconfirm').exists()).toBe(false)
+    expect(callsFor(fetchMock, '/api/conversation/chat-delete', { method: 'DELETE' })).toHaveLength(0)
+    await findConversationItem(wrapper, '待删除会话').get('.conversation-menu-button').trigger('click')
+    await wrapper.get('.conversation-menu-delete').trigger('click')
 
     await wrapper.get('.conversation-delete-confirm').trigger('click')
     await flushPromises()
