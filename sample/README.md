@@ -37,8 +37,8 @@ Server 在监听端口前自动执行尚未应用的数据库迁移，因此新�
 Bash 的服务器。它会依次：
 
 1. 检查 Node.js 版本和 `.env.local`；
-2. 使用锁文件安装两个 workspace 包的依赖；
-3. 打包 `craft-harness`、sample Server 和 Vue 前端；
+2. 使用锁文件安装两个 workspace 包的完整构建依赖，即使当前 shell 设置了 `NODE_ENV=production`；
+3. 分别打包并立即校验 `craft-harness`、sample Server 和 Vue 前端的产物；
 4. 安全停止由该脚本启动的旧进程；
 5. 执行尚未应用的 MySQL 迁移，创建或升级数据表；
 6. 使用 `nohup` 在后台启动 Fastify，并记录 PID 和日志。

@@ -73,9 +73,23 @@ validate_environment() {
 }
 
 validate_build() {
-  [[ -f "$PROJECT_ROOT/dist/index.js" ]] || fail '缺少 craft-harness 构建产物，请先运行 deploy。'
-  [[ -f "$SAMPLE_DIR/dist-server/index.js" ]] || fail '缺少 Server 构建产物，请先运行 deploy。'
-  [[ -f "$SAMPLE_DIR/dist/index.html" ]] || fail '缺少前端构建产物，请先运行 deploy。'
+  [[ -f "$PROJECT_ROOT/dist/index.js" ]] || fail "缺少 craft-harness 构建产物：$PROJECT_ROOT/dist/index.js。请运行 deploy。"
+  [[ -f "$SAMPLE_DIR/dist-server/index.js" ]] || fail "缺少 Server 构建产物：$SAMPLE_DIR/dist-server/index.js。请运行 deploy。"
+  [[ -f "$SAMPLE_DIR/dist/index.html" ]] || fail "缺少前端构建产物：$SAMPLE_DIR/dist/index.html。请运行 deploy。"
+}
+
+build_artifacts() {
+  log '打包 craft-harness...'
+  (cd -- "$PROJECT_ROOT" && "${PNPM_COMMAND[@]}" run build)
+  [[ -f "$PROJECT_ROOT/dist/index.js" ]] || fail "craft-harness 打包命令成功，但未生成 $PROJECT_ROOT/dist/index.js。"
+
+  log '打包 sample Server...'
+  "${PNPM_COMMAND[@]}" --dir "$SAMPLE_DIR" run build:server
+  [[ -f "$SAMPLE_DIR/dist-server/index.js" ]] || fail "Server 打包命令成功，但未生成 $SAMPLE_DIR/dist-server/index.js。"
+
+  log '打包 sample 前端...'
+  "${PNPM_COMMAND[@]}" --dir "$SAMPLE_DIR" run build:web
+  [[ -f "$SAMPLE_DIR/dist/index.html" ]] || fail "前端打包命令成功，但未生成 $SAMPLE_DIR/dist/index.html。"
 }
 
 read_backend_port() {
@@ -226,9 +240,8 @@ deploy() {
   validate_environment
 
   log '安装 workspace 依赖...'
-  (cd -- "$PROJECT_ROOT" && "${PNPM_COMMAND[@]}" install --frozen-lockfile)
-  log '打包 craft-harness、Server 和前端...'
-  "${PNPM_COMMAND[@]}" --dir "$SAMPLE_DIR" build
+  (cd -- "$PROJECT_ROOT" && "${PNPM_COMMAND[@]}" install --frozen-lockfile --prod=false)
+  build_artifacts
   stop_services
   log '执行 MySQL 数据库迁移...'
   "${PNPM_COMMAND[@]}" --dir "$SAMPLE_DIR" db:migrate
