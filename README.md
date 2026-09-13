@@ -6,6 +6,8 @@ Craft Harness 将模型调用、工具执行、权限审批、预算控制、取
 它不提供 HTTP Server 或 UI，你可以把它接入 Fastify、Express、Worker、CLI 或已有后端。
 现有后端可以把登录用户或租户 ID 映射为 `scopeId`，并将角色、权限等可信鉴权结果作为运行上下文传给工具。
 
+在线体验：[官方 Demo](https://ch.wangsr.vip/)
+
 > OpenAI SDK 负责与模型服务通信；Craft Harness 负责模型返回工具调用之后的完整执行过程。
 
 ## 它解决什么问题
@@ -366,31 +368,6 @@ pnpm --dir sample dev
 - [工具审批流程](./docs/learning/tool-approval-flow.md)
 - [总体架构](./docs/standards/architecture.md)
 - [全部文档](./docs/README.md)
-
-## 本仓库开发
-
-根目录命令只检查和构建 `craft-harness` 包：
-
-```bash
-pnpm install
-pnpm test
-pnpm typecheck
-pnpm lint
-pnpm build
-pnpm smoke:pack
-```
-
-`sample/` 是独立的私有 workspace 包，自行维护依赖和开发命令：
-
-```bash
-pnpm --dir sample test
-pnpm --dir sample typecheck
-pnpm --dir sample lint
-pnpm --dir sample build
-```
-
-发布前使用 `pnpm release:check` 运行库的完整检查。案例通过 `workspace:*` 依赖公开的 `craft-harness`
-包；案例脚本会先构建库。`pnpm smoke:pack` 则从真实 tarball 验证 `exports`、发布文件白名单和类型声明。
 
 ## License
 
