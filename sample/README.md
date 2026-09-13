@@ -3,7 +3,7 @@
 这是一个**完整可运行**的案例应用，演示如何把 [craft-harness](../README.md) 组装成一个真实 Runtime：
 
 - **Fastify** 提供 HTTP 与 SSE，把 `AgentOutputEvent` 原样直出给前端（不裁剪、不二次包装）
-- **PostgreSQL** 作为 `SessionStore` 实现，配合可搜索的多用户会话目录
+- **MySQL 8.0+** 作为 `SessionStore` 实现，配合可搜索的多用户会话目录
 - **Vue 3 + Vite** 聊天界面：流式思考展示、工具审批卡片、会话列表与历史恢复
 
 它是独立的私有 pnpm workspace 包，自行维护运行依赖、开发依赖和脚本。案例通过 `workspace:*` 依赖
@@ -15,7 +15,7 @@
 # 1. 在仓库根配置案例环境变量，复制后填写真实密钥
 cp sample/.env.example sample/.env.local
 
-# 2. 预先创建 PostgreSQL 数据库，并把连接串写入 .env.local
+# 2. 预先创建 MySQL 数据库，并把 mysql:// 连接串写入 .env.local
 
 # 3. 在仓库根安装全部 workspace 依赖
 pnpm install
@@ -40,7 +40,7 @@ Bash 的服务器。它会依次：
 2. 使用锁文件安装两个 workspace 包的依赖；
 3. 打包 `craft-harness`、sample Server 和 Vue 前端；
 4. 安全停止由该脚本启动的旧进程；
-5. 执行尚未应用的 PostgreSQL 迁移，创建或升级数据表；
+5. 执行尚未应用的 MySQL 迁移，创建或升级数据表；
 6. 使用 `nohup` 在后台启动 Fastify，并记录 PID 和日志。
 
 生产进程由打包后的 `sample/dist-server/index.js` 启动。Fastify 同时提供 API、SSE 和 `sample/dist` 中的静态
@@ -49,11 +49,28 @@ Bash 的服务器。它会依次：
 ### 服务器准备
 
 - Node.js 20 或更高版本，并提供 `pnpm` 或 Corepack；
-- 一个已经创建好的 PostgreSQL 数据库和具备建表、建索引、执行迁移权限的数据库用户；
+- 一个已经创建好的 MySQL 8.0+ 数据库和具备建表、建索引、执行迁移权限的普通数据库用户；
 - 从 Git 获取的完整仓库；文档问答工具还需要根 `README.md` 和 `docs/`；
 - 推荐使用普通部署用户运行，不要使用 root 保存模型和数据库密钥。
 
-脚本负责创建和升级**数据表**，不负责安装 PostgreSQL、创建数据库或创建数据库用户。
+脚本负责创建和升级**数据表**，不负责安装 MySQL、创建数据库或创建数据库用户。
+
+#### 使用 1Panel MySQL
+
+在 1Panel 的“数据库 → MySQL”中创建 `craft_agent_dev`，为它创建独立普通用户（例如
+`craft_agent`），不要授予超级用户权限。sample 由本部署脚本直接运行在宿主机时，应使用 1Panel“连接信息”中
+标注为“非容器环境或外部连接”的地址；只有把 sample 也放进同一 Docker 网络时，才能使用数据库容器名。
+
+先验证端口可达，再执行迁移：
+
+```bash
+nc -vz <数据库地址> 3306
+pnpm --dir sample db:migrate
+pnpm --dir sample db:check
+```
+
+端口可达只代表 TCP 可连接；最终以 `db:migrate` 能完成账号认证并创建三张业务表为准。密码包含 URL 保留字符时，
+必须先进行百分号编码。不要为了让应用连接而把 MySQL 账号设为超级用户，也不要把 3306 无限制暴露到公网。
 
 ### 首次部署
 
@@ -64,7 +81,7 @@ cd hand-crafted-agent
 cp sample/.env.example sample/.env.local
 chmod 600 sample/.env.local
 
-# 编辑模型密钥和 PostgreSQL 连接串，同时按需修改模型目录。
+# 编辑模型密钥和 MySQL 连接串，同时按需修改模型目录。
 vi sample/.env.local
 vi sample/config/models.json
 
@@ -130,7 +147,7 @@ server {
 ```
 
 将 `agent.example.com` 和端口替换为实际配置，检查后重新加载 Nginx，并使用 Certbot 或现有证书系统启用 HTTPS。
-不要把 PostgreSQL 端口或 Fastify 的内部端口直接暴露到公网。
+不要把 MySQL 端口或 Fastify 的内部端口直接暴露到公网。
 
 ## 模型目录：有哪些模型、每个模型能用哪些推理等级
 
@@ -189,7 +206,7 @@ Runtime 只创建一个 `DeepSeekAdapter` 和一个 `Agent`。每次请求把目
 | ------------------------------- | ---- | ---------------------------------------------- |
 | `DEEPSEEK_API_KEY`              | 是   | 供应商密钥                                     |
 | `DEEPSEEK_BASE_URL`             | 否   | 默认 `https://api.deepseek.com`                |
-| `CRAFT_AGENT_DATABASE_URL`      | 是   | PostgreSQL 连接串                              |
+| `CRAFT_AGENT_DATABASE_URL`      | 是   | MySQL `mysql://` 连接串                        |
 | `CRAFT_AGENT_DATABASE_POOL_MAX` | 否   | 连接池上限                                     |
 | `CRAFT_AGENT_DATABASE_SSL`      | 否   | 是否启用 SSL                                   |
 | `PORT`                          | 否   | 后端端口，默认 `3000`                          |
@@ -244,7 +261,7 @@ pnpm --dir sample test           # 案例单元测试与界面测试
 pnpm --dir sample typecheck      # 案例 TypeScript/Vue 类型检查
 pnpm --dir sample lint           # 案例代码规范检查
 pnpm --dir sample build          # 构建根库、案例 Server 和前端
-pnpm --dir sample db:test-store  # PostgreSQL Store 契约测试（需要数据库）
+pnpm --dir sample db:test-store  # MySQL Store 契约测试（需要数据库）
 ```
 
 ## 目录
@@ -254,7 +271,7 @@ sample/
 ├── package.json           案例自身的依赖与开发命令
 ├── scripts/deploy.sh      Linux 安装、迁移、打包和后台运行脚本
 ├── src/
-│   ├── server/            Fastify 应用、PostgreSQL Store、工具与 Guard、部署配置
+│   ├── server/            Fastify 应用、MySQL Store、工具与 Guard、部署配置
 │   ├── pages/index.vue    聊天界面
 │   ├── composables/ styles/ App.vue main.ts
 ├── test/                  HTTP/SSE 协议、工具、聊天页面与 Store 契约测试

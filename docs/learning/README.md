@@ -10,7 +10,7 @@
 3. [ModelAdapter：从供应商 chunk 到 Agent](./model-adapter.md)
 4. [自定义模型 Adapter 开发实践](./custom-model-adapter.md)
 5. [Session Log：从可变消息数组到事实日志](./session-log.md)
-6. [持久化 SessionStore：从内存调试到 PostgreSQL](./persistent-session-store.md)
+6. [持久化 SessionStore：从内存调试到关系数据库](./persistent-session-store.md)
 7. [Agent Loop：从用户输入到确定终态](./agent-loop.md)
 8. [harness 统一入口：从配置到会话查询](./harness-facade.md)
 9. [工具审批全链路：局部 Guard、全局 Guard 与用户确认](./tool-approval-flow.md)

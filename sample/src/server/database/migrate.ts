@@ -1,12 +1,12 @@
 import { existsSync } from 'node:fs'
 import process, { loadEnvFile } from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { runPostgresMigrations } from './migrations'
+import { runMySqlMigrations } from './migrations'
 import {
-  createPostgresPool,
-  inspectPostgresConnection,
-  readPostgresRuntimeConfig,
-} from './postgres'
+  createMySqlPool,
+  inspectMySqlConnection,
+  readMySqlRuntimeConfig,
+} from './mysql'
 
 const envFile = fileURLToPath(new URL('../../../.env.local', import.meta.url))
 if (existsSync(envFile))
@@ -14,11 +14,11 @@ if (existsSync(envFile))
 
 /** 按文件名顺序执行尚未应用的数据库迁移，并记录版本。 */
 async function main(): Promise<void> {
-  const pool = createPostgresPool(readPostgresRuntimeConfig())
+  const pool = createMySqlPool(readMySqlRuntimeConfig())
   try {
-    const migration = await runPostgresMigrations(pool)
-    const info = await inspectPostgresConnection(pool)
-    process.stdout.write(`PostgreSQL 迁移完成：${JSON.stringify({ migration, database: info }, null, 2)}\n`)
+    const migration = await runMySqlMigrations(pool)
+    const info = await inspectMySqlConnection(pool)
+    process.stdout.write(`MySQL 迁移完成：${JSON.stringify({ migration, database: info }, null, 2)}\n`)
   }
   finally {
     await pool.end()
@@ -26,6 +26,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error('PostgreSQL 迁移失败：', error)
+  console.error('MySQL 迁移失败：', error)
   process.exitCode = 1
 })

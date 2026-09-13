@@ -28,7 +28,7 @@
 - [ModelAdapter：从供应商 chunk 到 Agent](./learning/model-adapter.md)
 - [自定义模型 Adapter 开发实践](./learning/custom-model-adapter.md)
 - [Session Log：从可变消息数组到事实日志](./learning/session-log.md)
-- [持久化 SessionStore：从内存调试到 PostgreSQL](./learning/persistent-session-store.md)
+- [持久化 SessionStore：从内存调试到关系数据库](./learning/persistent-session-store.md)
 - [Agent Loop：从用户输入到确定终态](./learning/agent-loop.md)
 - [harness 统一入口：从配置到会话查询](./learning/harness-facade.md)
 - [工具审批全链路：从风险评估到继续 AgentLoop](./learning/tool-approval-flow.md)

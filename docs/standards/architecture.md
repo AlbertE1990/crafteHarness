@@ -56,9 +56,9 @@ sample/                         # 官方案例应用：库的使用者，不参�
   package.json                  # 独立私有 workspace 包；维护案例依赖和脚本
   src/server/                   # Fastify Runtime：环境变量、Agent 组装、SSE 与展示投影
   src/pages/index.vue           # 前端页面
-  database/migrations/          # PostgreSQL Session Log 迁移
+  database/migrations/          # MySQL Session Log 迁移
   vite.config.ts                # 案例的 Vite 与 vitest 配置
-  test/                         # 案例测试：Runtime、工具、页面与 PostgreSQL 契约
+  test/                         # 案例测试：Runtime、工具、页面与 MySQL 契约
 
 test/                           # 库测试
   support/                      # Scripted Adapter 与协议契约探针
@@ -83,7 +83,7 @@ test/                           # 库测试
 ### 2.3 “库不得反向依赖 sample”是硬边界
 
 依赖方向只能从 `sample/` 指向 `src/`，反向引用一律禁止：库一旦导入 `sample/`，发布出去的包就会要求使用者
-安装 Fastify、`pg` 和 Vue 才能加载。`test/model-boundary.test.ts` 会遍历 `src/**` 并断言其中不出现指向
+安装 Fastify、`mysql2` 和 Vue 才能加载。`test/model-boundary.test.ts` 会遍历 `src/**` 并断言其中不出现指向
 `sample/` 的导入，使这条边界由测试守住，而不是靠约定。
 
 ## 3. 三层依赖边界

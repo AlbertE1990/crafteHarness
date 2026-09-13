@@ -26,7 +26,7 @@
     "db:check": "tsx src/server/database/check.ts",
     "db:migrate": "tsx src/server/database/migrate.ts",
     "predb:test-store": "pnpm build:harness",
-    "db:test-store": "tsx test/postgres-session-store.contract.ts"
+    "db:test-store": "tsx test/mysql-session-store.contract.ts"
   },
   "dependencies": {
     "@fastify/static": "catalog:",
@@ -34,7 +34,7 @@
     "craft-harness": "workspace:*",
     "fastify": "catalog:",
     "markdown-it": "catalog:",
-    "pg": "catalog:",
+    "mysql2": "catalog:",
     "vue": "catalog:frontend",
     "vue-router": "catalog:frontend",
     "zod": "catalog:"
@@ -43,7 +43,6 @@
     "@antfu/eslint-config": "catalog:dev",
     "@iconify-json/carbon": "catalog:build",
     "@types/node": "catalog:dev",
-    "@types/pg": "catalog:",
     "@unocss/eslint-plugin": "catalog:dev",
     "@vitejs/plugin-vue": "catalog:build",
     "@vue-macros/volar": "catalog:dev",

@@ -1,9 +1,9 @@
 // @vitest-environment node
 
 import type { AgentEvent } from 'craft-harness'
-import type { Pool, PoolClient } from 'pg'
+import type { MySqlConnection, MySqlPool } from '../src/server/database/mysql'
 import { describe, expect, it, vi } from 'vitest'
-import { PostgresTrajectoryStore } from '../src/server/stores/postgres-trajectory-store'
+import { MySqlTrajectoryStore } from '../src/server/stores/mysql-trajectory-store'
 
 function event(
   value: Partial<AgentEvent> & Pick<AgentEvent, 'type'>,
@@ -17,17 +17,17 @@ function event(
   } as AgentEvent
 }
 
-describe('postgres trajectory store', () => {
+describe('mysql trajectory store', () => {
   it('flushes a terminal run in one transaction and keeps only the first chunk per step', async () => {
     const clientQuery = vi.fn(async (_sql: string, _values?: readonly unknown[]) => ({ rows: [] }))
     const client = {
       query: clientQuery,
       release: vi.fn(),
-    } as unknown as PoolClient
+    } as unknown as MySqlConnection
     const pool = {
       connect: vi.fn(async () => client),
-    } as unknown as Pool
-    const store = new PostgresTrajectoryStore(pool)
+    } as unknown as MySqlPool
+    const store = new MySqlTrajectoryStore(pool)
 
     await store.bindSession('scope-trace', 'session-trace')
     await store.record(event({
@@ -93,11 +93,11 @@ describe('postgres trajectory store', () => {
     const client = {
       query: clientQuery,
       release: vi.fn(),
-    } as unknown as PoolClient
+    } as unknown as MySqlConnection
     const pool = {
       connect: vi.fn(async () => client),
-    } as unknown as Pool
-    const store = new PostgresTrajectoryStore(pool)
+    } as unknown as MySqlPool
+    const store = new MySqlTrajectoryStore(pool)
 
     await store.record(event({
       type: 'agent.run.failed',

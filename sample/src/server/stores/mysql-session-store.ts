@@ -16,7 +16,7 @@ import type {
   SessionStoreOperation,
   SessionSummary,
 } from 'craft-harness'
-import type { Pool, PoolClient } from 'pg'
+import type { MySqlConnection, MySqlPool } from '../database/mysql'
 import { randomUUID } from 'node:crypto'
 import { SessionStoreError } from 'craft-harness'
 
@@ -38,7 +38,7 @@ export interface SessionCatalogMutations {
   remove: (identity: SessionIdentity) => Promise<boolean>
 }
 
-/** PostgreSQL bigint 默认以字符串返回；本类型明确记录数据库边界。 */
+/** MySQL bigint 配置为字符串返回；本类型明确记录数据库边界。 */
 interface SessionVersionRow {
   readonly version: string | number
   readonly session_name?: string | null
@@ -65,20 +65,20 @@ interface SessionSummaryRow extends SessionVersionRow {
   readonly created_at: Date | string
 }
 
-/** node-postgres 暴露的可识别数据库错误字段。 */
-interface PostgresErrorLike {
+/** mysql2 暴露的可识别数据库错误字段。 */
+interface MySqlErrorLike {
   readonly code?: unknown
-  readonly constraint?: unknown
+  readonly errno?: unknown
 }
 
 /**
- * 使用 PostgreSQL 实现的生产级 append-only Session Store。
+ * 使用 MySQL 实现的生产级 append-only Session Store。
  *
  * 本实现不维护进程内会话副本：append/read/list 都直接访问数据库。事务和行锁只负责
  * 单次写入期间的并发一致性，连接释放后不会在应用内缓存对话历史。
  */
-export class PostgresSessionStore implements SessionCatalogStore, SessionCatalogMutations {
-  constructor(readonly pool: Pool) {}
+export class MySqlSessionStore implements SessionCatalogStore, SessionCatalogMutations {
+  constructor(readonly pool: MySqlPool) {}
 
   /**
    * 原子追加一批 Session Event。
@@ -111,7 +111,7 @@ export class PostgresSessionStore implements SessionCatalogStore, SessionCatalog
     try {
       await client.query('BEGIN')
 
-      // 先尝试建立零版本目录行；若会话已存在，ON CONFLICT 不会覆盖原数据。
+      // 先尝试建立零版本目录行；若会话已存在，不覆盖原数据。
       await client.query(`
         INSERT INTO craft_agent_sessions (
           scope_id,
@@ -122,14 +122,21 @@ export class PostgresSessionStore implements SessionCatalogStore, SessionCatalog
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, 0, $4::jsonb, $5::timestamptz, $5::timestamptz)
-        ON CONFLICT (scope_id, session_id) DO NOTHING
-      `, [request.scopeId, request.sessionId, sessionName, serializeJson(metadata), timestamps[0]])
+        VALUES (?, ?, ?, 0, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE scope_id = VALUES(scope_id)
+      `, [
+        request.scopeId,
+        request.sessionId,
+        sessionName,
+        serializeJson(metadata),
+        toDatabaseTimestamp(timestamps[0]!),
+        toDatabaseTimestamp(timestamps[0]!),
+      ])
 
       const versionResult = await client.query<SessionVersionRow>(`
         SELECT version
         FROM craft_agent_sessions
-        WHERE scope_id = $1 AND session_id = $2
+        WHERE scope_id = ? AND session_id = ?
         FOR UPDATE
       `, [request.scopeId, request.sessionId])
       const versionRow = versionResult.rows[0]
@@ -172,9 +179,14 @@ export class PostgresSessionStore implements SessionCatalogStore, SessionCatalog
       const nextVersion = currentVersion + appended.length
       await client.query(`
         UPDATE craft_agent_sessions
-        SET version = $3, updated_at = $4::timestamptz
-        WHERE scope_id = $1 AND session_id = $2
-      `, [request.scopeId, request.sessionId, nextVersion, timestamps.at(-1)])
+        SET version = ?, updated_at = ?
+        WHERE scope_id = ? AND session_id = ?
+      `, [
+        nextVersion,
+        toDatabaseTimestamp(timestamps.at(-1)!),
+        request.scopeId,
+        request.sessionId,
+      ])
       await client.query('COMMIT')
 
       return deepFreeze({
@@ -198,7 +210,7 @@ export class PostgresSessionStore implements SessionCatalogStore, SessionCatalog
           cause: error,
         })
       }
-      throw operationFailed('append', request.sessionId, 'PostgreSQL 追加 Session Event 失败', error)
+      throw operationFailed('append', request.sessionId, 'MySQL 追加 Session Event 失败', error)
     }
     finally {
       client.release()
@@ -219,7 +231,7 @@ export class PostgresSessionStore implements SessionCatalogStore, SessionCatalog
       const versionResult = await this.pool.query<SessionVersionRow>(`
         SELECT version, session_name
         FROM craft_agent_sessions
-        WHERE scope_id = $1 AND session_id = $2
+        WHERE scope_id = ? AND session_id = ?
       `, [scopeId, sessionId])
       const sessionRow = versionResult.rows[0]
       const latestVersion = sessionRow
@@ -246,12 +258,12 @@ export class PostgresSessionStore implements SessionCatalogStore, SessionCatalog
           payload_json,
           created_at
         FROM craft_agent_session_events
-        WHERE scope_id = $1
-          AND session_id = $2
-          AND sequence > $3
-          AND sequence <= $4
+        WHERE scope_id = ?
+          AND session_id = ?
+          AND sequence > ?
+          AND sequence <= ?
         ORDER BY sequence ASC
-        LIMIT $5
+        LIMIT ?
       `, [scopeId, sessionId, afterSequence, snapshotVersion, limit])
       const events = eventResult.rows.map(row => restoreEvent(row, scopeId, sessionId))
       const nextAfterSequence = events.at(-1)?.sequence ?? afterSequence
@@ -270,7 +282,7 @@ export class PostgresSessionStore implements SessionCatalogStore, SessionCatalog
     catch (error) {
       if (error instanceof SessionStoreError)
         throw error
-      throw operationFailed('read', sessionId, 'PostgreSQL 读取 Session Event 失败', error)
+      throw operationFailed('read', sessionId, 'MySQL 读取 Session Event 失败', error)
     }
   }
 
@@ -288,7 +300,7 @@ export class PostgresSessionStore implements SessionCatalogStore, SessionCatalog
         const cursorResult = await this.pool.query<{ catalog_order: string | number }>(`
           SELECT catalog_order
           FROM craft_agent_sessions
-          WHERE scope_id = $1 AND session_id = $2
+          WHERE scope_id = ? AND session_id = ?
         `, [options.scopeId, options.afterSessionId])
         const cursor = cursorResult.rows[0]
         if (!cursor)
@@ -305,12 +317,18 @@ export class PostgresSessionStore implements SessionCatalogStore, SessionCatalog
       const result = await this.pool.query<SessionSummaryRow>(`
         SELECT scope_id, session_id, session_name, version, metadata_json, created_at
         FROM craft_agent_sessions
-        WHERE scope_id = $1
-          AND catalog_order > $2
-          AND ($3::text IS NULL OR session_name ILIKE '%' || $3 || '%' ESCAPE '\\')
+        WHERE scope_id = ?
+          AND catalog_order > ?
+          AND (? IS NULL OR session_name LIKE ? ESCAPE '!')
         ORDER BY catalog_order ASC
-        LIMIT $4
-      `, [options.scopeId, afterCatalogOrder, search ?? null, limit + 1])
+        LIMIT ?
+      `, [
+        options.scopeId,
+        afterCatalogOrder,
+        search ?? null,
+        search === undefined ? null : `%${search}%`,
+        limit + 1,
+      ])
       const hasMore = result.rows.length > limit
       const sessions = result.rows.slice(0, limit).map(row => createSessionSummary(row))
       const nextAfterSessionId = sessions.at(-1)?.sessionId
@@ -324,7 +342,7 @@ export class PostgresSessionStore implements SessionCatalogStore, SessionCatalog
     catch (error) {
       if (error instanceof SessionStoreError)
         throw error
-      throw operationFailed('list', '', 'PostgreSQL 读取 Session 目录失败', error)
+      throw operationFailed('list', '', 'MySQL 读取 Session 目录失败', error)
     }
   }
 
@@ -332,36 +350,49 @@ export class PostgresSessionStore implements SessionCatalogStore, SessionCatalog
    * 更新会话的展示名称，成功返回更新后的摘要，会话不存在返回 undefined。
    *
    * 只改目录投影，不改写 `session.created` 事件：历史事实保持原样，当前名称以目录为准，
-   * 因此 read()/list() 会立刻看到新名称。返回值直接来自 UPDATE ... RETURNING，
-   * 避免"改名成功但随后读不到"的竞态。
+   * 因此 read()/list() 会立刻看到新名称。更新和读取在同一事务与连接中完成。
    */
   async rename(identity: SessionIdentity, name: string): Promise<SessionSummary | undefined> {
     validateIdentifier(identity.scopeId, 'scopeId')
     validateIdentifier(identity.sessionId, 'sessionId')
     validateSessionName(name)
 
+    const client = await connectForAppend(this.pool, identity.sessionId)
     try {
-      const result = await this.pool.query<SessionSummaryRow>(`
+      await client.query('BEGIN')
+      const result = await client.query(`
         UPDATE craft_agent_sessions
-        SET session_name = $3, updated_at = now()
-        WHERE scope_id = $1 AND session_id = $2
-        RETURNING scope_id, session_id, session_name, version, metadata_json, created_at
-      `, [identity.scopeId, identity.sessionId, name.trim()])
-      const row = result.rows[0]
+        SET session_name = ?, updated_at = UTC_TIMESTAMP(3)
+        WHERE scope_id = ? AND session_id = ?
+      `, [name.trim(), identity.scopeId, identity.sessionId])
+      if (result.rowCount === 0) {
+        await client.query('COMMIT')
+        return undefined
+      }
+      const selected = await client.query<SessionSummaryRow>(`
+        SELECT scope_id, session_id, session_name, version, metadata_json, created_at
+        FROM craft_agent_sessions
+        WHERE scope_id = ? AND session_id = ?
+      `, [identity.scopeId, identity.sessionId])
+      await client.query('COMMIT')
+      const row = selected.rows[0]
       return row ? createSessionSummary(row) : undefined
     }
     catch (error) {
+      await safelyRollback(client)
       if (error instanceof SessionStoreError)
         throw error
-      throw operationFailed('append', identity.sessionId, 'PostgreSQL 更新会话名称失败', error)
+      throw operationFailed('append', identity.sessionId, 'MySQL 更新会话名称失败', error)
+    }
+    finally {
+      client.release()
     }
   }
 
   /**
    * 删除会话及其全部事件。
    *
-   * 事件表对目录表有外键且没有级联删除，因此必须在同一事务里先删事件再删目录行，
-   * 避免失败时留下半删除状态。这是唯一会移除已记录事实的操作，见本文件顶部说明。
+   * 事件表先显式删除，轨迹表则由外键级联删除；全部操作放在同一事务中，避免半删除状态。
    */
   async remove(identity: SessionIdentity): Promise<boolean> {
     validateIdentifier(identity.scopeId, 'scopeId')
@@ -372,11 +403,11 @@ export class PostgresSessionStore implements SessionCatalogStore, SessionCatalog
       await client.query('BEGIN')
       await client.query(`
         DELETE FROM craft_agent_session_events
-        WHERE scope_id = $1 AND session_id = $2
+        WHERE scope_id = ? AND session_id = ?
       `, [identity.scopeId, identity.sessionId])
       const result = await client.query(`
         DELETE FROM craft_agent_sessions
-        WHERE scope_id = $1 AND session_id = $2
+        WHERE scope_id = ? AND session_id = ?
       `, [identity.scopeId, identity.sessionId])
       await client.query('COMMIT')
       return (result.rowCount ?? 0) > 0
@@ -385,7 +416,7 @@ export class PostgresSessionStore implements SessionCatalogStore, SessionCatalog
       await safelyRollback(client)
       if (error instanceof SessionStoreError)
         throw error
-      throw operationFailed('append', identity.sessionId, 'PostgreSQL 删除会话失败', error)
+      throw operationFailed('append', identity.sessionId, 'MySQL 删除会话失败', error)
     }
     finally {
       client.release()
@@ -429,17 +460,17 @@ function createSessionSummary(
 }
 
 /** 连接池获取连接失败时也遵守 SessionStore 的稳定错误协议。 */
-async function connectForAppend(pool: Pool, sessionId: string): Promise<PoolClient> {
+async function connectForAppend(pool: MySqlPool, sessionId: string): Promise<MySqlConnection> {
   try {
     return await pool.connect()
   }
   catch (error) {
-    throw operationFailed('append', sessionId, 'PostgreSQL 获取写入连接失败', error)
+    throw operationFailed('append', sessionId, 'MySQL 获取写入连接失败', error)
   }
 }
 
 /** 在当前事务中插入一条事件；调用方负责版本锁和提交。 */
-async function insertEvent(client: PoolClient, event: SessionEvent): Promise<void> {
+async function insertEvent(client: MySqlConnection, event: SessionEvent): Promise<void> {
   const runId = 'runId' in event ? (event.runId ?? null) : null
   const turnId = 'turnId' in event ? (event.turnId ?? null) : null
   await client.query(`
@@ -454,7 +485,7 @@ async function insertEvent(client: PoolClient, event: SessionEvent): Promise<voi
       payload_json,
       created_at
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::timestamptz)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
     event.scopeId,
     event.sessionId,
@@ -464,7 +495,7 @@ async function insertEvent(client: PoolClient, event: SessionEvent): Promise<voi
     runId,
     turnId,
     serializeJson(createEventPayload(event)),
-    event.timestamp,
+    toDatabaseTimestamp(event.timestamp),
   ])
 }
 
@@ -676,22 +707,31 @@ function normalizeSearch(value: string | undefined): string | undefined {
     return undefined
   if (typeof value !== 'string' || !value.trim())
     throw invalidArgument('', 'search 必须是非空字符串')
-  return value.trim().replace(/[\\%_]/g, '\\$&')
+  return value.trim().replace(/[!%_]/g, '!$&')
 }
 
-/** 将 jsonb 值收窄为普通对象，数组和 null 都视为持久化数据损坏。 */
+/** 将 JSON 值收窄为普通对象，兼容 mysql2 返回对象或 JSON 文本。 */
 function restoreJsonObject(
   value: unknown,
   field: string,
   sessionId: string,
   operation: SessionStoreOperation = 'read',
 ): JsonObject {
-  if (typeof value !== 'object' || value === null || Array.isArray(value))
+  let restored = value
+  if (typeof restored === 'string') {
+    try {
+      restored = JSON.parse(restored) as unknown
+    }
+    catch {
+      throw operationFailed(operation, sessionId, `${field} 不是有效 JSON`)
+    }
+  }
+  if (typeof restored !== 'object' || restored === null || Array.isArray(restored))
     throw operationFailed(operation, sessionId, `${field} 必须是 JSON 对象`)
-  return value as JsonObject
+  return restored as JsonObject
 }
 
-/** 将 PostgreSQL bigint 安全转换为 JavaScript number，拒绝超出安全整数范围。 */
+/** 将 MySQL bigint 安全转换为 JavaScript number，拒绝超出安全整数范围。 */
 function parseDatabaseInteger(
   value: string | number,
   field: string,
@@ -714,6 +754,11 @@ function toIsoTimestamp(
   if (!Number.isFinite(date.getTime()))
     throw operationFailed(operation, sessionId, '数据库包含无效时间戳')
   return date.toISOString()
+}
+
+/** mysql2 在 UTC 时区下安全编码 Date，避免把 ISO 8601 的 Z 后缀直接交给 DATETIME。 */
+function toDatabaseTimestamp(value: string): Date {
+  return new Date(value)
 }
 
 /** 事件身份与发生时刻由产生方写入；缺省时由 Store 兜底生成。 */
@@ -752,7 +797,7 @@ function validateNonNegativeInteger(value: number, field: string, sessionId: str
     throw invalidArgument(sessionId, `${field} 必须是非负安全整数`)
 }
 
-/** 验证分页大小并保持 Memory/PostgreSQL Store 相同的上限。 */
+/** 验证分页大小并保持 Memory/MySQL Store 相同的上限。 */
 function validatePageSize(value: number, sessionId: string): void {
   if (!Number.isSafeInteger(value) || value < 1)
     throw invalidArgument(sessionId, 'limit 必须是正安全整数')
@@ -769,7 +814,7 @@ function invalidArgument(sessionId: string, message: string): SessionStoreError 
   })
 }
 
-/** 保留底层异常为 cause，后续 DiagnosticSink 可记录完整 stack 和 PostgreSQL 详情。 */
+/** 保留底层异常为 cause，后续 DiagnosticSink 可记录完整 stack 和 MySQL 详情。 */
 function operationFailed(
   operation: SessionStoreOperation,
   sessionId: string,
@@ -786,7 +831,7 @@ function operationFailed(
 }
 
 /** 回滚失败不能覆盖最初的数据库错误。 */
-async function safelyRollback(client: PoolClient): Promise<void> {
+async function safelyRollback(client: MySqlConnection): Promise<void> {
   try {
     await client.query('ROLLBACK')
   }
@@ -795,14 +840,12 @@ async function safelyRollback(client: PoolClient): Promise<void> {
   }
 }
 
-/** 识别 PostgreSQL 唯一约束冲突（SQLSTATE 23505）。 */
+/** 识别 MySQL 唯一约束冲突。 */
 function isUniqueViolation(error: unknown): boolean {
   if (typeof error !== 'object' || error === null)
     return false
-  const postgresError = error as PostgresErrorLike
-  return postgresError.code === '23505'
-    && (postgresError.constraint === 'craft_agent_session_events_event_id_key'
-      || postgresError.constraint === undefined)
+  const mysqlError = error as MySqlErrorLike
+  return mysqlError.code === 'ER_DUP_ENTRY' || mysqlError.errno === 1062
 }
 
 /** 深度冻结从数据库恢复的对象，避免调用方在进程内篡改本次读取结果。 */

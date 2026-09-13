@@ -6,15 +6,15 @@ import Agent from 'craft-harness'
 import { DeepSeekAdapter } from 'craft-harness/adapters'
 import { serverToolGuard, serverTools } from './agent-tools'
 import { createServerApp } from './app'
-import { runPostgresMigrations } from './database/migrations'
+import { runMySqlMigrations } from './database/migrations'
 import {
-  createPostgresPool,
-  inspectPostgresConnection,
-  readPostgresRuntimeConfig,
-} from './database/postgres'
+  createMySqlPool,
+  inspectMySqlConnection,
+  readMySqlRuntimeConfig,
+} from './database/mysql'
 import { readDeepSeekRuntimeConfig } from './model-config'
-import { PostgresSessionStore } from './stores/postgres-session-store'
-import { PostgresTrajectoryStore } from './stores/postgres-trajectory-store'
+import { MySqlSessionStore } from './stores/mysql-session-store'
+import { MySqlTrajectoryStore } from './stores/mysql-trajectory-store'
 
 // 相对模块定位 .env.local，而不是相对当前工作目录：脚本从仓库根执行，配置文件在 sample/。
 // 文件缺失时继续使用宿主环境变量，便于容器和 CI 直接注入。
@@ -37,9 +37,9 @@ if (process.env.NODE_ENV === 'production' && !existsSync(staticIndex))
 const { apiKey, baseURL, defaultModel, models, ...providerInfo } = readDeepSeekRuntimeConfig(process.env)
 
 // Runtime 持有连接池生命周期；craft-harness 只接收 SessionStore 协议。
-const databasePool = createPostgresPool(readPostgresRuntimeConfig())
-const postgresSessionStore = new PostgresSessionStore(databasePool)
-const postgresTrajectoryStore = new PostgresTrajectoryStore(databasePool)
+const databasePool = createMySqlPool(readMySqlRuntimeConfig())
+const mysqlSessionStore = new MySqlSessionStore(databasePool)
+const mysqlTrajectoryStore = new MySqlTrajectoryStore(databasePool)
 
 const defaultCapability = models.find(model => model.id === defaultModel)
 if (!defaultCapability)
@@ -69,9 +69,9 @@ const agent = new Agent({
     approvalTimeoutMs: 120_000,
   },
   // 应用只注入持久化 Port；Session ID 由 Agent 使用固定前缀和 UUID 生成。
-  sessionStore: postgresSessionStore,
+  sessionStore: mysqlSessionStore,
   observability: {
-    onTrace: postgresTrajectoryStore.record,
+    onTrace: mysqlTrajectoryStore.record,
   },
 })
 
@@ -80,16 +80,16 @@ const fastify = createServerApp({
   model: { ...providerInfo, defaultModel, models },
   // 名称是可变展示属性，删除会移除事实；两者都是应用层能力，不进库的 append-only 契约。
   conversations: {
-    rename: (scopeId, sessionId, name) => postgresSessionStore.rename(
+    rename: (scopeId, sessionId, name) => mysqlSessionStore.rename(
       { scopeId, sessionId },
       name,
     ),
-    remove: (scopeId, sessionId) => postgresSessionStore.remove({
+    remove: (scopeId, sessionId) => mysqlSessionStore.remove({
       scopeId,
       sessionId,
     }),
   },
-  trajectory: postgresTrajectoryStore,
+  trajectory: mysqlTrajectoryStore,
   ...(existsSync(staticIndex) ? { staticRoot } : {}),
 })
 fastify.addHook('onClose', async () => {
@@ -98,13 +98,13 @@ fastify.addHook('onClose', async () => {
 
 /** 启动本地 HTTP 服务；失败时由下方入口记录错误、关闭连接池并设置退出码。 */
 async function start(): Promise<void> {
-  const migration = await runPostgresMigrations(databasePool)
-  const database = await inspectPostgresConnection(databasePool)
+  const migration = await runMySqlMigrations(databasePool)
+  const database = await inspectMySqlConnection(databasePool)
   if (!database.sessionsTableExists || !database.eventsTableExists)
-    throw new Error('PostgreSQL 自动迁移后仍缺少 Session Log 表')
+    throw new Error('MySQL 自动迁移后仍缺少 Session Log 表')
   if (migration.appliedMigrations.length > 0) {
     process.stdout.write(
-      `PostgreSQL 已应用迁移：${migration.appliedMigrations.join(', ')}\n`,
+      `MySQL 已应用迁移：${migration.appliedMigrations.join(', ')}\n`,
     )
   }
   await fastify.listen({ port: PORT, host: '127.0.0.1' })

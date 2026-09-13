@@ -255,7 +255,7 @@ const result = await agent.invoke({
 | Tool Harness  | 输入输出校验、错误归一化、超时、重试和输出大小限制             |
 | 工具权限      | 工具级 Guard、Agent 级 Guard、交互式一次性审批                 |
 | Session Log   | 只追加事件、固定快照、消息推导和乐观并发版本                   |
-| Session Store | 内置内存实现；可通过协议接入 PostgreSQL、Redis 等存储          |
+| Session Store | 内置内存实现；可通过协议接入 MySQL、PostgreSQL、Redis 等存储   |
 | Model Adapter | 供应商无关契约；官方提供 OpenAI-compatible 与 DeepSeek Adapter |
 | 应用事件      | 可直接传输的 `AgentOutputEvent` 与完整的 `onTrace` 执行轨迹    |
 | 默认工具      | 当前时间与计算器                                               |
@@ -282,7 +282,7 @@ const second = await agent.invoke({
 ```
 
 默认 `MemorySessionStore` 适合本地开发和测试。生产环境应注入持久化 `SessionStore`；
-官方案例包含 PostgreSQL 实现，但它属于案例应用，不随 npm 包发布。
+官方案例包含 MySQL 实现，但它属于案例应用，不随 npm 包发布。
 
 ### 工具权限与运行上下文
 
@@ -327,7 +327,7 @@ Craft Harness 刻意保持为可嵌入的 Node.js 库，因此：
 [`sample/`](./sample/README.md) 是一个完整的 Web Runtime：
 
 - Fastify HTTP/SSE Server；
-- PostgreSQL SessionStore 和版本化迁移；
+- MySQL SessionStore 和版本化迁移；
 - Vue 3 聊天界面；
 - 匿名用户作用域和多会话历史；
 - 流式思考、模型选择与工具审批；
@@ -341,7 +341,7 @@ pnpm install
 pnpm --dir sample dev
 ```
 
-案例需要 PostgreSQL，首次启动会自动执行尚未应用的数据库迁移。完整配置见
+案例需要 MySQL 8.0+，首次启动会自动执行尚未应用的数据库迁移。完整配置见
 [`sample/README.md`](./sample/README.md)。
 
 ## 生产接入清单

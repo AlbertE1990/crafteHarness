@@ -4,15 +4,14 @@ import { existsSync } from 'node:fs'
 import process, { loadEnvFile } from 'node:process'
 import { fileURLToPath } from 'node:url'
 import Agent, { SessionStoreError } from 'craft-harness'
-import { Pool } from 'pg'
 import { ScriptedModelAdapter } from '../../test/support/scripted-model-adapter'
 import { assertSessionStoreContract } from '../../test/support/session-store-contract'
-import { runPostgresMigrations } from '../src/server/database/migrations'
+import { runMySqlMigrations } from '../src/server/database/migrations'
 import {
-  createPostgresPool,
-  readPostgresRuntimeConfig,
-} from '../src/server/database/postgres'
-import { PostgresSessionStore } from '../src/server/stores/postgres-session-store'
+  createMySqlPool,
+  readMySqlRuntimeConfig,
+} from '../src/server/database/mysql'
+import { MySqlSessionStore } from '../src/server/stores/mysql-session-store'
 
 // 相对模块定位 sample/.env.local，而不是相对当前工作目录：脚本从仓库根执行。
 const envFile = fileURLToPath(new URL('../.env.local', import.meta.url))
@@ -20,49 +19,50 @@ if (existsSync(envFile))
   loadEnvFile(envFile)
 
 /**
- * 对学习者完成的 PostgreSQL Store 执行真实契约测试。
- *
- * 每次运行创建独立临时 schema，避免历史测试数据和开发会话影响目录顺序断言。
+ * 对 MySQL Store 执行真实契约测试；随机 scope 隔离测试数据，结束后主动清理。
  */
 async function main(): Promise<void> {
-  const config = readPostgresRuntimeConfig()
-  const administrationPool = createPostgresPool(config)
-  const schema = `craft_agent_contract_${randomUUID().replaceAll('-', '')}`
-  let pool: Pool | undefined
+  const pool = createMySqlPool(readMySqlRuntimeConfig())
+  const prefix = `mysql-contract-${randomUUID()}`
+  const store = new MySqlSessionStore(pool)
+  let migrationsReady = false
 
   try {
-    await administrationPool.query(`CREATE SCHEMA ${schema}`)
-    pool = new Pool({
-      connectionString: config.connectionString,
-      max: config.maxConnections,
-      application_name: 'craft-harness-sample-store-contract',
-      // pg_trgm 安装在 public；隔离业务表时仍需让 PostgreSQL 找到扩展的 operator class。
-      options: `-c search_path=${schema},public`,
-      ...(config.ssl ? { ssl: { rejectUnauthorized: true } } : {}),
-    })
-    await runPostgresMigrations(pool)
-    const store = new PostgresSessionStore(pool)
+    await runMySqlMigrations(pool)
+    migrationsReady = true
     const result = await assertSessionStoreContract(store, {
-      sessionIdPrefix: 'postgres-contract',
+      sessionIdPrefix: prefix,
       requireCatalog: true,
     })
-    await assertConcurrentAppend(store)
-    await assertAgentRestoresFromDatabase(store)
-    await assertRenameAndRemove(store)
-    process.stdout.write(`PostgresSessionStore 契约测试通过：${JSON.stringify(result, null, 2)}\n`)
+    await assertConcurrentAppend(store, prefix)
+    await assertAgentRestoresFromDatabase(store, prefix)
+    await assertRenameAndRemove(store, prefix)
+    process.stdout.write(`MySqlSessionStore 契约测试通过：${JSON.stringify(result, null, 2)}\n`)
   }
   finally {
-    await pool?.end()
-    // schema 名只由本进程生成；CASCADE 只删除本次契约测试创建的隔离对象。
-    await administrationPool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)
-    await administrationPool.end()
+    try {
+      if (migrationsReady) {
+        for (const scopeId of [
+          `${prefix}:scope`,
+          `${prefix}:other-scope`,
+          `${prefix}:agent-scope`,
+          `${prefix}:mutation-scope`,
+          `${prefix}:concurrency-scope`,
+        ]) {
+          await cleanupScope(store, scopeId)
+        }
+      }
+    }
+    finally {
+      await pool.end()
+    }
   }
 }
 
 /** 验证新 Agent 实例会从数据库恢复旧消息，而不是依赖前一个实例的内存。 */
-async function assertAgentRestoresFromDatabase(store: PostgresSessionStore): Promise<void> {
-  const scopeId = 'postgres-contract:agent-scope'
-  const sessionId = 'postgres-contract:agent-restore'
+async function assertAgentRestoresFromDatabase(store: MySqlSessionStore, prefix: string): Promise<void> {
+  const scopeId = `${prefix}:agent-scope`
+  const sessionId = `${prefix}:agent-restore`
   const firstAdapter = new ScriptedModelAdapter({
     script: [{ method: 'stream', chunks: [completionChunk('第一轮回答')] }],
   })
@@ -98,7 +98,7 @@ async function assertAgentRestoresFromDatabase(store: PostgresSessionStore): Pro
     { role: 'user', content: '第二轮问题' },
   ]
   if (JSON.stringify(rolesAndContent) !== JSON.stringify(expected))
-    throw new Error('PostgreSQL Agent 恢复失败：新实例未加载第一轮数据库历史')
+    throw new Error('MySQL Agent 恢复失败：新实例未加载第一轮数据库历史')
 }
 
 /**
@@ -107,9 +107,9 @@ async function assertAgentRestoresFromDatabase(store: PostgresSessionStore): Pro
  * 名称是目录投影：改名后 list/read 都应看到新名称，而 `session.created` 事件仍保留
  * 创建时的原始名称。删除必须连同事件一起移除，否则外键会让目录行删不掉。
  */
-async function assertRenameAndRemove(store: PostgresSessionStore): Promise<void> {
-  const scopeId = 'postgres-contract:mutation-scope'
-  const sessionId = 'postgres-contract:mutation'
+async function assertRenameAndRemove(store: MySqlSessionStore, prefix: string): Promise<void> {
+  const scopeId = `${prefix}:mutation-scope`
+  const sessionId = `${prefix}:mutation`
   await consume(new Agent({
     adapter: new ScriptedModelAdapter({
       script: [{ method: 'stream', chunks: [completionChunk('待重命名回答')] }],
@@ -138,7 +138,7 @@ async function assertRenameAndRemove(store: PostgresSessionStore): Promise<void>
   if (created?.type !== 'session.created' || created.sessionName !== '原始名称')
     throw new Error('重命名不应改写 session.created 事件里的原始名称')
 
-  if (await store.rename({ scopeId, sessionId: 'postgres-contract:absent' }, '名称') !== undefined)
+  if (await store.rename({ scopeId, sessionId: `${prefix}:absent` }, '名称') !== undefined)
     throw new Error('对不存在的会话重命名应返回 undefined')
 
   if (!await store.remove({ scopeId, sessionId }))
@@ -163,22 +163,22 @@ async function consume(events: AsyncIterable<unknown>): Promise<void> {
 /** 构造数据库集成探针使用的确定性模型完成块。 */
 function completionChunk(content: string): ModelStreamChunk {
   return {
-    id: `postgres-contract-${content}`,
+    id: `mysql-contract-${content}`,
     choices: [{
       index: 0,
       finish_reason: 'stop',
       delta: { content },
     }],
     created: 1_788_748_800,
-    model: 'scripted-postgres-model',
+    model: 'scripted-mysql-model',
     object: 'chat.completion.chunk',
   }
 }
 
 /** 验证两个连接基于同一版本写入时，行锁只允许一个提交成功。 */
-async function assertConcurrentAppend(store: PostgresSessionStore): Promise<void> {
-  const scopeId = 'postgres-contract:concurrency-scope'
-  const sessionId = 'postgres-contract:concurrency'
+async function assertConcurrentAppend(store: MySqlSessionStore, prefix: string): Promise<void> {
+  const scopeId = `${prefix}:concurrency-scope`
+  const sessionId = `${prefix}:concurrency`
   await store.append({
     scopeId,
     sessionId,
@@ -209,15 +209,25 @@ async function assertConcurrentAppend(store: PostgresSessionStore): Promise<void
   const fulfilled = results.filter(result => result.status === 'fulfilled')
   const rejected = results.filter(result => result.status === 'rejected')
   if (fulfilled.length !== 1 || rejected.length !== 1)
-    throw new Error('PostgreSQL 并发契约失败：同一 expectedVersion 必须一成一败')
+    throw new Error('MySQL 并发契约失败：同一 expectedVersion 必须一成一败')
   const reason = rejected[0]?.reason
   if (!(reason instanceof SessionStoreError) || reason.code !== 'SESSION_VERSION_CONFLICT')
-    throw new Error('PostgreSQL 并发契约失败：失败写入必须返回 SESSION_VERSION_CONFLICT')
+    throw new Error('MySQL 并发契约失败：失败写入必须返回 SESSION_VERSION_CONFLICT')
   if ((await store.read({ scopeId, sessionId })).latestVersion !== 2)
-    throw new Error('PostgreSQL 并发契约失败：冲突写入不能推进 Session 版本')
+    throw new Error('MySQL 并发契约失败：冲突写入不能推进 Session 版本')
+}
+
+async function cleanupScope(store: MySqlSessionStore, scopeId: string): Promise<void> {
+  for (;;) {
+    const page = await store.list({ scopeId, limit: 100 })
+    if (page.sessions.length === 0)
+      return
+    for (const session of page.sessions)
+      await store.remove({ scopeId, sessionId: session.sessionId })
+  }
 }
 
 main().catch((error: unknown) => {
-  console.error('PostgresSessionStore 契约测试失败：', error)
+  console.error('MySqlSessionStore 契约测试失败：', error)
   process.exitCode = 1
 })

@@ -1,5 +1,5 @@
 import type { AgentEvent } from 'craft-harness'
-import type { Pool } from 'pg'
+import type { MySqlPool } from '../database/mysql'
 import type {
   ReadTrajectoryRequest,
   TrajectoryEventPage,
@@ -26,17 +26,17 @@ const TERMINAL_EVENT_TYPES = new Set<AgentEvent['type']>([
 ])
 
 /**
- * 将 Agent 的旁路事件按 Run 缓冲，并在终态一次性写入 PostgreSQL。
+ * 将 Agent 的旁路事件按 Run 缓冲，并在终态一次性写入 MySQL。
  *
  * Run 开始事件早于 SessionStore 创建目录行，所以不能逐条直接插入带外键的表。批量终态写入既
  * 避开这个时序，也避免 token 流造成大量小事务。模型 chunk 只保存每个 Step 的第一条，用于
  * 首 token 计时；完整模型结果由轨迹接口关联 Session Log 中的 assistant 消息提供。
  */
-export class PostgresTrajectoryStore implements TrajectoryStore {
+export class MySqlTrajectoryStore implements TrajectoryStore {
   private readonly scopeBySession = new Map<string, string>()
   private readonly runs = new Map<string, BufferedRun>()
 
-  constructor(readonly pool: Pool) {}
+  constructor(readonly pool: MySqlPool) {}
 
   readonly record = async (event: AgentEvent): Promise<void> => {
     let run = this.runs.get(event.runId)
@@ -71,21 +71,22 @@ export class PostgresTrajectoryStore implements TrajectoryStore {
   }
 
   readonly read = async (request: ReadTrajectoryRequest): Promise<TrajectoryEventPage> => {
-    const values: unknown[] = [request.scopeId, request.sessionId, request.limit + 1]
+    const values: unknown[] = [request.scopeId, request.sessionId]
     const beforeClause = request.beforeSequence === undefined
       ? ''
-      : 'AND trace_sequence < $4'
+      : 'AND trace_sequence < ?'
     if (request.beforeSequence !== undefined)
       values.push(request.beforeSequence)
+    values.push(request.limit + 1)
 
     const result = await this.pool.query<TraceEventRow>(`
       SELECT trace_sequence, payload_json
       FROM craft_agent_trace_events
-      WHERE scope_id = $1
-        AND session_id = $2
+      WHERE scope_id = ?
+        AND session_id = ?
         ${beforeClause}
       ORDER BY trace_sequence DESC
-      LIMIT $3
+      LIMIT ?
     `, values)
 
     const hasEarlier = result.rows.length > request.limit
@@ -121,7 +122,7 @@ export class PostgresTrajectoryStore implements TrajectoryStore {
             payload_json,
             created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
         `, [
           scopeId,
           event.sessionId,
@@ -129,7 +130,7 @@ export class PostgresTrajectoryStore implements TrajectoryStore {
           event.turnId,
           event.type,
           JSON.stringify(event),
-          event.timestamp,
+          new Date(event.timestamp),
         ])
       }
       await client.query('COMMIT')
@@ -159,9 +160,21 @@ function restoreRecord(row: TraceEventRow): TrajectoryEventRecord {
     : Number.parseInt(row.trace_sequence, 10)
   if (!Number.isSafeInteger(sequence) || sequence <= 0)
     throw new Error('轨迹事件序号损坏')
-  if (!isAgentEvent(row.payload_json))
+  const payload = typeof row.payload_json === 'string'
+    ? safelyParseJson(row.payload_json)
+    : row.payload_json
+  if (!isAgentEvent(payload))
     throw new Error(`轨迹事件 ${sequence} 的 payload 损坏`)
-  return Object.freeze({ sequence, event: cloneEvent(row.payload_json) })
+  return Object.freeze({ sequence, event: cloneEvent(payload) })
+}
+
+function safelyParseJson(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown
+  }
+  catch {
+    return undefined
+  }
 }
 
 /** 数据库是应用边界；恢复时至少验证页面分组和排序所依赖的公共信封。 */

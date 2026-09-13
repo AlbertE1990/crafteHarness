@@ -247,7 +247,7 @@ describe('server runtime HTTP boundary', () => {
       adapter: new ScriptedModelAdapter({ script: [] }),
       model: { id: 'scripted-model' },
     })
-    // 端口用内存实现即可：真正的 SQL 由 postgres-session-store.contract.ts 覆盖。
+    // 端口用内存实现即可：真正的 SQL 由 mysql-session-store.contract.ts 覆盖。
     const names = new Map([['session-known', '旧名称']])
     const app = createServerApp({
       agent,

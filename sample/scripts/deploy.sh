@@ -230,7 +230,7 @@ deploy() {
   log '打包 craft-harness、Server 和前端...'
   "${PNPM_COMMAND[@]}" --dir "$SAMPLE_DIR" build
   stop_services
-  log '执行 PostgreSQL 数据库迁移...'
+  log '执行 MySQL 数据库迁移...'
   "${PNPM_COMMAND[@]}" --dir "$SAMPLE_DIR" db:migrate
   start_services
 }

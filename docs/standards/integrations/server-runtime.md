@@ -21,8 +21,8 @@ HTTP 路由与展示字段也不属于 craft-harness 公共协议，不需要复
 | `sample/src/server/model-config.ts` | 校验并归一化 DeepSeek 部署配置（模型名、推理等级） |
 | `sample/src/server/agent-tools.ts`  | 定义并静态注册当前应用的第一方工具                 |
 | `sample/src/server/app.ts`          | Fastify 路由、SSE/JSON 传输、断开取消和展示投影    |
-| `sample/src/server/database/*`      | PostgreSQL Runtime 配置、启动迁移和连通性检查      |
-| `sample/src/server/stores/*`        | 应用 Store；当前 Runtime 使用 PostgreSQL 实现      |
+| `sample/src/server/database/*`      | MySQL Runtime 配置、启动迁移和连通性检查           |
+| `sample/src/server/stores/*`        | 应用 Store；当前 Runtime 使用 MySQL 实现           |
 
 库一侧（`src/`，案例通过 workspace 依赖的公开入口导入）：
 
@@ -47,17 +47,17 @@ const agent = new Agent({
     guard: serverToolGuard,
     approvalTimeoutMs: 120_000,
   },
-  sessionStore: new PostgresSessionStore(databasePool),
+  sessionStore: new MySqlSessionStore(databasePool),
 })
 
 const app = createServerApp({ agent })
 ```
 
 - 环境变量只在 Runtime 启动边界读取，craft-harness 不读取 `process.env`。
-- 一个进程复用一个 Agent；当前 Server 显式注入 PostgreSQL Store，进程重启后由数据库恢复 Session。
+- 一个进程复用一个 Agent；当前 Server 显式注入 MySQL Store，进程重启后由数据库恢复 Session。
 - 连接池由 Runtime 创建和关闭，不能进入 craft-harness Core，也不能由 Store 模块在 import 时隐式创建。
-- Server 在监听端口前调用 `runPostgresMigrations()`；空数据库自动建表，已有数据库只执行未登记的版本。多个实例
-  通过 PostgreSQL advisory lock 串行迁移。手动 `pnpm --dir sample db:migrate` 复用同一函数，当前结构见
+- Server 在监听端口前调用 `runMySqlMigrations()`；空数据库自动建表，已有数据库只执行未登记的版本。多个实例
+  通过 MySQL `GET_LOCK` 串行迁移。手动 `pnpm --dir sample db:migrate` 复用同一函数，当前结构见
   [sample 数据库文档](../../../sample/database/README.md)。
 - 时间和计算由 Agent 自动装载，不进入 Server 工具注册表。只有具备真实工作区的 Runtime 才设置
   `tools.workspaceRoot` 并启用文件、搜索和终端；该设置只适合 Agent 生命周期内根目录固定的部署，普通网页
@@ -74,7 +74,7 @@ Runtime 环境变量集中在 `sample/.env.local`（模板见 `sample/.env.examp
 | ------------------------------- | ---- | ----------------------------------- |
 | `DEEPSEEK_API_KEY`              | 是   | 模型凭据                            |
 | `DEEPSEEK_BASE_URL`             | 否   | 默认 `https://api.deepseek.com`     |
-| `CRAFT_AGENT_DATABASE_URL`      | 是   | PostgreSQL 连接串；缺失时启动报错   |
+| `CRAFT_AGENT_DATABASE_URL`      | 是   | MySQL `mysql://` 连接串；缺失时报错 |
 | `CRAFT_AGENT_DATABASE_POOL_MAX` | 否   | 连接池上限，默认 10，必须是正整数   |
 | `CRAFT_AGENT_DATABASE_SSL`      | 否   | 只接受 `true`/`false`，默认 `false` |
 | `PORT`                          | 否   | HTTP 监听端口，默认 3000            |

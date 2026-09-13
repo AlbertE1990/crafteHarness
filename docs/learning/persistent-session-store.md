@@ -1,6 +1,6 @@
-# 持久化 SessionStore：从内存调试到 PostgreSQL
+# 持久化 SessionStore：从内存调试到关系数据库
 
-> 文档类型：学习教程；示例数据库：PostgreSQL；适用范围：Node.js Runtime。
+> 文档类型：学习教程；SQL 原理示例：PostgreSQL；当前官方 sample 实现：MySQL 8.0+；适用范围：Node.js Runtime。
 
 ## 1. 学习目标
 
@@ -509,9 +509,9 @@ Turn”，同时继续保留数据库中的完整事件事实。
 在该能力实现前，应用应设置合理的 Session 生命周期和 Agent token 预算，不要通过删除中间 Tool Call、只保留
 最后几条消息等方式破坏历史结构。
 
-## 13. 本项目的 PostgreSQL 参考实现
+## 13. 本项目的 MySQL 参考实现
 
-本地已经创建 PostgreSQL 数据库 `craft_agent_dev`，其中包含：
+当前 sample 使用 MySQL 数据库 `craft_agent_dev`，其中包含：
 
 - `craft_agent_sessions`
 - `craft_agent_session_events`
@@ -519,15 +519,15 @@ Turn”，同时继续保留数据库中的完整事件事实。
 参考实现全部位于官方案例 `sample/`（库只定义协议，不绑定数据库驱动）：
 
 ```text
-sample/database/migrations/001-create-session-log.sql
-sample/database/migrations/002-add-session-scope-and-name.sql
-sample/database/migrations/003-use-composite-session-identity.sql
-sample/src/server/database/postgres.ts
+sample/database/migrations/001-create-sessions.sql
+sample/database/migrations/002-create-session-events.sql
+sample/database/migrations/003-create-trace-events.sql
+sample/src/server/database/mysql.ts
 sample/src/server/database/migrations.ts
 sample/src/server/database/migrate.ts
 sample/src/server/database/check.ts
-sample/src/server/stores/postgres-session-store.ts
-sample/test/postgres-session-store.contract.ts
+sample/src/server/stores/mysql-session-store.ts
+sample/test/mysql-session-store.contract.ts
 ```
 
 先将 `sample/.env.example` 中的数据库配置复制到被 Git 忽略的 `sample/.env.local`，并填写本地真实密码。
@@ -539,14 +539,14 @@ pnpm --dir sample db:check
 pnpm --dir sample db:test-store
 ```
 
-迁移器按文件名执行尚未记录的迁移，并写入 `craft_agent_schema_migrations`；连接检查只输出数据库名、PostgreSQL
+迁移器按文件名执行尚未记录的迁移，并写入 `craft_agent_schema_migrations`；连接检查只输出数据库名、MySQL
 版本和表是否存在，不输出连接字符串或密码。完整字段、索引、外键和迁移规则见
 [sample 数据库文档](../../sample/database/README.md)。
-契约命令会创建独立临时 schema，验证完成后自动删除，不会把测试 Session 写进开发目录。
+契约命令使用随机 scope 隔离测试数据，验证完成后自动删除测试 Session。
 
 ### 13.1 当前实现的阅读顺序
 
-[postgres-session-store.ts](../../sample/src/server/stores/postgres-session-store.ts) 是可运行的 `pg` 参考实现。建议按数据流
+[mysql-session-store.ts](../../sample/src/server/stores/mysql-session-store.ts) 是可运行的 `mysql2/promise` 参考实现。建议按数据流
 而不是按文件行号阅读：
 
 1. 从 `read()` 观察“数据库行 → SessionEvent → 固定快照页”。
