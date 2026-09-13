@@ -85,13 +85,13 @@ export async function inspectMySqlConnection(
   database: MySqlQueryable,
 ): Promise<MySqlConnectionInfo> {
   const result = await database.query<{
-    database: string
+    database_name: string
     server_version: string
     sessions_table: number | string
     events_table: number | string
   }>(`
     SELECT
-      DATABASE() AS database,
+      DATABASE() AS database_name,
       VERSION() AS server_version,
       EXISTS(
         SELECT 1 FROM information_schema.tables
@@ -107,7 +107,7 @@ export async function inspectMySqlConnection(
     throw new Error('MySQL 连通性检查没有返回结果')
 
   return Object.freeze({
-    database: row.database,
+    database: row.database_name,
     serverVersion: row.server_version,
     sessionsTableExists: Number(row.sessions_table) === 1,
     eventsTableExists: Number(row.events_table) === 1,

@@ -1,9 +1,9 @@
 // @vitest-environment node
 
-import type { MySqlPool } from '../src/server/database/mysql'
+import type { MySqlPool, MySqlQueryable } from '../src/server/database/mysql'
 import { describe, expect, it, vi } from 'vitest'
 import { runMySqlMigrations } from '../src/server/database/migrations'
-import { readMySqlRuntimeConfig } from '../src/server/database/mysql'
+import { inspectMySqlConnection, readMySqlRuntimeConfig } from '../src/server/database/mysql'
 
 describe('mysql runtime config', () => {
   it('normalizes the connection string and safe defaults', () => {
@@ -46,6 +46,35 @@ describe('mysql runtime config', () => {
       CRAFT_AGENT_DATABASE_URL: 'mysql://user:secret@db/craft_agent_dev',
       CRAFT_AGENT_DATABASE_SSL: 'yes',
     })).toThrow('CRAFT_AGENT_DATABASE_SSL 必须是 true 或 false')
+  })
+})
+
+describe('mysql connection inspection', () => {
+  it('uses a non-reserved alias and maps the connection details', async () => {
+    const statements: string[] = []
+    const database: MySqlQueryable = {
+      async query<Row>(sql: string) {
+        statements.push(sql)
+        return {
+          rows: [{
+            database_name: 'craft_agent_dev',
+            server_version: '8.4.0',
+            sessions_table: 1,
+            events_table: '1',
+          }] as Row[],
+          rowCount: 1,
+        }
+      },
+    }
+
+    await expect(inspectMySqlConnection(database)).resolves.toEqual({
+      database: 'craft_agent_dev',
+      serverVersion: '8.4.0',
+      sessionsTableExists: true,
+      eventsTableExists: true,
+    })
+    expect(statements[0]).toContain('DATABASE() AS database_name')
+    expect(statements[0]).not.toContain('DATABASE() AS database,')
   })
 })
 
