@@ -5,6 +5,7 @@ export default antfu(
     unocss: true,
     formatters: true,
     pnpm: true,
+    ignores: ['dist/**', 'dist-server/**', '.runtime/**'],
   },
   {
     rules: {

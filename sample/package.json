@@ -11,8 +11,10 @@
     "dev": "concurrently -n server,web -c green,cyan \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "node --import tsx --watch src/server/index.ts",
     "dev:web": "vite --open",
-    "prebuild": "pnpm build:harness",
-    "build": "vite build",
+    "start:server": "node dist-server/index.js",
+    "build": "pnpm build:harness && pnpm build:server && pnpm build:web",
+    "build:server": "tsup --config tsup.server.config.ts",
+    "build:web": "vite build",
     "preview": "vite preview",
     "pretest": "pnpm build:harness",
     "test": "vitest run --config vite.config.ts",
@@ -27,6 +29,7 @@
     "db:test-store": "tsx test/postgres-session-store.contract.ts"
   },
   "dependencies": {
+    "@fastify/static": "catalog:",
     "@vueuse/core": "catalog:frontend",
     "craft-harness": "workspace:*",
     "fastify": "catalog:",
@@ -49,6 +52,7 @@
     "eslint": "catalog:dev",
     "eslint-plugin-format": "catalog:dev",
     "jsdom": "catalog:build",
+    "tsup": "catalog:build",
     "tsx": "catalog:",
     "typescript": "catalog:dev",
     "unocss": "catalog:build",

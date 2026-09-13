@@ -1,9 +1,12 @@
 import type { Pool } from 'pg'
 import { readdir, readFile } from 'node:fs/promises'
+import path from 'node:path'
+import process from 'node:process'
+import { pathToFileURL } from 'node:url'
 
 const MIGRATION_FILENAME_PATTERN = /^\d+-[a-z0-9-]+\.sql$/i
 const MIGRATION_LOCK_NAME = 'craft_agent_schema_migrations'
-const migrationsUrl = new URL('../../../database/migrations/', import.meta.url)
+const defaultMigrationsUrl = new URL('../../../database/migrations/', import.meta.url)
 
 /** 一次迁移检查的结果；available 包含目录中的全部合法迁移。 */
 export interface PostgresMigrationResult {
@@ -18,6 +21,7 @@ export interface PostgresMigrationResult {
  * 已完成的版本记录在 craft_agent_schema_migrations 中。
  */
 export async function runPostgresMigrations(pool: Pool): Promise<PostgresMigrationResult> {
+  const migrationsUrl = resolveMigrationsUrl()
   const client = await pool.connect()
   let lockAcquired = false
 
@@ -76,4 +80,12 @@ export async function runPostgresMigrations(pool: Pool): Promise<PostgresMigrati
     }
     client.release()
   }
+}
+
+function resolveMigrationsUrl(): URL {
+  const configured = process.env.CRAFT_AGENT_MIGRATIONS_DIR?.trim()
+  if (!configured)
+    return defaultMigrationsUrl
+  const directory = `${path.resolve(configured)}${path.sep}`
+  return pathToFileURL(directory)
 }

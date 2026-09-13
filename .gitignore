@@ -6,7 +6,9 @@
 .vite-ssg-temp
 *.local
 dist
+dist-server
 dist-ssr
 node_modules
+.runtime/
 .idea/
 *.log

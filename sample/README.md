@@ -7,7 +7,7 @@
 - **Vue 3 + Vite** 聊天界面：流式思考展示、工具审批卡片、会话列表与历史恢复
 
 它是独立的私有 pnpm workspace 包，自行维护运行依赖、开发依赖和脚本。案例通过 `workspace:*` 依赖
-`craft-harness` 并只使用公开导出，不会被根 npm 包发布；相关脚本会在启动、构建和测试前先构建库。
+`craft-harness` 并只使用公开导出，不会被根 npm 包发布；开发、构建和测试脚本会先构建库。
 
 ## 运行
 
@@ -28,8 +28,109 @@ Server 在监听端口前自动执行尚未应用的数据库迁移，因此新�
 `pnpm --dir sample db:migrate` 提前迁移，`pnpm --dir sample db:check` 只做连通性和表存在性检查。当前结构、权限要求和新增迁移规则见
 [数据库文档](./database/README.md)。
 
-`.env.local` **相对模块定位**（`sample/src/server/index.ts` 用 `import.meta.url` 解析），不依赖当前工作目录；
-文件不存在时会跳过加载并直接使用宿主环境变量，便于容器与 CI 注入。
+开发模式下 `.env.local` 相对 `sample/src/server/index.ts` 定位；部署脚本会把它的绝对路径显式传给打包后的 Server。
+文件不存在时 Server 会跳过加载并直接使用宿主环境变量，便于容器与 CI 注入。
+
+## 部署到 Linux 服务器
+
+[`scripts/deploy.sh`](./scripts/deploy.sh) 提供可重复部署流程，适用于 Ubuntu、Debian、Rocky Linux 等带
+Bash 的服务器。它会依次：
+
+1. 检查 Node.js 版本和 `.env.local`；
+2. 使用锁文件安装两个 workspace 包的依赖；
+3. 打包 `craft-harness`、sample Server 和 Vue 前端；
+4. 安全停止由该脚本启动的旧进程；
+5. 执行尚未应用的 PostgreSQL 迁移，创建或升级数据表；
+6. 使用 `nohup` 在后台启动 Fastify，并记录 PID 和日志。
+
+生产进程由打包后的 `sample/dist-server/index.js` 启动。Fastify 同时提供 API、SSE 和 `sample/dist` 中的静态
+前端，因此只需要监听一个端口。
+
+### 服务器准备
+
+- Node.js 20 或更高版本，并提供 `pnpm` 或 Corepack；
+- 一个已经创建好的 PostgreSQL 数据库和具备建表、建索引、执行迁移权限的数据库用户；
+- 从 Git 获取的完整仓库；文档问答工具还需要根 `README.md` 和 `docs/`；
+- 推荐使用普通部署用户运行，不要使用 root 保存模型和数据库密钥。
+
+脚本负责创建和升级**数据表**，不负责安装 PostgreSQL、创建数据库或创建数据库用户。
+
+### 首次部署
+
+```bash
+git clone <your-repository-url> hand-crafted-agent
+cd hand-crafted-agent
+
+cp sample/.env.example sample/.env.local
+chmod 600 sample/.env.local
+
+# 编辑模型密钥和 PostgreSQL 连接串，同时按需修改模型目录。
+vi sample/.env.local
+vi sample/config/models.json
+
+bash sample/scripts/deploy.sh deploy
+```
+
+脚本检测到 `.env.local` 中仍有 `replace-me` 时会拒绝部署，并且不会输出密钥或数据库连接串。
+默认监听 `127.0.0.1:3000`；可以在 `sample/.env.local` 中修改 `PORT`，但不建议直接监听公网地址。
+
+### 更新和日常运维
+
+```bash
+# 拉取代码后重新安装、打包、迁移和启动
+git pull --ff-only
+bash sample/scripts/deploy.sh restart
+
+# 查看状态和最近日志
+bash sample/scripts/deploy.sh status
+bash sample/scripts/deploy.sh logs
+
+# 停止或使用已有构建产物重新启动
+bash sample/scripts/deploy.sh stop
+bash sample/scripts/deploy.sh start
+```
+
+PID 和日志默认写入被 Git 忽略的 `sample/.runtime/`：
+
+```text
+sample/.runtime/supervisor.pid
+sample/.runtime/app.log
+sample/.runtime/supervisor.log
+```
+
+可以通过 `CRAFT_SAMPLE_RUNTIME_DIR=/var/run/craft-harness-sample` 改变该目录。脚本只会终止命令行与当前脚本
+绝对路径匹配的进程；遇到被其他进程复用的过期 PID 时只删除 PID 文件，不会误杀进程。
+
+该后台方式不会在服务器重启后自动启动。需要开机自启、资源限制或多实例时，可在完成首次 `deploy` 后使用
+systemd、Supervisor、PM2 或容器平台接管 `pnpm --dir sample start:server`；启动时需要设置脚本中使用的
+`CRAFT_SAMPLE_ENV_FILE`、`CRAFT_SAMPLE_STATIC_ROOT`、`CRAFT_AGENT_MODELS_FILE`、
+`CRAFT_AGENT_MIGRATIONS_DIR` 和 `CRAFT_HARNESS_DOCS_ROOT` 绝对路径。
+
+### 配置 Nginx 和 HTTPS
+
+Fastify 默认只监听回环地址，应使用 Nginx 或 Caddy 对外提供域名和 TLS。最小 Nginx 配置如下，SSE 必须关闭
+代理缓冲并设置足够长的读取超时：
+
+```nginx
+server {
+    listen 80;
+    server_name agent.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 180s;
+    }
+}
+```
+
+将 `agent.example.com` 和端口替换为实际配置，检查后重新加载 Nginx，并使用 Certbot 或现有证书系统启用 HTTPS。
+不要把 PostgreSQL 端口或 Fastify 的内部端口直接暴露到公网。
 
 ## 模型目录：有哪些模型、每个模型能用哪些推理等级
 
@@ -84,15 +185,15 @@ Runtime 只创建一个 `DeepSeekAdapter` 和一个 `Agent`。每次请求把目
 
 这里只有**连接与部署凭据**；模型与推理能力一律走 `config/models.json`，不放进环境变量。
 
-| 变量                            | 必填 | 说明                                             |
-| ------------------------------- | ---- | ------------------------------------------------ |
-| `DEEPSEEK_API_KEY`              | 是   | 供应商密钥                                       |
-| `DEEPSEEK_BASE_URL`             | 否   | 默认 `https://api.deepseek.com`                  |
-| `CRAFT_AGENT_DATABASE_URL`      | 是   | PostgreSQL 连接串                                |
-| `CRAFT_AGENT_DATABASE_POOL_MAX` | 否   | 连接池上限                                       |
-| `CRAFT_AGENT_DATABASE_SSL`      | 否   | 是否启用 SSL                                     |
-| `PORT`                          | 否   | 后端端口，默认 `3000`                            |
-| `CRAFT_HARNESS_DOCS_ROOT`       | 否   | Craft Harness 文档根目录，默认自动定位仓库根目录 |
+| 变量                            | 必填 | 说明                                           |
+| ------------------------------- | ---- | ---------------------------------------------- |
+| `DEEPSEEK_API_KEY`              | 是   | 供应商密钥                                     |
+| `DEEPSEEK_BASE_URL`             | 否   | 默认 `https://api.deepseek.com`                |
+| `CRAFT_AGENT_DATABASE_URL`      | 是   | PostgreSQL 连接串                              |
+| `CRAFT_AGENT_DATABASE_POOL_MAX` | 否   | 连接池上限                                     |
+| `CRAFT_AGENT_DATABASE_SSL`      | 否   | 是否启用 SSL                                   |
+| `PORT`                          | 否   | 后端端口，默认 `3000`                          |
+| `CRAFT_HARNESS_DOCS_ROOT`       | 否   | Craft Harness 文档根目录，部署脚本设置为仓库根 |
 
 ## Craft Harness 自身问答
 
@@ -142,7 +243,7 @@ Server 再把它作为 SessionStore 的 `scopeId`，因此不同浏览器的会�
 pnpm --dir sample test           # 案例单元测试与界面测试
 pnpm --dir sample typecheck      # 案例 TypeScript/Vue 类型检查
 pnpm --dir sample lint           # 案例代码规范检查
-pnpm --dir sample build          # 构建案例前端
+pnpm --dir sample build          # 构建根库、案例 Server 和前端
 pnpm --dir sample db:test-store  # PostgreSQL Store 契约测试（需要数据库）
 ```
 
@@ -151,12 +252,14 @@ pnpm --dir sample db:test-store  # PostgreSQL Store 契约测试（需要数据�
 ```text
 sample/
 ├── package.json           案例自身的依赖与开发命令
+├── scripts/deploy.sh      Linux 安装、迁移、打包和后台运行脚本
 ├── src/
 │   ├── server/            Fastify 应用、PostgreSQL Store、工具与 Guard、部署配置
 │   ├── pages/index.vue    聊天界面
 │   ├── composables/ styles/ App.vue main.ts
 ├── test/                  HTTP/SSE 协议、工具、聊天页面与 Store 契约测试
 ├── database/              数据库结构说明与版本化迁移
+├── tsup.server.config.ts  生产 Server 打包配置
 ├── vite.config.ts         Vite + vitest project 配置（root 指向 sample/）
 └── tsconfig.json          vue-tsc 使用；DOM 环境，可引用库源码
 ```

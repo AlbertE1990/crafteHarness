@@ -6,6 +6,9 @@ import type {
 } from 'craft-harness'
 import type { ServerModelInfo, ServerStreamEvent } from '../src/server/app'
 import type { TrajectoryStore } from '../src/server/trajectory-store'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import Agent, { MemorySessionStore } from 'craft-harness'
 import { describe, expect, it } from 'vitest'
 import { ScriptedModelAdapter } from '../../test/support/scripted-model-adapter'
@@ -152,6 +155,36 @@ async function readApprovalRequest(
 }
 
 describe('server runtime HTTP boundary', () => {
+  it('serves the built frontend when staticRoot is configured', async () => {
+    const staticRoot = await mkdtemp(path.join(tmpdir(), 'craft-harness-static-'))
+    await writeFile(
+      path.join(staticRoot, 'index.html'),
+      '<!doctype html><title>Craft Harness</title>',
+      'utf8',
+    )
+    const agent = new Agent({
+      adapter: new ScriptedModelAdapter({ script: [] }),
+      model: { id: 'scripted-model' },
+    })
+    const app = createServerApp({
+      agent,
+      model: MODEL_INFO,
+      staticRoot,
+      logger: false,
+    })
+
+    try {
+      const response = await app.inject({ method: 'GET', url: '/' })
+      expect(response.statusCode).toBe(200)
+      expect(response.headers['content-type']).toContain('text/html')
+      expect(response.body).toContain('<title>Craft Harness</title>')
+    }
+    finally {
+      await app.close()
+      await rm(staticRoot, { recursive: true, force: true })
+    }
+  })
+
   it('requires a valid scope header on private endpoints in production mode', async () => {
     const agent = new Agent({
       adapter: new ScriptedModelAdapter({ script: [] }),

@@ -11,6 +11,7 @@ import type {
 import type { FastifyInstance, FastifyReply, FastifyServerOptions } from 'fastify'
 import type { ServerResponse } from 'node:http'
 import type { TrajectoryStore } from './trajectory-store'
+import FastifyStatic from '@fastify/static'
 import Fastify from 'fastify'
 import { z } from 'zod'
 
@@ -172,6 +173,8 @@ export interface CreateServerAppOptions {
   readonly conversations?: ConversationCatalogMutations
   /** Sample Runtime 的旁路轨迹存储；省略时轨迹查询明确返回 501。 */
   readonly trajectory?: TrajectoryStore
+  /** 构建后前端的绝对目录；省略时只注册 API。 */
+  readonly staticRoot?: string
   /** 仅供旧客户端迁移或测试使用；生产部署省略时会拒绝缺少 scope 请求头的私有接口。 */
   readonly fallbackScopeId?: string
   readonly logger?: FastifyServerOptions['logger']
@@ -188,6 +191,18 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     // Zod strictObject 投影出的 additionalProperties:false 必须拒绝未知字段，不能被 Ajv 静默移除。
     ajv: { customOptions: { removeAdditional: false } },
   })
+  if (options.staticRoot) {
+    fastify.register(FastifyStatic, {
+      root: options.staticRoot,
+      wildcard: true,
+    })
+    fastify.get('/', async (_request, reply) => {
+      return await reply.sendFile('index.html', {
+        immutable: false,
+        maxAge: 0,
+      })
+    })
+  }
   /** pending 审批也属于发起它的匿名作用域，不能只依赖不可猜测的 UUID。 */
   const approvalScopes = new Map<string, string>()
 

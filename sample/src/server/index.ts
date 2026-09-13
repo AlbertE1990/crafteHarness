@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import path from 'node:path'
 import process, { loadEnvFile } from 'node:process'
 import { fileURLToPath } from 'node:url'
 import Agent from 'craft-harness'
@@ -17,11 +18,20 @@ import { PostgresTrajectoryStore } from './stores/postgres-trajectory-store'
 
 // 相对模块定位 .env.local，而不是相对当前工作目录：脚本从仓库根执行，配置文件在 sample/。
 // 文件缺失时继续使用宿主环境变量，便于容器和 CI 直接注入。
-const envFile = fileURLToPath(new URL('../../.env.local', import.meta.url))
+const envFile = process.env.CRAFT_SAMPLE_ENV_FILE?.trim()
+  ? path.resolve(process.env.CRAFT_SAMPLE_ENV_FILE)
+  : fileURLToPath(new URL('../../.env.local', import.meta.url))
 if (existsSync(envFile))
   loadEnvFile(envFile)
 
 const PORT = Number(process.env.PORT ?? 3000)
+const staticRoot = path.resolve(
+  process.env.CRAFT_SAMPLE_STATIC_ROOT?.trim()
+  || fileURLToPath(new URL('../../dist/', import.meta.url)),
+)
+const staticIndex = path.join(staticRoot, 'index.html')
+if (process.env.NODE_ENV === 'production' && !existsSync(staticIndex))
+  throw new Error(`生产模式缺少前端构建产物：${staticIndex}`)
 
 // 模型连接、可切换模型以及各自的推理能力都是会变化的部署事实，统一在启动期校验一次。
 const { apiKey, baseURL, defaultModel, models, ...providerInfo } = readDeepSeekRuntimeConfig(process.env)
@@ -80,6 +90,7 @@ const fastify = createServerApp({
     }),
   },
   trajectory: postgresTrajectoryStore,
+  ...(existsSync(staticIndex) ? { staticRoot } : {}),
 })
 fastify.addHook('onClose', async () => {
   await databasePool.end()

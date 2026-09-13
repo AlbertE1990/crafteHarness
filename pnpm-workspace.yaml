@@ -9,6 +9,7 @@ trustPolicyIgnoreAfter: 525600
 packages:
   - sample
 catalog:
+  '@fastify/static': ^10.1.3
   '@types/pg': ^8.23.1
   '@vscode/ripgrep': ^1.18.0
   concurrently: ^10.0.5

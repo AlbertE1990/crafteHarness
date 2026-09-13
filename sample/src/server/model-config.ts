@@ -1,5 +1,6 @@
 import type { ServerModelCapability, ServerModelInfo } from './app'
 import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /**
@@ -8,7 +9,7 @@ import { fileURLToPath } from 'node:url'
  * 有哪些模型、每个模型能用哪些推理等级都是**部署事实**，因此只从这份文件读取：
  * 换模型或增删等级改这里并重启即可，不用改库、不用改 Adapter、也不用改前端。
  */
-const CATALOG_PATH = fileURLToPath(new URL('../../config/models.json', import.meta.url))
+const DEFAULT_CATALOG_PATH = fileURLToPath(new URL('../../config/models.json', import.meta.url))
 
 /** 未配置 DEEPSEEK_BASE_URL 时使用的 DeepSeek 官方 endpoint。 */
 const DEFAULT_BASE_URL = 'https://api.deepseek.com'
@@ -35,18 +36,19 @@ export function readDeepSeekRuntimeConfig(env: NodeJS.ProcessEnv): DeepSeekRunti
     provider: 'deepseek',
     baseURL: env.DEEPSEEK_BASE_URL?.trim() || DEFAULT_BASE_URL,
     apiKey,
-    ...readModelCatalogFile(),
+    ...readModelCatalogFile(env),
   })
 }
 
 /** 读取 `config/models.json`。 */
-function readModelCatalogFile(): ModelCatalog {
+function readModelCatalogFile(env: NodeJS.ProcessEnv): ModelCatalog {
+  const catalogPath = path.resolve(env.CRAFT_AGENT_MODELS_FILE?.trim() || DEFAULT_CATALOG_PATH)
   try {
-    return parseModelCatalog(readFileSync(CATALOG_PATH, 'utf8'))
+    return parseModelCatalog(readFileSync(catalogPath, 'utf8'))
   }
   catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
-    throw new Error(`读取模型目录 ${CATALOG_PATH} 失败：${reason}`)
+    throw new Error(`读取模型目录 ${catalogPath} 失败：${reason}`)
   }
 }
 
