@@ -14,9 +14,6 @@ import {
 import { readDeepSeekRuntimeConfig } from './model-config'
 import { PostgresSessionStore } from './stores/postgres-session-store'
 
-/** 当前参考 Runtime 是单用户部署，仍显式组装固定 Session 作用域。 */
-const SINGLE_USER_SCOPE_ID = 'default'
-
 // 相对模块定位 .env.local，而不是相对当前工作目录：脚本从仓库根执行，配置文件在 sample/。
 // 文件缺失时继续使用宿主环境变量，便于容器和 CI 直接注入。
 const envFile = fileURLToPath(new URL('../../.env.local', import.meta.url))
@@ -45,7 +42,8 @@ const agent = new Agent({
       ? { reasoningEffort: defaultCapability.defaultReasoningEffort }
       : {}),
   },
-  systemPrompt: '你是一个AI助手',
+  systemPrompt: `你是一个 AI 助手。
+当用户询问 Craft Harness 自身的功能、使用方式、API、架构或开发方式时，必须先调用 search_craft_harness_docs 检索官方项目文档，再依据检索结果回答并列出来源文件；文档没有明确说明的内容要如实说明。`,
   execution: {
     limits: {
       maxModelSteps: 5,
@@ -67,12 +65,12 @@ const fastify = createServerApp({
   model: { ...providerInfo, defaultModel, models },
   // 名称是可变展示属性，删除会移除事实；两者都是应用层能力，不进库的 append-only 契约。
   conversations: {
-    rename: (sessionId, name) => postgresSessionStore.rename(
-      { scopeId: SINGLE_USER_SCOPE_ID, sessionId },
+    rename: (scopeId, sessionId, name) => postgresSessionStore.rename(
+      { scopeId, sessionId },
       name,
     ),
-    remove: sessionId => postgresSessionStore.remove({
-      scopeId: SINGLE_USER_SCOPE_ID,
+    remove: (scopeId, sessionId) => postgresSessionStore.remove({
+      scopeId,
       sessionId,
     }),
   },

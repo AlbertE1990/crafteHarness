@@ -34,6 +34,8 @@ export interface ToolExecutionConfig {
 export interface ToolRunContext<TContext = undefined> {
   readonly callId: string
   readonly runId?: string
+  /** Agent 调用时所属的数据作用域；直接使用 Tool Harness 时可以省略。 */
+  readonly scopeId?: string
   readonly sessionId?: string
   readonly attempt: number
   /** 当前 Agent 请求注入的业务上下文；不会自动持久化或发送给模型。 */

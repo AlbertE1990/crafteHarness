@@ -73,6 +73,7 @@ describe('agent runtime model adapter boundary', () => {
       'calculator',
       'get_user_location',
       'get_weather',
+      'search_craft_harness_docs',
       'manage_runtime_resource',
     ])
     expect(events).toContainEqual({

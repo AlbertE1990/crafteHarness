@@ -81,16 +81,41 @@ Runtime 只创建一个 `DeepSeekAdapter` 和一个 `Agent`。每次请求把目
 
 这里只有**连接与部署凭据**；模型与推理能力一律走 `config/models.json`，不放进环境变量。
 
-| 变量                            | 必填 | 说明                            |
-| ------------------------------- | ---- | ------------------------------- |
-| `DEEPSEEK_API_KEY`              | 是   | 供应商密钥                      |
-| `DEEPSEEK_BASE_URL`             | 否   | 默认 `https://api.deepseek.com` |
-| `CRAFT_AGENT_DATABASE_URL`      | 是   | PostgreSQL 连接串               |
-| `CRAFT_AGENT_DATABASE_POOL_MAX` | 否   | 连接池上限                      |
-| `CRAFT_AGENT_DATABASE_SSL`      | 否   | 是否启用 SSL                    |
-| `PORT`                          | 否   | 后端端口，默认 `3000`           |
+| 变量                            | 必填 | 说明                                             |
+| ------------------------------- | ---- | ------------------------------------------------ |
+| `DEEPSEEK_API_KEY`              | 是   | 供应商密钥                                       |
+| `DEEPSEEK_BASE_URL`             | 否   | 默认 `https://api.deepseek.com`                  |
+| `CRAFT_AGENT_DATABASE_URL`      | 是   | PostgreSQL 连接串                                |
+| `CRAFT_AGENT_DATABASE_POOL_MAX` | 否   | 连接池上限                                       |
+| `CRAFT_AGENT_DATABASE_SSL`      | 否   | 是否启用 SSL                                     |
+| `PORT`                          | 否   | 后端端口，默认 `3000`                            |
+| `CRAFT_HARNESS_DOCS_ROOT`       | 否   | Craft Harness 文档根目录，默认自动定位仓库根目录 |
+
+## Craft Harness 自身问答
+
+案例注册了只读工具 `search_craft_harness_docs`。当用户询问 Craft Harness 的功能、用法、API、
+架构或开发方式时，system prompt 会要求模型先检索官方文档，再根据命中的片段回答并列出来源文件。
+检索范围固定为根 `README.md`、`docs/learning/**/*.md` 和 `docs/standards/**/*.md`，用户问题不能
+控制文件路径，因此不会读取源码、`.env` 或其他服务器文件。
+
+生产镜像需要把上述文档与 Server 一起部署。如果目录结构与仓库不同，通过
+`CRAFT_HARNESS_DOCS_ROOT` 指向包含 `README.md` 和 `docs/` 的根目录；文档索引在首次查询时构建并
+缓存，更新文档后重启 Server 即可生效。当前实现使用轻量关键词检索，文档规模明显增大后可保持工具
+协议不变，把内部实现替换为 embeddings + 向量数据库，并加入版本字段和引用 URL。
 
 ## HTTP 接口
+
+### 匿名浏览器作用域
+
+页面首次打开时会生成一个 UUID v4，并以 `craft-agent.browser-scope-id.v1` 保存在当前站点的
+`localStorage` 中。所有聊天、会话和工具审批请求都会通过 `X-Craft-Scope-Id` 请求头携带该值，
+Server 再把它作为 SessionStore 的 `scopeId`，因此不同浏览器的会话目录和历史互相不可见。
+进程内演示资源同样按该 `scopeId` 分区：同一浏览器可跨会话读写，其他浏览器无法读取。
+
+这个标识按“浏览器配置文件 + 站点来源”持久化：刷新和重新打开页面不会改变；清理站点数据、使用
+无痕窗口或更换浏览器后会获得新 ID，也无法自动找回旧会话。反向代理必须保留
+`X-Craft-Scope-Id` 请求头。它只是无注册场景下的匿名数据分区，不是身份认证；如果以后保存敏感数据，
+应改为由登录态或服务端签名 Cookie 推导 `scopeId`，不能把客户端请求头当作权限凭据。
 
 | 方法     | 路径                              | 说明                                                                                                                     |
 | -------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -101,6 +126,8 @@ Runtime 只创建一个 `DeepSeekAdapter` 和一个 `Agent`。每次请求把目
 | `PATCH`  | `/api/conversation/:sessionId`    | 重命名会话，请求体 `{ name }`（非空、≤80 字符）                                                                          |
 | `DELETE` | `/api/conversation/:sessionId`    | 删除会话及其全部事件                                                                                                     |
 | `POST`   | `/api/tool-approvals/:approvalId` | 提交工具审批决定 `{ decision: 'allow' \| 'deny' }`                                                                       |
+
+除公共的 `GET /api/model` 外，上表接口都要求 `X-Craft-Scope-Id`；缺失或格式非法会返回 `400`。
 
 重命名与删除**不在库的 `SessionStore` 契约里**：名称是可变的展示投影（`session.created` 事件仍保留创建时的原始名称），删除则会移除已记录的事实。两者都由 Runtime 通过 `ConversationCatalogMutations` 端口注入，未注入时接口明确返回 `501`，库的 append-only 协议保持不变。
 

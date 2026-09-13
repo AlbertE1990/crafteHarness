@@ -585,6 +585,7 @@ export class AgentLoop<TContext = undefined> {
     return await tool.execute(parsed.value, {
       callId: toolCall.id,
       runId: state.runId,
+      scopeId: state.scopeId,
       sessionId: state.sessionId,
       context,
       signal,

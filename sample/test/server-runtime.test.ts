@@ -12,7 +12,7 @@ import {
   manageRuntimeResourceTool,
   serverToolGuard,
 } from '../src/server/agent-tools'
-import { createServerApp } from '../src/server/app'
+import { createServerApp as createRuntimeServerApp, SCOPE_ID_HEADER } from '../src/server/app'
 
 /**
  * 契约测试注入的部署模型目录。
@@ -29,6 +29,11 @@ const MODEL_INFO: ServerModelInfo = {
     reasoningEfforts: ['off', 'low', 'high', 'max'],
     defaultReasoningEffort: 'high',
   }],
+}
+
+/** 既有边界测试聚焦各自协议；显式 fallback 让它们不必重复声明同一个测试 scope。 */
+function createServerApp(options: Parameters<typeof createRuntimeServerApp>[0]) {
+  return createRuntimeServerApp({ ...options, fallbackScopeId: 'default' })
 }
 
 /** 构造 Server Runtime 契约测试使用的标准模型 chunk。 */
@@ -146,6 +151,33 @@ async function readApprovalRequest(
 }
 
 describe('server runtime HTTP boundary', () => {
+  it('requires a valid scope header on private endpoints in production mode', async () => {
+    const agent = new Agent({
+      adapter: new ScriptedModelAdapter({ script: [] }),
+      model: { id: 'scripted-model' },
+    })
+    const app = createRuntimeServerApp({ agent, model: MODEL_INFO, logger: false })
+
+    try {
+      const missing = await app.inject({ method: 'GET', url: '/api/conversation/list' })
+      const invalid = await app.inject({
+        method: 'GET',
+        url: '/api/conversation/list',
+        headers: { [SCOPE_ID_HEADER]: '../not-safe' },
+      })
+      const publicModel = await app.inject({ method: 'GET', url: '/api/model' })
+
+      expect(missing.statusCode).toBe(400)
+      expect(missing.json().error).toBe('SCOPE_ID_REQUIRED')
+      expect(invalid.statusCode).toBe(400)
+      expect(invalid.json().error).toBe('INVALID_SCOPE_ID')
+      expect(publicModel.statusCode).toBe(200)
+    }
+    finally {
+      await app.close()
+    }
+  })
+
   it('serves the deployment model vocabulary so the UI never hardcodes it', async () => {
     const agent = new Agent({
       adapter: new ScriptedModelAdapter({ script: [] }),
@@ -188,7 +220,8 @@ describe('server runtime HTTP boundary', () => {
       model: MODEL_INFO,
       logger: false,
       conversations: {
-        rename: async (sessionId, name) => {
+        rename: async (scopeId, sessionId, name) => {
+          expect(scopeId).toBe('default')
           if (!names.has(sessionId))
             return undefined
           names.set(sessionId, name)
@@ -200,7 +233,10 @@ describe('server runtime HTTP boundary', () => {
             version: 3,
           }
         },
-        remove: async sessionId => names.delete(sessionId),
+        remove: async (scopeId, sessionId) => {
+          expect(scopeId).toBe('default')
+          return names.delete(sessionId)
+        },
       },
     })
 
@@ -244,6 +280,65 @@ describe('server runtime HTTP boundary', () => {
         url: '/api/conversation/session-known',
       })
       expect(deleteMissing.statusCode).toBe(404)
+    }
+    finally {
+      await app.close()
+    }
+  })
+
+  it('isolates conversation history by the browser scope header', async () => {
+    const adapter = new ScriptedModelAdapter({
+      script: [
+        { method: 'complete', result: completion('甲的回答') },
+        { method: 'complete', result: completion('乙的回答') },
+      ],
+    })
+    const store = new MemorySessionStore()
+    const agent = new Agent({
+      adapter,
+      model: { id: 'scripted-model' },
+      sessionStore: store,
+    })
+    const app = createServerApp({ agent, model: MODEL_INFO, logger: false })
+    const scopeA = 'browser-11111111-1111-4111-8111-111111111111'
+    const scopeB = 'browser-22222222-2222-4222-8222-222222222222'
+
+    try {
+      const first = await app.inject({
+        method: 'POST',
+        url: '/api/chat',
+        headers: { [SCOPE_ID_HEADER]: scopeA },
+        payload: { message: '甲的会话', stream: false },
+      })
+      const second = await app.inject({
+        method: 'POST',
+        url: '/api/chat',
+        headers: { [SCOPE_ID_HEADER]: scopeB },
+        payload: { message: '乙的会话', stream: false },
+      })
+      expect(first.statusCode).toBe(200)
+      expect(second.statusCode).toBe(200)
+
+      const firstSessionId = first.json().data.sessionId as string
+      const listA = await app.inject({
+        method: 'GET',
+        url: '/api/conversation/list',
+        headers: { [SCOPE_ID_HEADER]: scopeA },
+      })
+      const listB = await app.inject({
+        method: 'GET',
+        url: '/api/conversation/list',
+        headers: { [SCOPE_ID_HEADER]: scopeB },
+      })
+      expect(listA.json().data.map((item: { name: string }) => item.name)).toEqual(['甲的会话'])
+      expect(listB.json().data.map((item: { name: string }) => item.name)).toEqual(['乙的会话'])
+
+      const crossScopeRead = await app.inject({
+        method: 'GET',
+        url: `/api/conversation/${firstSessionId}`,
+        headers: { [SCOPE_ID_HEADER]: scopeB },
+      })
+      expect(crossScopeRead.statusCode).toBe(404)
     }
     finally {
       await app.close()

@@ -127,6 +127,39 @@ const MAX_COMPOSER_HEIGHT = 320
 const COMPOSER_HEIGHT_STEP = 24
 /** public 目录中的产品标识；绑定变量可避免测试编译器解析根路径为本地文件。 */
 const brandLogoPath = '/logo.png'
+/** 匿名身份只保存在当前站点的浏览器存储中，不采集指纹，也不承担登录鉴权。 */
+const BROWSER_SCOPE_STORAGE_KEY = 'craft-agent.browser-scope-id.v1'
+const SCOPE_ID_HEADER = 'X-Craft-Scope-Id'
+const BROWSER_SCOPE_PATTERN = /^browser-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+const starterPrompts = [
+  {
+    kind: 'docs',
+    title: '了解 Craft Harness',
+    prompt: 'Craft Harness 能做什么？如何开发并注册一个自定义工具？',
+  },
+  {
+    kind: 'weather',
+    title: '查询实时天气',
+    prompt: '查询当前天气，并告诉我体感温度、湿度和风力。',
+  },
+  {
+    kind: 'write',
+    title: '测试资源写入',
+    prompt: '请将“你好，Hand-crafted Agent”写入演示资源 demo/greeting，然后读取它确认写入结果。',
+  },
+  {
+    kind: 'read',
+    title: '读取演示资源',
+    prompt: '请读取演示资源 demo/greeting，并告诉我其中的内容。',
+  },
+  {
+    kind: 'calculate',
+    title: '计算与时间',
+    prompt: '计算 (128 × 36) ÷ 9，并告诉我当前北京时间。',
+  },
+
+] as const
 
 /**
  * 会话 kebab 菜单的估算尺寸。
@@ -139,13 +172,20 @@ const CONVERSATION_MENU_HEIGHT = 76
 /** 菜单与 kebab 按钮、与视口边缘之间的留白。 */
 const CONVERSATION_MENU_GAP = 6
 const CONVERSATION_MENU_VIEWPORT_MARGIN = 8
+/** 删除 Popconfirm 的估算尺寸；用于贴近触发项并限制在视口内。 */
+const DELETE_CONFIRM_WIDTH = 276
+const DELETE_CONFIRM_HEIGHT = 136
+const DELETE_CONFIRM_GAP = 8
 
 const messages = ref<Message[]>([])
+const browserScopeId = getOrCreateBrowserScopeId()
+const shortScopeId = browserScopeId.slice(-8)
 const conversations = ref<ConversationSummary[]>([])
 const input = ref('')
 const sessionId = ref('')
 const isSending = ref(false)
 const isAwaitingFirstToken = ref(false)
+const isRefreshingConversation = ref(false)
 const isLoadingConversations = ref(false)
 const isSidebarOpen = ref(false)
 // 桌面端侧边栏收缩状态；收缩后仍保留展开按钮，不隐藏对话区。
@@ -168,6 +208,13 @@ const renamingId = ref('')
 const renameDraft = ref('')
 const renameError = ref('')
 const pendingDeleteId = ref('')
+const deletingId = ref('')
+const deleteConfirmPosition = ref<{
+  top: number
+  left: number
+  placement: 'left' | 'right'
+} | null>(null)
+const deleteConfirmButton = ref<HTMLButtonElement>()
 // 打开 kebab 菜单的会话 ID；同一时间只允许一个会话的菜单展开。
 const openMenuId = ref<string | null>(null)
 // 菜单的视口坐标；菜单是 position: fixed，必须由页面按 kebab 的位置算出来。
@@ -212,10 +259,60 @@ const conversationMenuStyle = computed(() => conversationMenuPosition.value
       left: `${conversationMenuPosition.value.left}px`,
     }
   : undefined)
+const deleteConfirmStyle = computed(() => deleteConfirmPosition.value
+  ? {
+      position: 'fixed' as const,
+      top: `${deleteConfirmPosition.value.top}px`,
+      left: `${deleteConfirmPosition.value.left}px`,
+    }
+  : undefined)
+const pendingDeleteConversation = computed(() => (
+  conversations.value.find(conversation => conversation.id === pendingDeleteId.value)
+))
 let nextMessageId = 1
 let approvalCountdown: ReturnType<typeof setInterval> | undefined
 /** 正在进行的把手拖动；同一次拖动内用起始高度 + 指针位移计算新高度。 */
 let composerResizeState: { pointerId: number, startY: number, startHeight: number } | undefined
+
+/** 生成不依赖服务端状态的 UUID v4；老浏览器没有 Web Crypto 时仅退化匿名隔离强度。 */
+function createBrowserScopeId(): string {
+  const bytes = new Uint8Array(16)
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes)
+  }
+  else {
+    for (let index = 0; index < bytes.length; index++)
+      bytes[index] = Math.floor(Math.random() * 256)
+  }
+  bytes[6] = (bytes[6]! & 0x0F) | 0x40
+  bytes[8] = (bytes[8]! & 0x3F) | 0x80
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  return `browser-${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+/** 同一浏览器与站点持续复用一个匿名 scope；清理站点数据后会获得新身份。 */
+function getOrCreateBrowserScopeId(): string {
+  try {
+    const stored = window.localStorage.getItem(BROWSER_SCOPE_STORAGE_KEY)
+    if (stored && BROWSER_SCOPE_PATTERN.test(stored))
+      return stored
+
+    const created = createBrowserScopeId()
+    window.localStorage.setItem(BROWSER_SCOPE_STORAGE_KEY, created)
+    return created
+  }
+  catch {
+    // 隐私模式或存储策略可能禁用 localStorage；本次页面生命周期内仍保持同一 scope。
+    return createBrowserScopeId()
+  }
+}
+
+/** 所有访问用户数据的请求都带同一个匿名作用域，模型目录等公共接口不需要它。 */
+function scopedFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers)
+  headers.set(SCOPE_ID_HEADER, browserScopeId)
+  return fetch(input, { ...init, headers })
+}
 
 const displayedConversations = computed(() => [...conversations.value].reverse())
 const activeConversation = computed(() => (
@@ -555,6 +652,7 @@ function computeConversationMenuPosition(button: HTMLElement): { top: number, le
 
 /** 打开 / 关闭某个会话的 kebab 菜单；同时只允许一个菜单展开，并用按钮位置算出坐标。 */
 function toggleConversationMenu(conversation: ConversationSummary, event: MouseEvent): void {
+  closeDeleteConfirmation()
   if (openMenuId.value === conversation.id) {
     closeConversationMenu()
     return
@@ -573,6 +671,41 @@ function closeConversationMenu(): void {
   conversationMenuPosition.value = null
 }
 
+/** Popconfirm 优先显示在菜单右侧，空间不足时翻到左侧，并始终夹在视口内。 */
+function computeDeleteConfirmPosition(trigger: HTMLElement): {
+  top: number
+  left: number
+  placement: 'left' | 'right'
+} {
+  const rect = trigger.getBoundingClientRect()
+  const margin = CONVERSATION_MENU_VIEWPORT_MARGIN
+  const maxLeft = Math.max(margin, window.innerWidth - DELETE_CONFIRM_WIDTH - margin)
+  const rightSide = rect.right + DELETE_CONFIRM_GAP
+  const leftSide = rect.left - DELETE_CONFIRM_WIDTH - DELETE_CONFIRM_GAP
+  const placement = rightSide + DELETE_CONFIRM_WIDTH <= window.innerWidth - margin
+    ? 'right'
+    : 'left'
+  const preferredLeft = placement === 'right' ? rightSide : leftSide
+  const left = Math.min(Math.max(preferredLeft, margin), maxLeft)
+  const top = Math.min(
+    Math.max(rect.top, margin),
+    Math.max(margin, window.innerHeight - DELETE_CONFIRM_HEIGHT - margin),
+  )
+  return { top, left, placement }
+}
+
+function closeDeleteConfirmation(): void {
+  if (deletingId.value)
+    return
+  pendingDeleteId.value = ''
+  deleteConfirmPosition.value = null
+}
+
+function closeConversationOverlays(): void {
+  closeConversationMenu()
+  closeDeleteConfirmation()
+}
+
 /**
  * 点击页面其它位置时关闭 kebab 菜单。
  *
@@ -580,14 +713,15 @@ function closeConversationMenu(): void {
  * 必须被识别为“内部点击”，否则打开菜单的那一次点击会立刻把它关掉。
  */
 function handleDocumentClick(event: MouseEvent): void {
-  if (!openMenuId.value)
-    return
-
   const target = event.target
-  if (target instanceof Element && target.closest('.conversation-menu, .conversation-menu-button'))
-    return
+  if (target instanceof Element) {
+    if (target.closest('.conversation-delete-popconfirm'))
+      return
+    if (target.closest('.conversation-menu, .conversation-menu-button'))
+      return
+  }
 
-  closeConversationMenu()
+  closeConversationOverlays()
 }
 
 /** 把当前消息列表转换成服务端的展示历史形状，用于回填会话详情缓存。 */
@@ -671,7 +805,7 @@ async function selectConversation(conversation: ConversationSummary) {
   }
 
   try {
-    const response = await fetch(`/api/conversation/${encodeURIComponent(conversation.id)}`)
+    const response = await scopedFetch(`/api/conversation/${encodeURIComponent(conversation.id)}`)
     if (!response.ok)
       throw new Error(`会话详情加载失败（${response.status}）`)
 
@@ -684,6 +818,45 @@ async function selectConversation(conversation: ConversationSummary) {
   }
   catch (error) {
     conversationError.value = error instanceof Error ? error.message : '会话详情加载失败'
+  }
+}
+
+/**
+ * 绕过内存缓存重新读取当前会话，用服务端持久化事实替换页面消息。
+ * 适合多标签页写入或流式连接意外中断后手动校准，不刷新整个会话目录。
+ */
+async function refreshCurrentConversation(): Promise<void> {
+  const id = sessionId.value
+  if (!id || isSending.value || isRefreshingConversation.value)
+    return
+
+  isRefreshingConversation.value = true
+  errorMessage.value = ''
+  try {
+    const response = await scopedFetch(`/api/conversation/${encodeURIComponent(id)}`)
+    if (!response.ok)
+      throw new Error(`当前会话刷新失败（${response.status}）`)
+
+    const result = await response.json() as Partial<ConversationDetailResponse>
+    if (!isConversationDetail(result.data))
+      throw new TypeError('当前会话返回格式不正确')
+
+    const detail = result.data
+    const nextMessages = historyToMessages(detail.displayHistory ?? detail.history)
+    conversationCache.set(id, detail)
+    messageCache.set(id, nextMessages)
+    messages.value = nextMessages
+    conversations.value = conversations.value.map(conversation => (
+      conversation.id === id
+        ? { id: detail.id, name: detail.name, createAt: detail.createAt }
+        : conversation
+    ))
+  }
+  catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '当前会话刷新失败'
+  }
+  finally {
+    isRefreshingConversation.value = false
   }
 }
 
@@ -702,6 +875,7 @@ function startNewConversation() {
   isSidebarOpen.value = false
   renamingId.value = ''
   pendingDeleteId.value = ''
+  deleteConfirmPosition.value = null
   closeConversationMenu()
   resetComposerHeight()
 }
@@ -712,6 +886,7 @@ function startRename(conversation: ConversationSummary): void {
   renameDraft.value = conversation.name
   renameError.value = ''
   pendingDeleteId.value = ''
+  deleteConfirmPosition.value = null
   closeConversationMenu()
 }
 
@@ -741,7 +916,7 @@ async function submitRename(conversation: ConversationSummary): Promise<void> {
 
   renameError.value = ''
   try {
-    const response = await fetch(`/api/conversation/${encodeURIComponent(conversation.id)}`, {
+    const response = await scopedFetch(`/api/conversation/${encodeURIComponent(conversation.id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
@@ -770,12 +945,16 @@ async function submitRename(conversation: ConversationSummary): Promise<void> {
 }
 
 /** 请求删除；破坏性操作先进入二次确认，再由用户确认后发出 DELETE。 */
-function askDeleteConversation(conversation: ConversationSummary): void {
+function askDeleteConversation(conversation: ConversationSummary, event: MouseEvent): void {
+  const trigger = event.currentTarget
+  if (trigger instanceof HTMLElement)
+    deleteConfirmPosition.value = computeDeleteConfirmPosition(trigger)
   pendingDeleteId.value = conversation.id
   renamingId.value = ''
   renameError.value = ''
   conversationActionError.value = ''
   closeConversationMenu()
+  void nextTick(() => deleteConfirmButton.value?.focus())
 }
 
 /**
@@ -785,12 +964,13 @@ function askDeleteConversation(conversation: ConversationSummary): void {
  * 避免留下一个已经在服务端消失的 sessionId 继续发送。
  */
 async function deleteConversation(conversation: ConversationSummary): Promise<void> {
-  if (isSending.value)
+  if (isSending.value || deletingId.value)
     return
 
   conversationActionError.value = ''
+  deletingId.value = conversation.id
   try {
-    const response = await fetch(`/api/conversation/${encodeURIComponent(conversation.id)}`, {
+    const response = await scopedFetch(`/api/conversation/${encodeURIComponent(conversation.id)}`, {
       method: 'DELETE',
     })
     if (!response.ok) {
@@ -803,12 +983,16 @@ async function deleteConversation(conversation: ConversationSummary): Promise<vo
     conversationCache.delete(conversation.id)
     messageCache.delete(conversation.id)
     pendingDeleteId.value = ''
+    deleteConfirmPosition.value = null
 
     if (sessionId.value === conversation.id)
       startNewConversation()
   }
   catch (error) {
     conversationActionError.value = error instanceof Error ? error.message : '删除失败'
+  }
+  finally {
+    deletingId.value = ''
   }
 }
 
@@ -826,7 +1010,7 @@ async function loadConversations(selectInitial = false) {
   conversationError.value = ''
 
   try {
-    const response = await fetch('/api/conversation/list')
+    const response = await scopedFetch('/api/conversation/list')
     if (!response.ok)
       throw new Error(`会话列表加载失败（${response.status}）`)
 
@@ -997,7 +1181,7 @@ async function decideToolApproval(decision: 'allow' | 'deny'): Promise<void> {
   approvalError.value = ''
   interaction.status = 'submitting'
   try {
-    const response = await fetch(
+    const response = await scopedFetch(
       `/api/tool-approvals/${encodeURIComponent(interaction.approvalId)}`,
       {
         method: 'POST',
@@ -1178,7 +1362,7 @@ async function send(prompt = input.value, appendUserMessage = true) {
     if (requestModel)
       requestBody.model = requestModel
 
-    const response = await fetch('/api/chat', {
+    const response = await scopedFetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
@@ -1314,13 +1498,13 @@ onMounted(() => {
   // 关闭 kebab 菜单依赖 document 上的点击监听；常驻一份，卸载时移除。
   document.addEventListener('click', handleDocumentClick)
   // 菜单是 fixed 定位，不会跟着列表滚动也不会跟着窗口变化，因此在两处都直接收起。
-  window.addEventListener('resize', closeConversationMenu)
+  window.addEventListener('resize', closeConversationOverlays)
 })
 
 onBeforeUnmount(() => {
   stopApprovalCountdown()
   document.removeEventListener('click', handleDocumentClick)
-  window.removeEventListener('resize', closeConversationMenu)
+  window.removeEventListener('resize', closeConversationOverlays)
 })
 </script>
 
@@ -1345,7 +1529,7 @@ onBeforeUnmount(() => {
             <img class="brand-mark" :src="brandLogoPath" alt="Hand-crafted Agent">
             <div class="min-w-0">
               <div class="text-3.75 text-slate-900 font-700 truncate dark:text-white">
-                Hand-crafted
+                Craft Harness
               </div>
               <div class="text-2.75 text-slate-500 mt-0.5 dark:text-slate-400">
                 Agent Workspace
@@ -1394,7 +1578,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
-        <nav class="conversation-list" aria-label="会话列表" @scroll="closeConversationMenu">
+        <nav class="conversation-list" aria-label="会话列表" @scroll="closeConversationOverlays">
           <!-- 重命名 / 删除失败不影响已经加载好的列表，因此单独提示而不是替换整个列表。 -->
           <div v-if="conversationActionError" class="sidebar-notice error" role="alert">
             <div i-carbon-warning-alt />
@@ -1429,11 +1613,10 @@ onBeforeUnmount(() => {
             :class="{
               'active': conversation.id === sessionId,
               'editing': renamingId === conversation.id,
-              'confirming': pendingDeleteId === conversation.id,
               'menu-open': openMenuId === conversation.id,
             }"
             :aria-current="conversation.id === sessionId ? 'page' : undefined"
-            @keydown.esc.stop.prevent="closeConversationMenu"
+            @keydown.esc.stop.prevent="closeConversationOverlays"
           >
             <!-- 就地重命名：不再嵌套按钮，避免出现非法的按钮嵌套结构。 -->
             <div v-if="renamingId === conversation.id" class="conversation-rename">
@@ -1483,26 +1666,6 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
               </button>
-
-              <!-- 删除是破坏性操作：先二次确认，再由“删除”按钮发出 DELETE。 -->
-              <div v-if="pendingDeleteId === conversation.id" class="conversation-delete-ask">
-                <span>删除这个会话？</span>
-                <button
-                  class="conversation-delete-confirm"
-                  type="button"
-                  :disabled="isSending"
-                  @click="deleteConversation(conversation)"
-                >
-                  删除
-                </button>
-                <button
-                  class="conversation-delete-cancel"
-                  type="button"
-                  @click="pendingDeleteId = ''"
-                >
-                  取消
-                </button>
-              </div>
             </template>
             <!--
               kebab 入口在列表项右侧，默认透明、hover / 激活 / 聚焦 / 菜单展开时才显形；
@@ -1544,7 +1707,7 @@ onBeforeUnmount(() => {
                 class="conversation-menu-delete"
                 type="button"
                 role="menuitem"
-                @click="askDeleteConversation(conversation)"
+                @click="askDeleteConversation(conversation, $event)"
               >
                 <div i-carbon-trash-can aria-hidden="true" />
                 <span>删除会话</span>
@@ -1563,9 +1726,56 @@ onBeforeUnmount(() => {
 
         <div class="sidebar-footer">
           <span class="status-dot" />
-          <span>服务已连接</span>
+          <span :title="browserScopeId">匿名访客 · {{ shortScopeId }}</span>
         </div>
       </aside>
+
+      <!--
+        Popconfirm 与侧边栏并列，避免被滚动容器或移动端抽屉裁剪；视觉位置仍锚定到
+        “删除会话”菜单项。只有确认按钮会发出 DELETE，点击外部或 Esc 均安全取消。
+      -->
+      <section
+        v-if="pendingDeleteConversation"
+        class="conversation-delete-popconfirm"
+        :class="`placement-${deleteConfirmPosition?.placement ?? 'right'}`"
+        role="alertdialog"
+        aria-labelledby="delete-confirm-title"
+        aria-describedby="delete-confirm-description"
+        :style="deleteConfirmStyle"
+        @keydown.esc.stop.prevent="closeDeleteConfirmation"
+      >
+        <div class="delete-popconfirm-arrow" aria-hidden="true" />
+        <div class="delete-popconfirm-content">
+          <div class="delete-popconfirm-icon" aria-hidden="true">
+            <div i-carbon-warning-alt-filled />
+          </div>
+          <div class="min-w-0">
+            <strong id="delete-confirm-title">删除这个会话？</strong>
+            <p id="delete-confirm-description">
+              “{{ pendingDeleteConversation.name || '未命名对话' }}”的消息记录将永久删除，此操作无法撤销。
+            </p>
+          </div>
+        </div>
+        <div class="delete-popconfirm-actions">
+          <button
+            class="conversation-delete-cancel"
+            type="button"
+            :disabled="deletingId === pendingDeleteConversation.id"
+            @click.stop="closeDeleteConfirmation"
+          >
+            取消
+          </button>
+          <button
+            ref="deleteConfirmButton"
+            class="conversation-delete-confirm"
+            type="button"
+            :disabled="isSending || deletingId === pendingDeleteConversation.id"
+            @click.stop="deleteConversation(pendingDeleteConversation)"
+          >
+            {{ deletingId === pendingDeleteConversation.id ? '删除中…' : '确认删除' }}
+          </button>
+        </div>
+      </section>
 
       <section class="chat-panel">
         <header class="chat-header">
@@ -1596,8 +1806,20 @@ onBeforeUnmount(() => {
               <span>{{ sessionId ? '对话上下文已连接' : '发送第一条消息以创建对话' }}</span>
             </div> -->
           </div>
-          <div v-if="messages.length" class="message-count">
-            {{ messages.length }} 条消息
+          <div v-if="sessionId" class="conversation-header-actions">
+            <div v-if="messages.length" class="message-count">
+              {{ messages.length }} 条消息
+            </div>
+            <button
+              class="conversation-refresh-button"
+              type="button"
+              :disabled="isSending || isRefreshingConversation"
+              title="刷新当前会话"
+              aria-label="刷新当前会话内容"
+              @click="refreshCurrentConversation"
+            >
+              <div i-carbon-renew :class="{ 'animate-spin': isRefreshingConversation }" />
+            </button>
           </div>
         </header>
 
@@ -1623,11 +1845,34 @@ onBeforeUnmount(() => {
                 <div i-carbon-chat-bot text-8 />
               </div>
               <h2 class="text-6 text-slate-900 tracking-tight font-700 mb-0 mt-5 dark:text-white">
-                开始一段新对话
+                我可以帮你做什么？
               </h2>
               <p class="text-3.5 text-slate-500 leading-6 mb-0 mt-2 max-w-110 dark:text-slate-400">
-                第一条消息不会携带 sessionId，服务端返回后会自动关联后续上下文。
+                天气、计算、受控资源操作与 Craft Harness 开发问答
               </p>
+              <div class="starter-grid" aria-label="对话示例">
+                <button
+                  v-for="starter in starterPrompts"
+                  :key="starter.kind"
+                  class="starter-prompt"
+                  type="button"
+                  :disabled="isSending"
+                  @click="send(starter.prompt)"
+                >
+                  <div class="starter-icon" aria-hidden="true">
+                    <div v-if="starter.kind === 'weather'" i-carbon-partly-cloudy />
+                    <div v-else-if="starter.kind === 'write'" i-carbon-save />
+                    <div v-else-if="starter.kind === 'read'" i-carbon-document-view />
+                    <div v-else-if="starter.kind === 'calculate'" i-carbon-calculator />
+                    <div v-else i-carbon-book />
+                  </div>
+                  <span class="starter-copy">
+                    <strong>{{ starter.title }}</strong>
+                    <span>{{ starter.prompt }}</span>
+                  </span>
+                  <div class="starter-arrow" i-carbon-arrow-right aria-hidden="true" />
+                </button>
+              </div>
             </div>
           </div>
         </main>
@@ -1817,9 +2062,10 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 278px minmax(0, 1fr);
   background: white;
+  transition: grid-template-columns 220ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* 侧边栏收缩后只让出列宽，对话区仍然占满剩余空间。 */
+/* 列宽与侧边栏位移使用同一时长，对话区会跟随滑出过程平滑扩展。 */
 .workspace-shell.sidebar-collapsed {
   grid-template-columns: 0 minmax(0, 1fr);
 }
@@ -1833,18 +2079,25 @@ onBeforeUnmount(() => {
   padding: 18px 14px 14px;
   border-right: 1px solid var(--panel-border);
   background: #f8fafc;
+  transform: translateX(0);
+  will-change: transform, opacity;
   transition:
+    transform 220ms cubic-bezier(0.4, 0, 0.2, 1),
     opacity 160ms ease,
-    padding 160ms ease;
+    visibility 0s linear 0s;
 }
 
-/* 收缩用状态类表达；内容靠 overflow: hidden 收起，避免撑出整页滚动。 */
+/* 向左滑出后再隐藏可见性；展开时移除该类会立即恢复可见并从左侧滑入。 */
 .conversation-sidebar.collapsed {
   visibility: hidden;
-  padding-inline: 0;
   border-right-color: transparent;
   opacity: 0;
+  transform: translateX(-100%);
   pointer-events: none;
+  transition:
+    transform 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 160ms ease,
+    visibility 0s linear 220ms;
 }
 
 .sidebar-header {
@@ -2158,24 +2411,16 @@ onBeforeUnmount(() => {
   font-size: 11px;
 }
 
-.conversation-delete-ask {
-  flex: 1 1 100%;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px;
-  color: #b91c1c;
-  font-size: 11.5px;
-}
-
 .conversation-delete-confirm,
 .conversation-delete-cancel {
-  border: 0;
-  border-radius: 8px;
-  padding: 4px 8px;
+  min-width: 64px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 0 11px;
   cursor: pointer;
   font: inherit;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 650;
 }
 
@@ -2191,7 +2436,82 @@ onBeforeUnmount(() => {
 
 .conversation-delete-cancel {
   color: #475569;
-  background: #e2e8f0;
+  border-color: #cbd5e1;
+  background: white;
+}
+
+.conversation-delete-cancel:hover:not(:disabled) {
+  color: #1e293b;
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.conversation-delete-popconfirm {
+  z-index: 110;
+  width: 276px;
+  padding: 15px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: white;
+  box-shadow:
+    0 12px 32px rgb(15 23 42 / 16%),
+    0 2px 6px rgb(15 23 42 / 8%);
+}
+
+.delete-popconfirm-arrow {
+  position: absolute;
+  top: 15px;
+  left: -6px;
+  width: 11px;
+  height: 11px;
+  border-bottom: 1px solid #e2e8f0;
+  border-left: 1px solid #e2e8f0;
+  background: white;
+  transform: rotate(45deg);
+}
+
+.conversation-delete-popconfirm.placement-left .delete-popconfirm-arrow {
+  right: -6px;
+  left: auto;
+  border: 0;
+  border-top: 1px solid #e2e8f0;
+  border-right: 1px solid #e2e8f0;
+}
+
+.delete-popconfirm-content {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+}
+
+.delete-popconfirm-icon {
+  display: grid;
+  place-items: center;
+  padding-top: 1px;
+  color: #f59e0b;
+  font-size: 17px;
+}
+
+.delete-popconfirm-content strong {
+  display: block;
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.delete-popconfirm-content p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.delete-popconfirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 13px;
 }
 
 .conversation-icon {
@@ -2335,6 +2655,13 @@ onBeforeUnmount(() => {
   font-size: 19px;
 }
 
+.conversation-header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .message-count {
   flex: 0 0 auto;
   border: 1px solid #e2e8f0;
@@ -2343,6 +2670,40 @@ onBeforeUnmount(() => {
   color: #64748b;
   background: #f8fafc;
   font-size: 11px;
+}
+
+.conversation-refresh-button {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 50%;
+  color: #64748b;
+  background: #f8fafc;
+  cursor: pointer;
+  font-size: 14px;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease,
+    background 140ms ease;
+}
+
+.conversation-refresh-button:hover:not(:disabled) {
+  border-color: #bfdbfe;
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.conversation-refresh-button:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.conversation-refresh-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 /*
@@ -2382,6 +2743,105 @@ onBeforeUnmount(() => {
   width: 72px;
   height: 72px;
   border-radius: 22px;
+}
+
+.starter-grid {
+  width: min(100%, 720px);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 28px;
+  text-align: left;
+}
+
+.starter-prompt {
+  min-width: 0;
+  min-height: 82px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 11px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 13px 14px;
+  color: #334155;
+  background: rgb(255 255 255 / 78%);
+  cursor: pointer;
+  font: inherit;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.starter-prompt:hover:not(:disabled) {
+  border-color: #94a3b8;
+  box-shadow: 0 7px 18px rgb(15 23 42 / 8%);
+  transform: translateY(-1px);
+}
+
+.starter-prompt:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.starter-prompt:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.starter-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: #0369a1;
+  background: #e0f2fe;
+  font-size: 18px;
+}
+
+.starter-prompt:nth-child(2) .starter-icon {
+  color: #b45309;
+  background: #fef3c7;
+}
+
+.starter-prompt:nth-child(3) .starter-icon {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.starter-prompt:nth-child(4) .starter-icon {
+  color: #be123c;
+  background: #ffe4e6;
+}
+
+.starter-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.starter-copy strong {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.starter-copy > span {
+  overflow: hidden;
+  display: -webkit-box;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.starter-arrow {
+  color: #94a3b8;
+  font-size: 16px;
 }
 
 .composer-area {
@@ -2838,6 +3298,26 @@ onBeforeUnmount(() => {
     padding: 20px 16px;
   }
 
+  .empty-state {
+    justify-content: flex-start;
+    padding-block: 24px;
+  }
+
+  .empty-icon {
+    width: 58px;
+    height: 58px;
+    border-radius: 16px;
+  }
+
+  .starter-grid {
+    grid-template-columns: minmax(0, 1fr);
+    margin-top: 22px;
+  }
+
+  .starter-prompt {
+    min-height: 72px;
+  }
+
   .composer-area {
     padding: 12px 16px max(12px, env(safe-area-inset-bottom));
   }
@@ -2848,6 +3328,17 @@ onBeforeUnmount(() => {
   .conversation-skeleton span {
     animation: none;
   }
+
+  .workspace-shell,
+  .conversation-sidebar,
+  .conversation-sidebar.collapsed {
+    transition: none;
+  }
+}
+
+.starter-prompt:nth-child(5) .starter-icon {
+  color: #6d28d9;
+  background: #ede9fe;
 }
 
 :global(html.dark) .chat-page {
@@ -2947,7 +3438,35 @@ onBeforeUnmount(() => {
 
 :global(html.dark) .conversation-delete-cancel {
   color: #cbd5e1;
+  border-color: #475569;
+  background: #1e293b;
+}
+
+:global(html.dark) .conversation-delete-cancel:hover:not(:disabled) {
+  color: #f8fafc;
+  border-color: #64748b;
   background: #334155;
+}
+
+:global(html.dark) .conversation-delete-popconfirm {
+  border-color: #334155;
+  background: #1e293b;
+  box-shadow:
+    0 12px 32px rgb(0 0 0 / 42%),
+    0 2px 6px rgb(0 0 0 / 28%);
+}
+
+:global(html.dark) .delete-popconfirm-arrow {
+  border-color: #334155;
+  background: #1e293b;
+}
+
+:global(html.dark) .delete-popconfirm-content strong {
+  color: #f8fafc;
+}
+
+:global(html.dark) .delete-popconfirm-content p {
+  color: #94a3b8;
 }
 
 :global(html.dark) .conversation-rename-error,
@@ -2963,6 +3482,38 @@ onBeforeUnmount(() => {
   border-color: #334155;
   color: #94a3b8;
   background: #1e293b;
+}
+
+:global(html.dark) .conversation-refresh-button {
+  border-color: #334155;
+  color: #94a3b8;
+  background: #1e293b;
+}
+
+:global(html.dark) .conversation-refresh-button:hover:not(:disabled) {
+  border-color: #1d4ed8;
+  color: #bfdbfe;
+  background: #172554;
+}
+
+:global(html.dark) .starter-prompt {
+  border-color: #334155;
+  color: #cbd5e1;
+  background: rgb(30 41 59 / 76%);
+}
+
+:global(html.dark) .starter-prompt:hover:not(:disabled) {
+  border-color: #64748b;
+  box-shadow: 0 7px 18px rgb(0 0 0 / 22%);
+}
+
+:global(html.dark) .starter-copy strong {
+  color: #f8fafc;
+}
+
+:global(html.dark) .starter-copy > span,
+:global(html.dark) .starter-arrow {
+  color: #94a3b8;
 }
 
 /* 消息气泡 / 思考面板 / markdown 的深色规则已随消息区迁移到 ConversationView。 */

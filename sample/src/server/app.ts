@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyServerOptions } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyServerOptions } from 'fastify'
 import type { ServerResponse } from 'node:http'
 import type {
   Agent,
@@ -12,8 +12,12 @@ import type {
 import Fastify from 'fastify'
 import { z } from 'zod'
 
-/** 当前参考 Runtime 是单用户部署，仍显式组装固定 Session 作用域。 */
-const SINGLE_USER_SCOPE_ID = 'default'
+/** 浏览器通过此请求头携带本地持久化的匿名作用域。 */
+export const SCOPE_ID_HEADER = 'x-craft-scope-id'
+const scopeIdSchema = z.string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-z0-9][\w.:-]*$/i)
 
 /** 会话名称长度上限；只在 HTTP 边界约束，存储层只要求非空。 */
 const MAX_CONVERSATION_NAME_LENGTH = 80
@@ -134,8 +138,8 @@ export interface ConversationCatalogMutations {
    * 返回摘要而不是布尔值，是为了让处理器不必再读一次会话就能回出与列表端点一致的形状：
    * 「改名成功、随后读不到」若回 404，会把一次成功操作报成失败。
    */
-  rename: (sessionId: string, name: string) => Promise<SessionSummary | undefined>
-  remove: (sessionId: string) => Promise<boolean>
+  rename: (scopeId: string, sessionId: string, name: string) => Promise<SessionSummary | undefined>
+  remove: (scopeId: string, sessionId: string) => Promise<boolean>
 }
 
 /** 创建 Fastify 应用时注入的 Runtime 和日志配置。 */
@@ -145,6 +149,8 @@ export interface CreateServerAppOptions {
   readonly model: ServerModelInfo
   /** 未注入时，重命名与删除接口返回 501，而不是静默无效。 */
   readonly conversations?: ConversationCatalogMutations
+  /** 仅供旧客户端迁移或测试使用；生产部署省略时会拒绝缺少 scope 请求头的私有接口。 */
+  readonly fallbackScopeId?: string
   readonly logger?: FastifyServerOptions['logger']
 }
 
@@ -159,6 +165,8 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     // Zod strictObject 投影出的 additionalProperties:false 必须拒绝未知字段，不能被 Ajv 静默移除。
     ajv: { customOptions: { removeAdditional: false } },
   })
+  /** pending 审批也属于发起它的匿名作用域，不能只依赖不可猜测的 UUID。 */
+  const approvalScopes = new Map<string, string>()
 
   fastify.post<{
     Params: { approvalId: string }
@@ -168,11 +176,26 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
       body: toFastifySchema(approvalBodySchema, 'input'),
     },
   }, async (request, reply) => {
+    const scopeId = readScopeId(
+      request.headers[SCOPE_ID_HEADER],
+      reply,
+      options.fallbackScopeId,
+    )
+    if (!scopeId)
+      return
+    if (approvalScopes.get(request.params.approvalId) !== scopeId) {
+      reply.code(404)
+      return {
+        error: 'TOOL_APPROVAL_NOT_FOUND',
+        message: '审批不存在、已处理或已经超时',
+      }
+    }
     // Server 只转换 HTTP 数据；一次性校验和 pending Promise 都由 Agent 内部管理。
     const result = options.agent.resolveToolApproval({
       approvalId: request.params.approvalId,
       decision: request.body.decision,
     })
+    approvalScopes.delete(request.params.approvalId)
     if (!result.accepted) {
       // 同一个 approvalId 只能使用一次；已处理、超时和未知 ID 统一视为不存在。
       reply.code(404)
@@ -199,16 +222,22 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
         200: toFastifySchema(conversationListResponseSchema, 'output'),
       },
     },
-  }, async () => {
-    const page = await options.agent.listSessions({ scopeId: SINGLE_USER_SCOPE_ID })
+  }, async (request, reply) => {
+    const scopeId = readScopeId(request.headers[SCOPE_ID_HEADER], reply, options.fallbackScopeId)
+    if (!scopeId)
+      return
+    const page = await options.agent.listSessions({ scopeId })
     return { data: page.sessions.map(createConversationSummary) }
   })
 
   fastify.get<{
     Params: { sessionId: string }
   }>('/api/conversation/:sessionId', async (request, reply) => {
+    const scopeId = readScopeId(request.headers[SCOPE_ID_HEADER], reply, options.fallbackScopeId)
+    if (!scopeId)
+      return
     const session = await options.agent.getSession({
-      scopeId: SINGLE_USER_SCOPE_ID,
+      scopeId,
       sessionId: request.params.sessionId,
     })
     if (!session) {
@@ -230,6 +259,9 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
       body: toFastifySchema(conversationNameBodySchema, 'input'),
     },
   }, async (request, reply) => {
+    const scopeId = readScopeId(request.headers[SCOPE_ID_HEADER], reply, options.fallbackScopeId)
+    if (!scopeId)
+      return
     if (!options.conversations) {
       reply.code(501)
       return {
@@ -239,7 +271,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     }
 
     const name = request.body.name.trim()
-    const renamed = await options.conversations.rename(request.params.sessionId, name)
+    const renamed = await options.conversations.rename(scopeId, request.params.sessionId, name)
     if (!renamed) {
       reply.code(404)
       return {
@@ -255,6 +287,9 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
   fastify.delete<{
     Params: { sessionId: string }
   }>('/api/conversation/:sessionId', async (request, reply) => {
+    const scopeId = readScopeId(request.headers[SCOPE_ID_HEADER], reply, options.fallbackScopeId)
+    if (!scopeId)
+      return
     if (!options.conversations) {
       reply.code(501)
       return {
@@ -263,7 +298,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
       }
     }
 
-    const removed = await options.conversations.remove(request.params.sessionId)
+    const removed = await options.conversations.remove(scopeId, request.params.sessionId)
     if (!removed) {
       reply.code(404)
       return {
@@ -282,6 +317,9 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
       body: toFastifySchema(chatBodySchema, 'input'),
     },
   }, async (request, reply) => {
+    const scopeId = readScopeId(request.headers[SCOPE_ID_HEADER], reply, options.fallbackScopeId)
+    if (!scopeId)
+      return
     const abortController = new AbortController()
     const useStream = request.body.stream ?? true
     // 未声明的模型直接拒绝，而不是静默退回默认模型让用户以为切换生效了。
@@ -313,7 +351,7 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     const reasoningEffort = requestedEffort || capability.defaultReasoningEffort
 
     const agentRequest = {
-      scopeId: SINGLE_USER_SCOPE_ID,
+      scopeId,
       input: request.body.message,
       ...(request.body.sessionId
         ? { sessionId: request.body.sessionId }
@@ -355,8 +393,17 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
     })
     reply.raw.flushHeaders()
 
+    const runApprovalIds = new Set<string>()
     try {
       for await (const event of options.agent.stream(agentRequest, abortController.signal)) {
+        if (event.type === 'tool.approval.requested') {
+          approvalScopes.set(event.approvalId, scopeId)
+          runApprovalIds.add(event.approvalId)
+        }
+        else if (event.type === 'tool.approval.resolved') {
+          approvalScopes.delete(event.approvalId)
+          runApprovalIds.delete(event.approvalId)
+        }
         // AgentOutputEvent 已是 craft-harness 的标准应用协议，默认原样写出即可。
         await writeSseEvent(reply.raw, event)
       }
@@ -370,12 +417,47 @@ export function createServerApp(options: CreateServerAppOptions): FastifyInstanc
       }
     }
     finally {
+      for (const approvalId of runApprovalIds)
+        approvalScopes.delete(approvalId)
       if (!reply.raw.writableEnded)
         reply.raw.end()
     }
   })
 
   return fastify
+}
+
+/**
+ * 将不可信请求头收窄为 SessionStore 可用的作用域。
+ *
+ * 缺少请求头时只允许调用方显式配置迁移期 fallback；生产 Runtime 不配置 fallback，
+ * 因而不会让匿名请求意外汇入共享空间。格式错误始终返回 400。
+ */
+function readScopeId(
+  header: string | string[] | undefined,
+  reply: FastifyReply,
+  fallbackScopeId?: string,
+): string | undefined {
+  if (header === undefined && fallbackScopeId !== undefined)
+    return fallbackScopeId
+
+  if (header === undefined) {
+    void reply.code(400).send({
+      error: 'SCOPE_ID_REQUIRED',
+      message: `私有接口必须提供 ${SCOPE_ID_HEADER} 请求头`,
+    })
+    return undefined
+  }
+
+  const parsed = scopeIdSchema.safeParse(header)
+  if (parsed.success)
+    return parsed.data
+
+  void reply.code(400).send({
+    error: 'INVALID_SCOPE_ID',
+    message: `${SCOPE_ID_HEADER} 必须是 1 至 128 位的安全标识符`,
+  })
+  return undefined
 }
 
 /** 让 Zod 同时成为 HTTP 类型与 Fastify Draft 7 Schema 的唯一来源。 */

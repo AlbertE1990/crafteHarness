@@ -20,6 +20,8 @@ export interface ExecuteToolOptions<TContext = undefined> {
   /** 由 Agent Loop 生成并在重试期间保持不变的调用 ID。 */
   readonly callId: string
   readonly runId?: string
+  /** Agent 的数据作用域；直接使用 Tool Harness 时可以省略。 */
+  readonly scopeId?: string
   readonly sessionId?: string
   /** 当前 Run 的业务上下文；只传给 Guard 和工具 execute()。 */
   readonly context?: TContext
@@ -492,6 +494,7 @@ async function executeAttempt<
   const context: ToolRunContext<TContext> = {
     callId: options.callId,
     ...(options.runId ? { runId: options.runId } : {}),
+    ...(options.scopeId ? { scopeId: options.scopeId } : {}),
     ...(options.sessionId ? { sessionId: options.sessionId } : {}),
     attempt,
     context: options.context as TContext,
